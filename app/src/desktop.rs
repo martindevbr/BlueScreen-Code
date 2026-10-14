@@ -1,0 +1,203 @@
+//! Janela do aplicativo: uma janela nativa (tao) com WebView2 (wry), sem barra de navegador.
+//! A página conversa com a janela por `window.ipc.postMessage(JSON)`: tema (cor da barra de título),
+//! tela cheia (Apresentar) e DevTools.
+use crate::server::{self, UiEvent};
+use crate::util::*;
+use serde_json::{Value, json};
+use std::path::PathBuf;
+use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::window::{Fullscreen, Icon, Window, WindowBuilder};
+use wry::{NewWindowResponse, WebContext, WebViewBuilder};
+
+enum Ev { Activate, Ipc(String), Title(String) }
+
+fn state_file() -> PathBuf { user_dir().join("window.json") }
+
+/// Barra de título no tema da aplicação (Windows 11: cor da legenda; Windows 10: modo escuro).
+#[cfg(windows)]
+fn paint_titlebar(window: &Window, dark: bool, caption: Option<u32>) {
+    use tao::platform::windows::WindowExtWindows;
+    use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+    let hwnd = window.hwnd() as windows_sys::Win32::Foundation::HWND;
+    unsafe {
+        let d: i32 = dark as i32;
+        DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &d as *const _ as _, 4);
+        let round: u32 = 2; // DWMWCP_ROUND: cantos arredondados do Windows 11 também na janela sem moldura
+        DwmSetWindowAttribute(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */, &round as *const _ as _, 4);
+        if let Some(c) = caption {
+            DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &c as *const _ as _, 4);
+            DwmSetWindowAttribute(hwnd, 34 /* DWMWA_BORDER_COLOR */, &c as *const _ as _, 4);
+            let text: u32 = if dark { 0x00E5E1DF } else { 0x00221F1E };
+            DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, &text as *const _ as _, 4);
+        }
+    }
+}
+#[cfg(not(windows))]
+fn paint_titlebar(_: &Window, _: bool, _: Option<u32>) {}
+/// "#RRGGBB" -> COLORREF (0x00BBGGRR)
+fn colorref(hex: &str) -> Option<u32> {
+    let h = hex.trim_start_matches('#');
+    if h.len() != 6 { return None; }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    Some(((v & 0xFF) << 16) | (v & 0xFF00) | ((v >> 16) & 0xFF))
+}
+
+/// Tamanho da janela de boas-vindas (sem projeto aberto), como a do IntelliJ: pequena e no centro da tela.
+const WELCOME: (f64, f64) = (920.0, 620.0);
+fn center(window: &Window, w: f64, h: f64) {
+    if let Some(m) = window.current_monitor() {
+        let (s, ms, mp) = (m.scale_factor(), m.size(), m.position());
+        let (pw, ph) = ((w * s) as i32, (h * s) as i32);
+        window.set_outer_position(PhysicalPosition::new(mp.x + (ms.width as i32 - pw) / 2, mp.y + (ms.height as i32 - ph) / 2));
+    }
+}
+
+pub fn run(url: String, devtools: bool) -> ! {
+    let event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let p2 = proxy.clone();
+    let _ = server::UI.set(Box::new(move |e| match e { UiEvent::Activate => { let _ = p2.send_event(Ev::Activate); } }));
+
+    let saved = read_json(&state_file());
+    // a última sessão terminou sem projeto aberto: já nasce no tamanho de boas-vindas (sem piscar grande)
+    let mut welcome = saved["welcome"].as_bool().unwrap_or(false);
+    let (w, h) = if welcome { WELCOME } else { (saved["w"].as_f64().unwrap_or(1500.0).max(640.0), saved["h"].as_f64().unwrap_or(920.0).max(420.0)) };
+    let mut wb = WindowBuilder::new().with_title("BlueScreen").with_inner_size(LogicalSize::new(w, h)).with_min_inner_size(LogicalSize::new(640.0, 420.0))
+        .with_maximized(!welcome && saved["max"].as_bool().unwrap_or(false)).with_visible(!welcome)
+        // sem a barra de título do Windows: a barra de cima do BlueScreen faz esse papel (arrastar, botões, bordas)
+        .with_decorations(false);
+    if let (false, Some(x), Some(y)) = (welcome, saved["x"].as_i64(), saved["y"].as_i64()) { wb = wb.with_position(PhysicalPosition::new(x as i32, y as i32)); }
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::IconExtWindows;
+        use tao::platform::windows::WindowBuilderExtWindows;
+        if let Ok(icon) = Icon::from_resource(1, None) { wb = wb.with_window_icon(Some(icon)); }
+        wb = wb.with_undecorated_shadow(true);
+    }
+    let window = wb.build(&event_loop).expect("janela");
+    if welcome { center(&window, WELCOME.0, WELCOME.1); window.set_visible(true); }
+    let dark = saved["dark"].as_bool().unwrap_or(true);
+    paint_titlebar(&window, dark, colorref(saved["caption"].as_str().unwrap_or(if dark { "#0F1A2E" } else { "#D9E3F5" })));
+
+    let data = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("BlueScreen").join("WebView2");
+    let mut ctx = WebContext::new(Some(data));
+    let origin = url.trim_end_matches('/').to_string();
+    let (o1, o2) = (origin.clone(), origin.clone());
+    let (pi, pt) = (proxy.clone(), proxy.clone());
+    let builder = WebViewBuilder::new_with_web_context(&mut ctx)
+        .with_url(&url)
+        .with_devtools(devtools)
+        .with_hotkeys_zoom(false) // Ctrl+roda é o zoom da fonte do código; o tamanho da interface fica em Aparência
+        .with_background_color(if dark { (15, 26, 46, 255) } else { (217, 227, 245, 255) })
+        .with_initialization_script(format!("window.BS_DESKTOP = true; window.BS_MAX = {}; window.BS_WELCOME = {};", window.is_maximized(), welcome))
+        .with_ipc_handler(move |req| { let _ = pi.send_event(Ev::Ipc(req.body().clone())); })
+        .with_document_title_changed_handler(move |t| { let _ = pt.send_event(Ev::Title(t)); })
+        // links para fora abrem no navegador; janelas do próprio app (páginas servidas pelo BlueScreen) abrem aqui
+        .with_new_window_req_handler(move |u, _| { if u.starts_with(&o1) { NewWindowResponse::Allow } else { open_url(&u); NewWindowResponse::Deny } })
+        .with_navigation_handler(move |u| { if u.starts_with(&o2) || u.starts_with("about:") || u.starts_with("data:") { true } else { open_url(&u); false } });
+    #[cfg(windows)]
+    let builder = {
+        use wry::WebViewBuilderExtWindows;
+        // F5, Ctrl+P, Ctrl+F... são atalhos do BlueScreen, não do navegador
+        builder.with_browser_accelerator_keys(false).with_default_context_menus(devtools)
+    };
+    let webview = builder.build(&window).expect("WebView2 (instale o Microsoft Edge WebView2 Runtime)");
+
+    // na tela de boas-vindas o tamanho da janela não é guardado: o que vale é o da IDE, restaurado ao abrir um projeto
+    let save_state = |window: &Window, dark: bool, caption: &str, welcome: bool| {
+        let max = window.is_maximized();
+        let mut j = read_json(&state_file());
+        if !j.is_object() { j = json!({}); }
+        j["welcome"] = json!(welcome);
+        if welcome { j["dark"] = json!(dark); j["caption"] = json!(caption); let _ = write_atomic(&state_file(), &j.to_string()); return; }
+        if !max {
+            let sz: LogicalSize<f64> = window.inner_size().to_logical(window.scale_factor());
+            j["w"] = json!(sz.width); j["h"] = json!(sz.height);
+            if let Ok(p) = window.outer_position() { j["x"] = json!(p.x); j["y"] = json!(p.y); }
+        }
+        j["max"] = json!(max); j["dark"] = json!(dark); j["caption"] = json!(caption);
+        let _ = write_atomic(&state_file(), &j.to_string());
+    };
+    let mut dark = dark;
+    let mut caption = saved["caption"].as_str().unwrap_or("#0F1A2E").to_string();
+    let _keep = (&webview, ctx);
+
+    event_loop.run(move |event, _, flow| {
+        *flow = ControlFlow::Wait;
+        match event {
+            Event::UserEvent(Ev::Activate) => {
+                window.set_visible(true); window.set_minimized(false);
+                // sobe por cima das outras janelas mesmo se o Windows negar o foco
+                window.set_always_on_top(true); window.set_always_on_top(false); window.set_focus();
+            }
+            Event::UserEvent(Ev::Title(t)) => window.set_title(&t),
+            Event::UserEvent(Ev::Ipc(msg)) => {
+                let m: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
+                match m["type"].as_str() {
+                    Some("theme") => {
+                        dark = m["dark"].as_bool().unwrap_or(true);
+                        if let Some(c) = m["caption"].as_str() { caption = c.to_string(); }
+                        paint_titlebar(&window, dark, colorref(&caption));
+                    }
+                    Some("fullscreen") => window.set_fullscreen(if m["on"].as_bool().unwrap_or(false) { Some(Fullscreen::Borderless(None)) } else { None }),
+                    Some("devtools") if devtools => webview.open_devtools(),
+                    // barra de título própria
+                    Some("drag") => { let _ = window.drag_window(); }
+                    Some("resize") if !welcome => {
+                        use tao::window::ResizeDirection as R;
+                        let d = match m["dir"].as_str().unwrap_or("") { "n" => R::North, "s" => R::South, "e" => R::East, "w" => R::West, "ne" => R::NorthEast, "nw" => R::NorthWest, "se" => R::SouthEast, _ => R::SouthWest };
+                        if !window.is_maximized() { let _ = window.drag_resize_window(d); }
+                    }
+                    Some("zoom") => { let _ = webview.zoom(m["factor"].as_f64().unwrap_or(1.0).clamp(0.6, 2.0)); }
+                    Some("min") => window.set_minimized(true),
+                    Some("max") if !welcome => window.set_maximized(!window.is_maximized()),
+                    Some("welcome") => {
+                        let on = m["on"].as_bool().unwrap_or(false);
+                        if on != welcome {
+                            if on {
+                                save_state(&window, dark, &caption, false);
+                                welcome = true;
+                                window.set_maximized(false);
+                                window.set_inner_size(LogicalSize::new(WELCOME.0, WELCOME.1));
+                                center(&window, WELCOME.0, WELCOME.1);
+                            } else {
+                                welcome = false;
+                                let j = read_json(&state_file());
+                                let (w, h) = (j["w"].as_f64().unwrap_or(1500.0).max(640.0), j["h"].as_f64().unwrap_or(920.0).max(420.0));
+                                window.set_inner_size(LogicalSize::new(w, h));
+                                match (j["x"].as_i64(), j["y"].as_i64()) { (Some(x), Some(y)) => window.set_outer_position(PhysicalPosition::new(x as i32, y as i32)), _ => center(&window, w, h) }
+                                if j["max"].as_bool().unwrap_or(false) { window.set_maximized(true); }
+                            }
+                            save_state(&window, dark, &caption, welcome);
+                        }
+                    }
+                    Some("close") => {
+                        save_state(&window, dark, &caption, welcome);
+                        if server::lan_enabled() { log("Janela fechada; servidor continua por causa da rede local."); window.set_visible(false); }
+                        else { log("Janela fechada. Encerrando."); *flow = ControlFlow::Exit; }
+                    }
+                    _ => {}
+                }
+            }
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                save_state(&window, dark, &caption, welcome);
+                if server::lan_enabled() {
+                    // rede local ligada: o servidor continua; abrir o BlueScreen de novo mostra esta janela
+                    log("Janela fechada; servidor continua por causa da rede local.");
+                    window.set_visible(false);
+                } else {
+                    log("Janela fechada. Encerrando.");
+                    *flow = ControlFlow::Exit;
+                }
+            }
+            Event::WindowEvent { event: WindowEvent::Resized(PhysicalSize { .. }), .. } => {
+                // a página troca o ícone de maximizar e esconde as bordas de redimensionar
+                let _ = webview.evaluate_script(&format!("window.BS_WIN && BS_WIN.max({})", window.is_maximized()));
+            }
+            Event::LoopDestroyed => std::process::exit(0),
+            _ => {}
+        }
+    })
+}

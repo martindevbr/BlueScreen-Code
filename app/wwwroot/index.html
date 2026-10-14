@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlueScreen</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preload" href="vendor/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="vendor/fonts/jetbrains-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="build.css">
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<script>/* pinta o tema salvo antes de tudo (sem piscar); a Aparência (theme.js) confirma depois */
+try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStorage.getItem('bs.theme')) || 'dark'; const v = JSON.parse(localStorage.getItem('bs.themeCache') || 'null'); if (v) for (const k in v) r.style.setProperty('--' + k, v[k]); } catch {}</script>
+</head>
+<body>
+<div id="busy"></div>
+<div id="app">
+  <header id="top">
+    <div class="logo" title="BlueScreen"><img class="mark" src="icon.svg" alt=""></div>
+    <button class="chip proj-chip" id="projChip" title="Projetos: novo, abrir, recentes, fechar (Alt+P troca rápido)"><b id="projName">Nenhum projeto</b><span class="branch" id="projBranch"></span><svg class="i caret" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button id="seBtn" title="Buscar em tudo (Shift duas vezes)"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span>Buscar classes, arquivos, texto e ações</span></button>
+    <button class="chip" id="btnSave" title="Salvar (Ctrl+S)"><svg class="i" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span>Salvar</span></button>
+    <button class="icon-btn" id="btnNet" title="Rede local"><svg class="i" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg></button>
+    <button class="icon-btn" id="btnAppearance" title="Aparência: temas e fontes (Ctrl+Alt+S)"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1.1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.4 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.1"/><circle cx="10.5" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/></svg></button>
+    <button class="icon-btn" id="btnTheme" title="Tema claro / escuro"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg></button>
+    <button class="icon-btn" id="btnKeys" title="Atalhos (F1)"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 15h10"/></svg></button>
+    <div class="winctl" id="winCtl" hidden>
+      <button data-w="min" title="Minimizar"><svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg></button>
+      <button data-w="max" title="Maximizar"><svg viewBox="0 0 10 10" class="w-max"><rect x=".5" y=".5" width="9" height="9"/></svg><svg viewBox="0 0 10 10" class="w-res"><path d="M2.5 2.5V.5h7v7h-2"/><rect x=".5" y="2.5" width="7" height="7"/></svg></button>
+      <button data-w="close" class="close" title="Fechar"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0 0 10"/></svg></button>
+    </div>
+  </header>
+
+  <nav id="strip" aria-label="Janelas"></nav>
+
+  <aside id="tool" class="island">
+    <div class="head"><span id="toolTitle">Projeto</span><span class="sub" id="toolSub"></span><span class="spacer"></span><span id="toolActions"></span></div>
+    <div class="body" id="toolBody"></div>
+    <div id="toolResize" title="Arraste para redimensionar (duplo clique volta ao padrão)"></div>
+  </aside>
+
+  <main id="editor" class="island no-tabs">
+    <div id="tabs" role="tablist"></div>
+    <div id="crumbs"><span id="crumbPath"></span><span id="diffInfo" hidden></span><span class="spacer"></span>
+      <div class="tools">
+        <button class="icon-btn" id="btnView" title="Alternar diff / editor"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v18M3 7h6v10H3zM15 7h6v10h-6z"/></svg></button>
+        <button class="icon-btn" id="btnInline" title="Diff lado a lado / em linha"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+        <button class="icon-btn" id="btnWrap" title="Quebra de linha"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h18M3 12h13a3 3 0 0 1 0 6h-4m0 0 2-2m-2 2 2 2M3 18h5"/></svg></button>
+      </div>
+    </div>
+    <div id="mon"><div id="welcome">
+      <div class="dash" id="dash" hidden></div>
+    </div></div>
+    <div id="problems" hidden>
+      <div id="probResize"></div>
+      <div class="head"><span>Problemas</span><span class="cnts" id="probCnts"></span><span class="sub" id="probSub" style="font-weight:400;color:var(--muted)"></span><span class="spacer"></span><button class="icon-btn" id="btnProbClose" title="Fechar"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <div class="list" id="probList"></div>
+    </div>
+  </main>
+
+  <footer id="status">
+    <span class="s" id="stVcs"></span>
+    <span class="s" id="stNet"></span>
+    <span class="spacer"></span>
+    <span class="s" id="stDirty" hidden>Não salvo</span>
+    <span class="s" id="stLint"></span>
+    <span class="s" id="stPos"></span>
+    <span class="s" id="stLang"></span>
+    <span class="s">UTF-8</span>
+  </footer>
+</div>
+<!-- boas-vindas (sem projeto aberto): a IDE some e fica só esta tela, feita para voltar ao trabalho rápido -->
+<div id="wel" role="dialog" aria-label="Boas-vindas ao BlueScreen">
+  <div class="wel-win">
+    <header class="wel-top">
+      <img src="icon.svg" alt="" class="wel-logo"><b>BlueScreen</b><span id="welVer"></span>
+      <span class="wel-grow"></span>
+      <button class="icon-btn" id="welTheme" title="Tema claro / escuro"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg></button>
+      <button class="icon-btn" id="welLook" title="Aparência"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1.1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.4 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.1"/><circle cx="10.5" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/></svg></button>
+      <div class="winctl" id="welCtl" hidden>
+        <button data-w="min" title="Minimizar"><svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg></button>
+        <button data-w="close" class="close" title="Fechar"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0 0 10"/></svg></button></div>
+    </header>
+    <section class="wel-resume" id="welResume"></section>
+    <div class="wel-tools">
+      <label class="wel-search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><input id="welQ" placeholder="Digite para filtrar projetos" spellcheck="false" autocomplete="off" aria-controls="welList"></label>
+      <div class="wel-seg" id="welSeg" role="tablist"></div>
+      <span class="wel-grow"></span>
+      <button class="chip" id="welNew"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Novo projeto</button>
+      <button class="chip" id="welOpen"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Abrir pasta</button>
+    </div>
+    <div class="wel-list" id="welList" role="listbox" tabindex="-1"></div>
+    <footer class="wel-foot"><span>Pasta de projetos</span><span class="wel-root" id="welRootPath"></span><a id="welRoot" role="button" tabindex="0">Trocar</a></footer>
+  </div>
+</div>
+<button class="chip" id="present-exit" title="Sair (Esc)">Sair da apresentação</button>
+
+<div class="pop" id="netPop" hidden>
+  <h3>Rede local</h3>
+  <label class="toggle" id="netToggle"><span class="sw"></span><span>Permitir acesso pela rede</span></label>
+  <div id="netInfo" hidden>
+    <p>Abra no celular ou em outro PC da mesma rede:</p>
+    <div id="netUrls"></div>
+    <p>PIN de acesso</p><div class="pin" id="netPin"></div>
+  </div>
+  <div class="actions"><button class="chip" id="netClose">Fechar</button></div>
+</div>
+
+<div id="keysBack" hidden><div id="keys" role="dialog" aria-label="Atalhos"></div></div>
+
+<div id="login" hidden><div class="box">
+  <div class="logo" style="justify-content:center"><img class="mark" src="icon.svg" alt="">BlueScreen</div>
+  <p style="color:var(--muted)">Digite o PIN mostrado no PC.</p>
+  <input id="loginPin" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off">
+  <div class="err" id="loginErr"></div>
+  <button class="chip primary" id="loginBtn" style="width:100%;justify-content:center">Entrar</button>
+</div></div>
+<div id="toasts" aria-live="polite"></div>
+<div class="rz" data-r="n"></div><div class="rz" data-r="s"></div><div class="rz" data-r="e"></div><div class="rz" data-r="w"></div>
+<div class="rz" data-r="nw"></div><div class="rz" data-r="ne"></div><div class="rz" data-r="sw"></div><div class="rz" data-r="se"></div>
+
+<script src="vendor/md/marked.min.js"></script>
+<script src="vendor/md/purify.min.js"></script>
+<!-- xterm antes do loader do Monaco: com o define() do AMD presente, os scripts UMD não criariam as globais -->
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
+<script src="vendor/xterm/addon-web-links.js"></script>
+<script src="vendor/xterm/addon-unicode11.js"></script>
+<script src="vendor/monaco/vs/loader.js"></script>
+<script src="app.js"></script>
+<script src="preview.js"></script>
+<script src="lsp.js"></script>
+<script src="build.js"></script>
+<script src="terminal.js"></script>
+<script src="debug.js"></script>
+<script src="theme.js"></script>
+</body>
+</html>

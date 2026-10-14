@@ -1,0 +1,71 @@
+# ----- Build do Rust -----
+# saída do cargo (núcleo, sdk e plugins) e a versão final montada pelo build.ps1
+target/
+**/target/
+app/dist/
+dist/
+# Cargo.lock fica no repositório: o BlueScreen é um aplicativo, as versões precisam ser as mesmas para todos
+**/*.rs.bk
+*.pdb
+*.ilk
+*.exp
+*.lib
+# exe gerados fora do target (ex.: server.exe copiado para testar um plugin)
+app/plugins/*/server.exe
+
+# ----- Node (ferramentas e testes locais; a interface não usa build) -----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# ----- Python (scripts auxiliares, venvs, caches) -----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ----- Dados locais do BlueScreen -----
+# configuração e logs ficam em ~/.bluescreen, mas uma cópia na pasta não deve subir
+.bluescreen/
+bluescreen.log
+lsp-data/
+
+# ----- Segredos e configuração da máquina -----
+.env
+.env.*
+!.env.example
+*.token
+*.pem
+*.key
+*.pfx
+*.p12
+
+# ----- Editores e IDEs -----
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+.vs/
+*.suo
+*.user
+*.swp
+*.swo
+*~
+.fleet/
+.zed/
+
+# ----- Sistema operacional -----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ----- Temporários e logs -----
+*.log
+*.tmp
+*.bak
+tmp/
+temp/

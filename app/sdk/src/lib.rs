@@ -1,0 +1,7 @@
+//! BlueScreen SDK: o que o núcleo e os plugins (programas à parte) compartilham.
+//! - `util`: processos, erros de API, arquivos, datas, cache
+//! - `vcs`: Git e SVN
+//! - `plugin`: tipos das rotas, servidor de plugin (handshake com o núcleo) e cliente do núcleo
+pub mod plugin;
+pub mod util;
+pub mod vcs;
