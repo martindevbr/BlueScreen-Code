@@ -233,11 +233,28 @@ fn core_routes() -> HashMap<String, RouteFn> {
     }));
     // visão geral do projeto (tela sem abas): README, linguagens e sistemas de build
     add("overview", route_fn(|r| async move { ok(workspace::overview(&absolute(&project(&r)?)).await) }));
-    // arquivo do projeto como veio (imagens do README)
+    // arquivo do projeto como veio (imagens do README, visualizador de imagens, PDF, áudio, vídeo e fontes).
+    // Lê só um trecho quando pedido: cabeçalho Range (áudio e vídeo pulam para o meio sem ler o arquivo todo)
+    // ou ?offset=&len= (visualizador hexadecimal). O tamanho total vai em x-file-size.
     add("raw", route_fn(|r| async move {
         let (_, abs, _) = in_project(&r, "file")?;
-        let bytes = tokio::fs::read(&abs).await.map_err(|e| fail(e.to_string(), 404))?;
-        Ok(Reply::Raw(([(header::CONTENT_TYPE, mime(&abs)), (header::CACHE_CONTROL, "no-cache")], bytes).into_response()))
+        let size = tokio::fs::metadata(&abs).await.map_err(|e| fail(e.to_string(), 404))?.len();
+        let range = r.headers.get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(|v| parse_range(v, size));
+        let chunk = r.q("len").map(|l| {
+            let off = r.q("offset").and_then(|o| o.parse::<u64>().ok()).unwrap_or(0).min(size);
+            (off, (off + l.parse::<u64>().unwrap_or(65536).min(MAX_CHUNK)).min(size))
+        });
+        let (start, end, partial) = match (range, chunk) { (Some((a, b)), _) => (a, b, true), (None, Some((a, b))) => (a, b, false), _ => (0, size, false) };
+        let bytes = read_slice(&abs, start, end).await.map_err(|e| fail(e.to_string(), 500))?;
+        let mut resp = ([(header::CONTENT_TYPE, mime(&abs)), (header::CACHE_CONTROL, "no-cache")], bytes).into_response();
+        let h = resp.headers_mut();
+        h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        h.insert("x-file-size", HeaderValue::from(size));
+        if partial {
+            h.insert(header::CONTENT_RANGE, HeaderValue::from_str(&format!("bytes {start}-{}/{size}", end.saturating_sub(1))).unwrap());
+            *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
+        }
+        Ok(Reply::Raw(resp))
     }));
     // chave do preview de HTML do editor: /api/preview/<chave>/<arquivo> serve os arquivos do projeto com caminhos
     // relativos (css, imagens, scripts). A chave substitui o cookie, que não vai junto de um iframe isolado (sandbox).
@@ -299,11 +316,32 @@ async fn serve_preview(rest: &str) -> Response {
         Err(_) => bad("not found", 404),
     }
 }
+/// maior trecho lido de uma vez (Range de vídeo, visualizador hexadecimal)
+const MAX_CHUNK: u64 = 4 << 20;
+/// "bytes=a-b", "bytes=a-" ou "bytes=-n" -> [início, fim) dentro do arquivo, no máximo MAX_CHUNK
+fn parse_range(v: &str, size: u64) -> Option<(u64, u64)> {
+    let spec = v.trim().strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = match (a.trim(), b.trim()) {
+        ("", n) => { let n: u64 = n.parse().ok()?; (size.saturating_sub(n), size) }
+        (a, "") => (a.parse().ok()?, size),
+        (a, b) => (a.parse().ok()?, b.parse::<u64>().ok()?.saturating_add(1).min(size)),
+    };
+    (start < end).then(|| (start, end.min(start + MAX_CHUNK)))
+}
+async fn read_slice(p: &Path, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut f = tokio::fs::File::open(p).await?;
+    if start > 0 { f.seek(std::io::SeekFrom::Start(start)).await?; }
+    let mut buf = Vec::with_capacity((end - start) as usize);
+    f.take(end - start).read_to_end(&mut buf).await?;
+    Ok(buf)
+}
 fn bad(msg: &str, code: u16) -> Response { json_resp(code, &json!({ "error": msg })) }
 fn mime(p: &Path) -> &'static str {
     match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" | "htm" => "text/html; charset=utf-8", "mjs" => "text/javascript; charset=utf-8", "txt" | "md" => "text/plain; charset=utf-8", "xml" => "application/xml",
-        "mp4" => "video/mp4", "webm" => "video/webm", "mp3" => "audio/mpeg", "wav" => "audio/wav", "ogg" => "audio/ogg", "pdf" => "application/pdf", "avif" => "image/avif", "otf" => "font/otf", "js" => "text/javascript; charset=utf-8", "css" => "text/css; charset=utf-8",
+        "mp4" | "m4v" => "video/mp4", "webm" => "video/webm", "ogv" => "video/ogg", "mov" => "video/quicktime", "mp3" => "audio/mpeg", "wav" => "audio/wav", "ogg" | "opus" | "oga" => "audio/ogg", "flac" => "audio/flac", "m4a" => "audio/mp4", "aac" => "audio/aac", "bmp" => "image/bmp", "pdf" => "application/pdf", "avif" => "image/avif", "otf" => "font/otf", "js" => "text/javascript; charset=utf-8", "css" => "text/css; charset=utf-8",
         "svg" => "image/svg+xml", "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp", "ico" => "image/x-icon", "json" => "application/json",
         "woff2" => "font/woff2", "woff" => "font/woff", "ttf" => "font/ttf", "map" => "application/json", _ => "application/octet-stream",
     }
@@ -386,5 +424,19 @@ async fn serve_static(path: &str) -> Response {
             ([(header::CONTENT_TYPE, mime(&file)), (header::CACHE_CONTROL, cache)], bytes).into_response()
         }
         Err(_) => bad("not found", 404),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_range;
+    #[test]
+    fn ranges() {
+        assert_eq!(parse_range("bytes=0-99", 1000), Some((0, 100)));
+        assert_eq!(parse_range("bytes=900-", 1000), Some((900, 1000)));
+        assert_eq!(parse_range("bytes=-100", 1000), Some((900, 1000)));
+        assert_eq!(parse_range("bytes=0-5000", 1000), Some((0, 1000)));
+        assert_eq!(parse_range("bytes=0-", 0), None);
+        assert_eq!(parse_range("bytes=0-", 100 << 20), Some((0, 4 << 20)));
     }
 }

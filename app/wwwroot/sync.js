@@ -261,6 +261,7 @@ function xsEvents(proj, r) {
   const struct = (r.files || []).filter(f => f.k !== 'change').map(f => f.p);
   if (r.all) xsTree(null); else if (struct.length) xsTree(struct);
   if (r.vcs || touched.size) xsRefresh(!!r.vcs);
+  BS.hooks.run('files:changed', proj, r); // visualizador de imagens e outros recarregam o que mudou
 }
 // confere de uma vez todas as abas do projeto (sem vigia, ou ao voltar para a janela)
 async function xsCheckAll() {

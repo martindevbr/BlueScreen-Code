@@ -880,6 +880,9 @@ function updateDiffInfo() {
 function tabKey(path, mode) { return path + '::' + (mode === 'diff' ? S.changeMode + ':' + (S.rev || '') : 'editor'); }
 async function openFile(path, mode, line) {
   ensureEditors();
+  // imagens, PDF, áudio, vídeo, fontes e binários conhecidos abrem no visualizador (viewer.js)
+  const vk = mode !== 'diff' && BS.fileViewer && BS.fileViewer.kind(path);
+  if (vk) return BS.fileViewer.open(path, vk, line);
   const key = tabKey(path, mode);
   let tab = S.tabs.find(t => t.key === key);
   if (!tab) {
@@ -892,7 +895,8 @@ async function openFile(path, mode, line) {
         tab.editable = S.changeMode === 'working';
       } else {
         const f = await api('file', { project: S.project.path, file: path });
-        if (f.binary || f.tooBig) { toast(f.binary ? 'Arquivo binário' : 'Arquivo grande demais'); return; }
+        if (f.binary) return BS.fileViewer ? BS.fileViewer.open(path, 'hex') : toast('Arquivo binário');
+        if (f.tooBig) return BS.fileViewer ? BS.fileViewer.openBig(path, f.size, line) : toast('Arquivo grande demais');
         tab.model = monaco.editor.createModel(f.content, tab.lang, monaco.Uri.parse('bs:/' + encodeURIComponent(tab.key)));
         tab.editable = true; tab.stamp = f.mtime + ':' + f.size; // data/tamanho no disco: base para notar alterações de fora
         if (S.project.vcs && S.changes.some(c => c.path === path && c.code !== '?')) {
@@ -922,8 +926,10 @@ function activate(tab) {
   $('#welcome').hidden = true;
   $('#ed').style.display = tab.mode === 'editor' ? '' : 'none';
   $('#dd').style.display = tab.mode === 'diff' ? '' : 'none';
-  if (tab.mode === 'diff') { diffEditor.setModel({ original: tab.original, modified: tab.model }); diffEditor.getModifiedEditor().updateOptions({ readOnly: !tab.editable }); diffEditor.getModifiedEditor().focus(); }
-  else { editor.setModel(tab.model); editor.focus(); if (tab.base) gutterMarks(tab); }
+  $('#vw').style.display = tab.mode === 'view' ? '' : 'none';
+  if (tab.mode === 'view') BS.fileViewer.show(tab);
+  else if (tab.mode === 'diff') { diffEditor.setModel({ original: tab.original, modified: tab.model }); diffEditor.getModifiedEditor().updateOptions({ readOnly: !tab.editable }); diffEditor.getModifiedEditor().focus(); }
+  else { editor.setModel(tab.model); editor.updateOptions({ readOnly: !tab.editable }); editor.focus(); if (tab.base) gutterMarks(tab); }
   $('#stLang').textContent = tab.lang;
   renderTabs(); renderCrumbs(); lintMarkers(tab); updateDiffInfo(); syncUnsaved();
   if (S.tool === 'changes') renderChanges();
@@ -957,9 +963,9 @@ function closeTab(t) {
   if (S.autoSave && t.dirty && !t.owner && !t.conflict && !t.gone) saveTab(t, true, t.model.getValue()); // fechar = salvar (o texto vai junto: o modelo é descartado já)
   const i = S.tabs.indexOf(t); S.tabs.splice(i, 1);
   if (t.original && diffEditor && diffEditor.getModel()?.original === t.original) diffEditor.setModel(null); // o Monaco reclama de modelo descartado ainda em uso
-  if (!t.owner) { BS.hooks.run('tab:close', t); t.model.dispose(); }
+  if (!t.owner) { BS.hooks.run('tab:close', t); t.model?.dispose(); }
   t.original?.dispose();
-  if (S.active === t) { const n = S.tabs[i] || S.tabs[i - 1]; if (n) activate(n); else { S.active = null; viewer = null; $('#welcome').hidden = false; $('#ed').style.display = 'none'; $('#dd').style.display = 'none'; $('#diffInfo').hidden = true; $('#stLang').textContent = ''; $('#stPos').textContent = ''; renderTabs(); renderCrumbs(); renderDashboard(); } }
+  if (S.active === t) { const n = S.tabs[i] || S.tabs[i - 1]; if (n) activate(n); else { S.active = null; viewer = null; $('#welcome').hidden = false; $('#ed').style.display = 'none'; $('#dd').style.display = 'none'; $('#vw').style.display = 'none'; $('#diffInfo').hidden = true; $('#stLang').textContent = ''; $('#stPos').textContent = ''; renderTabs(); renderCrumbs(); renderDashboard(); } }
   else renderTabs();
 }
 function renderCrumbs() {
@@ -999,16 +1005,11 @@ async function saveTab(t, auto, body) {
     t.saved = body; if (r.mtime) t.stamp = r.mtime + ':' + r.size;
     if (!live()) return;
     t.dirty = t.model.getValue() !== body; renderTabs();
-    if (!auto) toast('Salvo', 'ok', 'save');
     BS.hooks.run('tab:save', t);
     // sincroniza outras abas do mesmo arquivo
     S.tabs.filter(x => x !== t && x.model !== t.model && x.path === t.path && x.project === t.project && x.editable).forEach(x => { x.model.setValue(t.saved); x.saved = t.saved; x.dirty = false; x.stamp = t.stamp; });
-    // um aviso só: o "Salvo" acima ganha o resultado do lint quando ele chega
-    runLint(t, auto ? 'auto' : true).then(r => {
-      if (auto || !r || !r.tool) return;
-      const n = r.problems.length;
-      toast(n ? `Salvo · ${n} ${n === 1 ? 'problema' : 'problemas'} no lint` : 'Salvo · lint ok', n ? 'warn' : 'ok', 'save');
-    });
+    // sem aviso: a aba perde a marca de "não salvo" e o lint aparece na barra de status (e em Problemas, se houver)
+    runLint(t, auto ? 'auto' : true);
     refreshProject();
   } catch (e) { toast('Erro ao salvar ' + t.path.split('/').pop() + ': ' + e.message, 'err'); }
   finally { t.pending = null; t.saving = false; }
@@ -1116,7 +1117,7 @@ async function runLint(tab = S.active, quiet) {
 }
 function lintMarkers(tab) {
   const p = tab.problems || [];
-  monaco.editor.setModelMarkers(tab.model, 'bs-lint', p.map(x => ({ startLineNumber: x.line, startColumn: x.col, endLineNumber: x.line, endColumn: x.col + 1, message: x.msg + (x.rule ? ` (${x.rule})` : ''), severity: x.sev === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning })));
+  if (tab.model) monaco.editor.setModelMarkers(tab.model, 'bs-lint', p.map(x => ({ startLineNumber: x.line, startColumn: x.col, endLineNumber: x.line, endColumn: x.col + 1, message: x.msg + (x.rule ? ` (${x.rule})` : ''), severity: x.sev === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning })));
   const b = $('#badge-problems'); if (b) { b.hidden = !p.length; b.textContent = p.length; }
   renderProblems(tab);
 }
