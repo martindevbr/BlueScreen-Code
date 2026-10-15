@@ -20,7 +20,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
     <div class="logo" title="BlueScreen"><img class="mark" src="icon.svg" alt=""></div>
     <button class="chip proj-chip" id="projChip" title="Projetos: novo, abrir, recentes, fechar (Alt+P troca rápido)"><b id="projName">Nenhum projeto</b><span class="branch" id="projBranch"></span><svg class="i caret" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></button>
     <button id="seBtn" title="Buscar em tudo (Shift duas vezes)"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span>Buscar classes, arquivos, texto e ações</span></button>
-    <button class="chip" id="btnSave" title="Salvar (Ctrl+S)"><svg class="i" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span>Salvar</span></button>
+    <div class="split" id="saveGrp"><button class="chip" id="btnSave" title="Salvar arquivo atual (Ctrl+S)"><svg class="i" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span>Salvar</span></button><button class="chip caret" id="btnSaveMenu" title="Opções de salvamento" aria-haspopup="menu"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 9l6 6 6-6"/></svg></button></div>
     <button class="icon-btn" id="btnNet" title="Rede local"><svg class="i" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg></button>
     <button class="icon-btn" id="btnAppearance" title="Aparência: temas e fontes (Ctrl+Alt+S)"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.5-.2-.8-.4-1.1-.3-.3-.4-.6-.4-1.1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.4 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.1"/><circle cx="10.5" cy="7.5" r="1.1"/><circle cx="15" cy="7.5" r="1.1"/></svg></button>
     <button class="icon-btn" id="btnTheme" title="Tema claro / escuro"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg></button>
@@ -130,6 +130,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="vendor/monaco/vs/loader.js"></script>
 <script src="app.js"></script>
 <script src="preview.js"></script>
+<script src="sync.js"></script>
 <script src="lsp.js"></script>
 <script src="build.js"></script>
 <script src="terminal.js"></script>

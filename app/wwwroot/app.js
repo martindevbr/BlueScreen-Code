@@ -22,7 +22,7 @@ const toast = (m, kind, key) => {
   const box = $('#toasts'); if (!box) return;
   if (!kind && /^(Erro|Falh|Lint falhou|Não )/i.test(String(m))) kind = 'err';
   const same = key ? [...box.children].find(x => x.dataset.key === key) : [...box.children].find(x => x.textContent === String(m));
-  if (same) { same.textContent = m; same.classList.remove('out'); clearTimeout(same._t); same._t = setTimeout(() => { same.classList.add('out'); setTimeout(() => same.remove(), 220); }, 1600); return; }
+  if (same) { same.textContent = m; same.className = 'toast' + (kind ? ' ' + kind : ''); clearTimeout(same._t); same._t = setTimeout(() => { same.classList.add('out'); setTimeout(() => same.remove(), 220); }, 1600); return; }
   const t = document.createElement('div'); t.className = 'toast' + (kind ? ' ' + kind : ''); t.textContent = m; if (key) t.dataset.key = key;
   box.prepend(t); while (box.children.length > 4) box.lastElementChild.remove();
   t._t = setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 220); }, kind === 'err' ? 4500 : 2000);
@@ -289,7 +289,7 @@ function showMenu(e, items, header) {
   m.querySelectorAll('.it').forEach(el => el.onclick = () => { closeMenu(); items[el.dataset.i].action(); });
 }
 function closeMenu() { $('#ctx')?.remove(); }
-document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctx')) closeMenu(); });
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctx, #btnSaveMenu')) closeMenu(); });
 window.addEventListener('blur', closeMenu);
 const I = {
   open: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
@@ -894,7 +894,7 @@ async function openFile(path, mode, line) {
         const f = await api('file', { project: S.project.path, file: path });
         if (f.binary || f.tooBig) { toast(f.binary ? 'Arquivo binário' : 'Arquivo grande demais'); return; }
         tab.model = monaco.editor.createModel(f.content, tab.lang, monaco.Uri.parse('bs:/' + encodeURIComponent(tab.key)));
-        tab.editable = true;
+        tab.editable = true; tab.stamp = f.mtime + ':' + f.size; // data/tamanho no disco: base para notar alterações de fora
         if (S.project.vcs && S.changes.some(c => c.path === path && c.code !== '?')) {
           api('diff', { project: S.project.path, file: path, mode: 'working' }).then(d => { tab.base = d.original; gutterMarks(tab); }).catch(() => {});
         }
@@ -917,6 +917,7 @@ function revealAt(ed, line, col = 1) {
   setTimeout(() => ed.deltaDecorations(ids, []), 1500);
 }
 function activate(tab) {
+  if (S.active && S.active !== tab) autoSaveAll(); // trocar de aba salva as outras
   S.active = tab; viewer = tab.mode;
   $('#welcome').hidden = true;
   $('#ed').style.display = tab.mode === 'editor' ? '' : 'none';
@@ -930,7 +931,7 @@ function activate(tab) {
 }
 function renderTabs() {
   $('#editor').classList.toggle('no-tabs', !S.tabs.length);
-  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''}" data-k="${esc(t.key)}" title="${esc(t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode">${t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
+  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''}" data-k="${esc(t.key)}" title="${esc(t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? 'EXTERNO' : t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(el => {
     const t = S.tabs.find(x => x.key === el.dataset.k);
     el.onclick = (e) => e.shiftKey ? closeTab(t) : activate(t);
@@ -952,9 +953,12 @@ function renderTabs() {
   syncUnsaved();
 }
 function closeTab(t) {
+  S.tabs.filter(x => x.owner === t).forEach(closeTab); // diff "EXTERNO" usa o mesmo modelo da aba dona
+  if (S.autoSave && t.dirty && !t.owner && !t.conflict && !t.gone) saveTab(t, true, t.model.getValue()); // fechar = salvar (o texto vai junto: o modelo é descartado já)
   const i = S.tabs.indexOf(t); S.tabs.splice(i, 1);
-  BS.hooks.run('tab:close', t);
-  t.model.dispose(); t.original?.dispose();
+  if (t.original && diffEditor && diffEditor.getModel()?.original === t.original) diffEditor.setModel(null); // o Monaco reclama de modelo descartado ainda em uso
+  if (!t.owner) { BS.hooks.run('tab:close', t); t.model.dispose(); }
+  t.original?.dispose();
   if (S.active === t) { const n = S.tabs[i] || S.tabs[i - 1]; if (n) activate(n); else { S.active = null; viewer = null; $('#welcome').hidden = false; $('#ed').style.display = 'none'; $('#dd').style.display = 'none'; $('#diffInfo').hidden = true; $('#stLang').textContent = ''; $('#stPos').textContent = ''; renderTabs(); renderCrumbs(); renderDashboard(); } }
   else renderTabs();
 }
@@ -971,18 +975,84 @@ function markDirty(model) {
   const t = model._tab; if (!t) return;
   const d = model.getValue() !== t.saved;
   if (d !== t.dirty) { t.dirty = d; renderTabs(); syncUnsaved(); }
+  if (d) autoSaveSoon();
 }
-async function save() {
-  const t = S.active; if (!t || !t.editable) return;
+async function save() { const t = S.active && (S.active.owner || S.active); if (t) await saveTab(t); }
+async function saveAll() {
+  const list = S.tabs.filter(t => t.dirty && t.editable && !t.owner);
+  for (const t of list) await saveTab(t, list.length > 1 ? 'all' : false);
+  if (list.length > 1) toast(`${list.length} arquivos salvos`, 'ok', 'save'); else if (!list.length) toast('Nada para salvar', null, 'save');
+}
+// auto: salvamento automático (sem aviso, não grava por cima de conflito com o disco)
+// body: texto já capturado (a aba está sendo fechada e o modelo vai ser descartado)
+async function saveTab(t, auto, body) {
+  if (!t || !t.editable || t.owner) return;
+  if (auto === true && (t.conflict || t.gone || !t.dirty || t.saving)) return;
+  // o arquivo mudou fora da IDE desde a última leitura? confere (e mescla) antes de gravar por cima
+  if (BS.ext && !(await BS.ext.beforeSave(t))) return;
+  const live = () => !t.model.isDisposed();
+  t.saving = true;
   try {
-    await api('file', { project: t.project, file: t.path }, { method: 'PUT', body: t.model.getValue() });
-    t.saved = t.model.getValue(); t.dirty = false; renderTabs(); toast('Salvo');
+    if (body == null) body = t.model.getValue();
+    t.pending = body;
+    const r = await api('file', { project: t.project, file: t.path }, { method: 'PUT', body });
+    t.saved = body; if (r.mtime) t.stamp = r.mtime + ':' + r.size;
+    if (!live()) return;
+    t.dirty = t.model.getValue() !== body; renderTabs();
+    if (!auto) toast('Salvo', 'ok', 'save');
     BS.hooks.run('tab:save', t);
     // sincroniza outras abas do mesmo arquivo
-    S.tabs.filter(x => x !== t && x.path === t.path && x.project === t.project && x.editable).forEach(x => { x.model.setValue(t.saved); x.saved = t.saved; x.dirty = false; });
-    runLint(t); refreshProject();
-  } catch (e) { toast('Erro ao salvar: ' + e.message); }
+    S.tabs.filter(x => x !== t && x.model !== t.model && x.path === t.path && x.project === t.project && x.editable).forEach(x => { x.model.setValue(t.saved); x.saved = t.saved; x.dirty = false; x.stamp = t.stamp; });
+    // um aviso só: o "Salvo" acima ganha o resultado do lint quando ele chega
+    runLint(t, auto ? 'auto' : true).then(r => {
+      if (auto || !r || !r.tool) return;
+      const n = r.problems.length;
+      toast(n ? `Salvo · ${n} ${n === 1 ? 'problema' : 'problemas'} no lint` : 'Salvo · lint ok', n ? 'warn' : 'ok', 'save');
+    });
+    refreshProject();
+  } catch (e) { toast('Erro ao salvar ' + t.path.split('/').pop() + ': ' + e.message, 'err'); }
+  finally { t.pending = null; t.saving = false; }
 }
+
+// ===== Salvamento automático (como o IntelliJ) =====
+// Grava sozinho quando você para de digitar (1,5 s), troca de aba, fecha a aba ou sai da janela.
+// Arquivo em conflito com uma alteração externa não é gravado: espera você decidir no diff EXTERNO.
+const AUTO_IDLE = 1500;
+S.autoSave = store.get('autoSave', false);
+let autoT = null;
+function autoSaveSoon() { if (!S.autoSave) return; clearTimeout(autoT); autoT = setTimeout(autoSaveAll, AUTO_IDLE); }
+function autoSaveAll() { clearTimeout(autoT); if (!S.autoSave) return; S.tabs.filter(t => t.dirty && t.editable && !t.owner).forEach(t => saveTab(t, true)); }
+function setAutoSave(on) {
+  S.autoSave = !!on; store.set('autoSave', S.autoSave); renderSaveBtn();
+  toast(S.autoSave ? 'Salvamento automático ligado' : 'Salvamento automático desligado', 'ok', 'save');
+  if (S.autoSave) autoSaveAll();
+}
+function renderSaveBtn() {
+  $('#saveGrp').classList.toggle('auto', S.autoSave);
+  const b = $('#btnSave');
+  b.title = S.autoSave ? 'Salvamento automático ligado · clique para salvar o arquivo atual agora (Ctrl+S)' : 'Salvar arquivo atual (Ctrl+S)';
+  b.querySelector('span').textContent = S.autoSave ? 'Auto' : 'Salvar';
+}
+const SAVE_ICO = '<svg class="i" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>';
+function saveMenu(e) {
+  e.preventDefault(); e.stopPropagation();
+  if ($('#ctx')?.dataset.menu === 'save') return closeMenu();
+  closeMenu();
+  const m = document.createElement('div'); m.className = 'ctx save-menu'; m.id = 'ctx'; m.dataset.menu = 'save';
+  const n = S.tabs.filter(t => t.dirty && t.editable && !t.owner).length;
+  const cur = S.active && (S.active.owner || S.active);
+  m.innerHTML = `<div class="it${cur && cur.editable ? '' : ' off'}" data-a="cur">${SAVE_ICO}<span>Salvar arquivo atual</span><span class="k">Ctrl+S</span></div>`
+    + `<div class="it${n ? '' : ' off'}" data-a="all">${SAVE_ICO}<span>Salvar todos${n ? ` (${n})` : ''}</span><span class="k">Ctrl+Shift+S</span></div>`
+    + `<div class="sep"></div><label class="it chk"><input type="checkbox" ${S.autoSave ? 'checked' : ''}><span class="tx"><span>Salvar automaticamente</span><small>Ao parar de digitar, trocar de aba ou sair da janela</small></span></label>`;
+  document.body.appendChild(m);
+  const r = $('#saveGrp').getBoundingClientRect(), w = m.getBoundingClientRect().width;
+  m.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px'; m.style.top = (r.bottom + 6) + 'px';
+  m.querySelector('[data-a="cur"]').onclick = () => { closeMenu(); save(); };
+  m.querySelector('[data-a="all"]').onclick = () => { closeMenu(); saveAll(); };
+  m.querySelector('input').onchange = (ev) => setAutoSave(ev.target.checked);
+}
+window.addEventListener('blur', () => autoSaveAll());
+document.addEventListener('visibilitychange', () => { if (document.hidden) autoSaveAll(); });
 
 // ===== Marcadores de alteração na margem (estilo IntelliJ) =====
 function lineDiff(a, b) {
@@ -1029,7 +1099,8 @@ async function lintAll() {
   $('#stLint').className = 's ' + (all.length ? '' : 'ok');
   if (!all.length) toast('Lint ok nas alterações');
 }
-async function runLint(tab = S.active) {
+// quiet: quem chamou (o salvar) mostra o resultado no próprio aviso; devolve a resposta do lint
+async function runLint(tab = S.active, quiet) {
   if (!tab) { lintAll(); return; }
   $('#stLint').textContent = 'lint…';
   try {
@@ -1039,7 +1110,8 @@ async function runLint(tab = S.active) {
     lintMarkers(tab); renderProblems(tab);
     $('#stLint').textContent = r.tool ? `${r.tool}: ${r.problems.length ? r.problems.length + ' problema(s)' : 'ok'}` : r.note;
     $('#stLint').className = 's ' + (r.tool && !r.problems.length ? 'ok' : '');
-    if (r.problems.length) $('#problems').hidden = false; else toast(r.tool ? 'Lint ok' : r.note);
+    if (r.problems.length) { if (quiet !== 'auto') $('#problems').hidden = false; } else if (!quiet) toast(r.tool ? 'Lint ok' : r.note);
+    return r;
   } catch (e) { toast('Lint falhou: ' + e.message); $('#stLint').textContent = ''; }
 }
 function lintMarkers(tab) {
@@ -1067,7 +1139,7 @@ function renderProblemList(p, multi, tab) {
 $('#btnProbClose').onclick = () => $('#problems').hidden = true;
 
 // ===== Toolbar =====
-$('#btnSave').onclick = save;
+$('#btnSave').onclick = save; $('#btnSaveMenu').onclick = saveMenu; renderSaveBtn();
 function refreshAll() { S.overview = null; S.tree = {}; S.walk = {}; S.treeFresh = true; SE.index = null; SE.indexFor = null; if (S.project) seIndex(true); refreshProject(); loadProjects(); BS.hooks.run('refresh'); }
 $('#btnView').onclick = () => { if (!S.active) return; const t = S.active; openFile(t.path, t.mode === 'diff' ? 'editor' : 'diff'); };
 $('#btnInline').onclick = () => { S.inline = !S.inline; store.set('inline', S.inline); $('#btnInline').classList.toggle('on', S.inline); diffEditor?.updateOptions({ renderSideBySide: !S.inline }); };
@@ -1211,7 +1283,7 @@ function seActions() {
     A('Trocar projeto', 'Alt+P', () => quickProject(), I.open), A('Lista de projetos', '', () => { S.showProjects = true; openTool('project'); }, I.open),
     A('Abrir projeto…', '', () => openProjectDialog(), I.open), ...(S.remote ? [] : [A('Novo projeto…', '', () => newProjectDialog(), I.newp)]), A('Fechar projeto', '', () => closeProject(), I.x),
     A('Selecionar arquivo aberto na árvore', 'Alt+F1', () => treeLocate(), TI.locate), A('Recolher árvore', '', () => { if (!S.project) return; S.treeOpen = new Set(['']); saveTreeOpen(); openTool('project'); }, TI.collapse),
-    A('Salvar', 'Ctrl+S', () => save(), I.edit), A('Lint do arquivo', 'Ctrl+Alt+L', () => runLint(), I.lint), A('Lint das alterações', '', () => lintAll(), I.lint),
+    A('Salvar', 'Ctrl+S', () => save(), I.edit), A('Salvar todos', 'Ctrl+Shift+S', () => saveAll(), I.edit), A('Salvamento automático (liga/desliga)', '', () => setAutoSave(!S.autoSave), I.edit), A('Lint do arquivo', 'Ctrl+Alt+L', () => runLint(), I.lint), A('Lint das alterações', '', () => lintAll(), I.lint),
     A('Ver diff / editor do arquivo atual', '', () => $('#btnView').click(), I.diff), A('Diff lado a lado / em linha', '', () => $('#btnInline').click(), I.diff), A('Quebra de linha', '', () => $('#btnWrap').click(), I.edit),
     A('Apresentar (tela cheia)', 'F11', () => present(true), I.present), A('Tema claro / escuro', '', () => $('#btnTheme').click(), I.edit), A('Rede local', '', () => $('#btnNet').click(), I.ext),
     A('Atualizar projeto', 'F5', () => refreshAll(), I.refresh), A('Mostrar projeto no Explorer', '', () => S.project && reveal(S.project.path), I.explorer),
@@ -1588,7 +1660,7 @@ function showKeys() {
   const groups = [
     ['Navegar', [['Buscar em tudo', 'Shift Shift'], ['Classes', 'Ctrl+N'], ['Arquivos', 'Ctrl+P'], ['Texto em todos os arquivos', 'Ctrl+Shift+F'], ['Ações', 'Ctrl+Shift+A'], ['Trocar projeto', 'Alt+P'], ['Selecionar arquivo aberto na árvore', 'Alt+F1']]],
     ['Janelas', BS.tools.list().filter(t => t.key).map(t => [t.title, t.key])],
-    ['Editor', [['Salvar', 'Ctrl+S'], ['Fechar aba', 'Ctrl+W'], ['Próxima alteração do diff', 'Alt+↓'], ['Alteração anterior do diff', 'Alt+↑'], ['Lint do arquivo', 'Ctrl+Alt+L'], ['Apresentar em tela cheia', 'F11']]],
+    ['Editor', [['Salvar', 'Ctrl+S'], ['Salvar todos', 'Ctrl+Shift+S'], ['Fechar aba', 'Ctrl+W'], ['Próxima alteração do diff', 'Alt+↓'], ['Alteração anterior do diff', 'Alt+↑'], ['Lint do arquivo', 'Ctrl+Alt+L'], ['Apresentar em tela cheia', 'F11']]],
     ['Geral', [['Atualizar projeto', 'F5'], ['Fechar menus e buscas', 'Esc'], ['Esta tela', 'F1']]],
   ];
   const known = new Set(groups.flatMap(g => g[1].map(x => x[1])));
@@ -1612,6 +1684,7 @@ $('#probResize').addEventListener('mousedown', (e) => {
 // Tabela única de teclas (BS.keys): o núcleo registra as suas e os plugins registram as deles (ou substituem).
 // Um handler que devolve false diz "não era comigo" e deixa o navegador seguir.
 BS.keys.add('Ctrl+S', () => save());
+BS.keys.add('Ctrl+Shift+S', () => saveAll());
 BS.keys.add('Ctrl+P', () => openSearch('files'));
 BS.keys.add('Ctrl+N', () => openSearch('classes'));
 BS.keys.add('Ctrl+Shift+N', () => openSearch('files'));

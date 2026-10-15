@@ -291,7 +291,7 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 #toasts { position: fixed; bottom: 38px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column-reverse; gap: 6px; align-items: center; z-index: 110; pointer-events: none; }
 .toast { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 14px 7px 12px; font-size: 12.5px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 8px; max-width: min(560px, 90vw); animation: toast-in .16s ease-out; }
 .toast::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
-.toast.ok::before { background: var(--add); } .toast.err::before { background: var(--del); } .toast.err { border-color: rgba(240,96,110,.45); }
+.toast.ok::before { background: var(--add); } .toast.warn::before { background: var(--warn); } .toast.err::before { background: var(--del); } .toast.err { border-color: rgba(240,96,110,.45); }
 .toast.out { opacity: 0; transition: opacity .2s; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
@@ -616,3 +616,32 @@ html:not(.desktop) .wel-top { padding-right: 8px; }
   .wel-row { grid-template-columns: 32px minmax(0, 1fr) auto; } .wel-row .wa { display: none; }
 }
 @media (max-width: 520px) { .wel-row .wm .br, .wel-row .wm .dirty { display: none; } }
+
+/* ===== Alterações feitas fora da IDE (sync.js) ===== */
+#mon > #extBar { inset: 10px 18px auto auto; max-width: min(640px, calc(100% - 36px)); z-index: 30; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--warn); box-shadow: 0 6px 24px rgba(0,0,0,.28); font-size: 12px; color: var(--fg-2); }
+#mon > #extBar[hidden] { display: none; }
+#extBar .xi { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--warn); color: #1C1F26; font-weight: 700; display: grid; place-items: center; font-size: 12px; }
+#extBar .xt { flex: 1; min-width: 0; line-height: 1.45; } #extBar .xt b { color: var(--fg); font-weight: 600; }
+#extBar .xs { display: block; color: var(--muted); font-size: 11px; }
+#extBar .chip { flex: none; height: 26px; white-space: nowrap; }
+.ext-flash { background: rgba(76,141,255,.16); transition: background .4s; } .ext-flash-gut { border-left: 3px solid var(--accent-2); margin-left: 3px; }
+.ext-conflict { background: rgba(227,166,58,.14); } .ext-conflict-gut { border-left: 3px solid var(--warn); margin-left: 3px; }
+.tab .mode.ext { color: var(--warn); background: rgba(227,166,58,.14); }
+.tab.ext-c .nm { text-decoration: underline wavy var(--warn); text-underline-offset: 3px; }
+
+/* ===== Opções de salvamento ===== */
+/* botão dividido: Salvar | ▾ (opções) */
+.split { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: var(--r-sm); overflow: hidden; }
+.split .chip { border-radius: 0; height: 26px; }
+.split .caret { padding: 0 7px; border-left: 1px solid var(--line-2); }
+#saveGrp.auto { border-color: rgba(95,184,101,.5); }
+#saveGrp.auto #btnSave span, #saveGrp.auto #btnSave svg { color: var(--add); }
+#saveGrp.auto #btnSave span { font-weight: 500; }
+#saveGrp.auto #btnSave::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--add); margin-left: -2px; }
+.save-menu { min-width: 280px; }
+.ctx .it.off { opacity: .45; pointer-events: none; }
+.ctx .it.chk { align-items: flex-start; padding: 7px 10px; }
+.ctx .it.chk input { margin: 2px 0 0; accent-color: var(--accent); width: 15px; height: 15px; flex: none; cursor: pointer; }
+.ctx .it.chk .tx { display: flex; flex-direction: column; gap: 2px; white-space: normal; }
+.ctx .it.chk small { color: var(--muted); font-size: 11px; }
+.ctx .it.chk:hover small { color: rgba(255,255,255,.8); }

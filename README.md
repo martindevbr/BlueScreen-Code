@@ -3,7 +3,7 @@
 <h1 align="center">BlueScreen</h1>
 
 <p align="center">
-Uma IDE leve para Windows, com a cara e os atalhos do IntelliJ.<br>
+Uma IDE leve para Windows, com as melhores funcionalidades do mercado.<br>
 Abre em menos de meio segundo, ocupa 25 MB e conversa com as ferramentas oficiais de cada linguagem.
 </p>
 
@@ -14,9 +14,6 @@ Abre em menos de meio segundo, ocupa 25 MB e conversa com as ferramentas oficiai
 O BlueScreen nasceu para **ler, revisar, ajustar, rodar e depurar código** sem esperar uma IDE pesada abrir. O núcleo é em Rust e a janela é nativa (WebView2); o editor é o Monaco, o mesmo do VS Code.
 
 Ele não reimplementa cada linguagem. Para análise, refatoração e depuração, usa as ferramentas oficiais que você já instala no PC (rust-analyzer, gopls, pyright, clangd, jdtls, debugpy, Delve...), pelos mesmos protocolos do VS Code (LSP e DAP). Assim, cada linguagem fica tão boa quanto a ferramenta dela.
-
-O nome vem da tela azul do Windows. No ícone, em vez do `:(` do erro, ela pisca de volta: `;)`.
-
 ## Destaques
 
 - **Projetos Git e SVN** com alterações, diff lado a lado, histórico e marcas na margem do editor.

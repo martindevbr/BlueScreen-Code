@@ -11,6 +11,7 @@ mod plugins;
 mod rpc;
 mod server;
 mod terminal;
+mod watch;
 mod workspace;
 pub(crate) use bluescreen_sdk::{util, vcs};
 

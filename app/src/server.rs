@@ -184,12 +184,36 @@ fn core_routes() -> HashMap<String, RouteFn> {
     }));
     add("file", route_fn(|r| async move {
         let (_, abs, _) = in_project(&r, "file")?;
-        if r.method == Method::PUT { tokio::fs::write(&abs, &r.body).await?; return ok(json!({ "saved": true })); }
+        if r.method == Method::PUT {
+            tokio::fs::write(&abs, &r.body).await?;
+            let md = tokio::fs::metadata(&abs).await.ok();
+            return ok(json!({ "saved": true, "mtime": md.as_ref().and_then(|m| m.modified().ok()).map(mtime_ms), "size": md.map(|m| m.len()) }));
+        }
         let md = tokio::fs::metadata(&abs).await.map_err(|e| fail(e.to_string(), 404))?;
-        if md.len() > MAX_FILE { return ok(json!({ "content": "", "tooBig": true, "size": md.len() })); }
+        let mtime = md.modified().map(mtime_ms).unwrap_or(0.0);
+        if md.len() > MAX_FILE { return ok(json!({ "content": "", "tooBig": true, "size": md.len(), "mtime": mtime })); }
         let buf = tokio::fs::read(&abs).await?;
         let binary = looks_binary(&buf);
-        ok(json!({ "content": if binary { String::new() } else { String::from_utf8_lossy(&buf).into_owned() }, "binary": binary, "size": md.len() }))
+        ok(json!({ "content": if binary { String::new() } else { String::from_utf8_lossy(&buf).into_owned() }, "binary": binary, "size": md.len(), "mtime": mtime }))
+    }));
+    // POST { files: [rel...] }: data e tamanho de cada arquivo (null = não existe mais), para conferir as abas abertas
+    add("file/stat", route_fn(|r| async move {
+        let p = absolute(&project(&r)?);
+        let b: Value = r.body_json()?;
+        let mut out = serde_json::Map::new();
+        for f in b["files"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).take(500) {
+            let abs = absolute(&p.join(f));
+            if !within(&p, &abs) { continue; }
+            let st = tokio::fs::metadata(&abs).await.ok().filter(|m| m.is_file()).map(|m| json!({ "mtime": m.modified().map(mtime_ms).unwrap_or(0.0), "size": m.len() }));
+            out.insert(f.to_string(), st.unwrap_or(Value::Null));
+        }
+        ok(json!({ "files": out }))
+    }));
+    // alterações feitas fora da IDE (long-poll; ver watch.rs)
+    add("watch", route_fn(|r| async move {
+        let p = absolute(&project(&r)?);
+        if !p.is_dir() { return Err(fail("pasta não existe", 404)); }
+        ok(crate::watch::poll(p, r.q("since").and_then(|s| s.parse().ok())).await)
     }));
     add("index", route_fn(|r| async move { ok(&*workspace::file_index(&absolute(&project(&r)?), r.flag("fresh")).await) }));
     add("search", route_fn(|r| async move { ok(workspace::search_text(&absolute(&project(&r)?), r.q_or("q", ""), r.flag("case"), r.flag("regex")).await?) }));
