@@ -3,10 +3,11 @@
 // Imagens, PDF, áudio, vídeo e fontes abrem numa aba própria, leve: o arquivo vem de /api/raw (com Range, então um
 // vídeo grande não é lido inteiro) e quem desenha é o próprio WebView2 (decodificadores e leitor de PDF nativos).
 // Outros binários (exe, dll, zip, class...) abrem num visualizador hexadecimal, 64 KB por vez.
-// Texto grande demais para o editor (logs) abre só leitura com os primeiros 4 MB.
+// Texto grande demais para o editor (logs de GB) abre no leitor por janelas de linhas (bigview.js).
 // A aba do visualizador tem mode 'view' e não tem modelo do Monaco; o elemento de cada aba fica guardado, então
 // trocar de aba não recarrega a imagem nem perde o ponto do vídeo. Se o arquivo mudar no disco, recarrega sozinho.
-const VW = { el: null, forceText: new Set() };
+// custom: tipos registrados por outros arquivos (bigview.js): { build(t, el), show(t), reload(t), close(t), goto(t, line), save(t, auto) }
+const VW = { el: null, forceText: new Set(), custom: {} };
 const VW_KINDS = {
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'],
   pdf: ['pdf'],
@@ -16,8 +17,7 @@ const VW_KINDS = {
   // binários conhecidos: nem tenta ler como texto
   hex: ['exe', 'dll', 'so', 'dylib', 'bin', 'dat', 'class', 'jar', 'war', 'zip', '7z', 'rar', 'gz', 'tgz', 'xz', 'bz2', 'pdb', 'obj', 'o', 'a', 'lib', 'pyc', 'wasm', 'sqlite', 'db', 'iso', 'msi', 'docx', 'xlsx', 'pptx', 'psd', 'tif', 'tiff', 'heic'],
 };
-const VW_LABEL = { image: 'imagem', pdf: 'PDF', audio: 'áudio', video: 'vídeo', font: 'fonte', hex: 'binário' };
-const VW_BIG = 4 << 20;
+const VW_LABEL = { image: 'imagem', pdf: 'PDF', audio: 'áudio', video: 'vídeo', font: 'fonte', hex: 'binário', big: 'texto grande' };
 const vwExt = (p) => (p.split('/').pop().split('.').pop() || '').toLowerCase();
 const vwKind = (path) => { if (VW.forceText.has(path)) return null; const e = vwExt(path); for (const [k, list] of Object.entries(VW_KINDS)) if (list.includes(e)) return k; return null; };
 const vwUrl = (t, extra = '') => `/api/raw?project=${encodeURIComponent(t.project)}&file=${encodeURIComponent(t.path)}&v=${t.ver || 0}${extra}`;
@@ -31,27 +31,15 @@ function vwOpen(path, kind, line) {
     tab = { key, path, mode: 'view', kind, project: S.project.path, lang: VW_LABEL[kind] + ' · ' + vwExt(path).toUpperCase(), editable: false, ver: Date.now(), view: { fit: true, zoom: 1 } };
     S.tabs.push(tab); BS.hooks.run('tab:open', tab);
   }
+  if (line) tab.goLine = line;
   activate(tab); seRemember(path);
+  const c = VW.custom[tab.kind]; if (line && c && c.goto && tab.el) c.goto(tab, line);
 }
-// texto grande: só leitura, com o começo do arquivo
+// texto grande demais para o editor: leitor por janelas de linhas (bigview.js); binário disfarçado vai para o hex
 async function vwOpenBig(path, size, line) {
-  const key = path + '::editor';
-  let tab = S.tabs.find(t => t.key === key && t.project === S.project.path);
-  if (!tab) {
-    let text;
-    try {
-      const r = await fetch(`/api/raw?project=${encodeURIComponent(S.project.path)}&file=${encodeURIComponent(path)}&offset=0&len=${VW_BIG}`);
-      text = new TextDecoder('utf-8').decode(await r.arrayBuffer());
-    } catch (e) { toast('Não deu para abrir: ' + e.message); return; }
-    const cut = text.lastIndexOf('\n'); if (cut > 0) text = text.slice(0, cut + 1);
-    tab = { key, path, mode: 'editor', project: S.project.path, lang: langOf(path), editable: false, big: true };
-    tab.model = monaco.editor.createModel(text, tab.lang, monaco.Uri.parse('bs:/' + encodeURIComponent(key)));
-    tab.saved = text; tab.model._tab = tab;
-    S.tabs.push(tab); BS.hooks.run('tab:open', tab);
-    toast(`Arquivo grande (${vwSize(size)}): mostrando os primeiros ${vwSize(VW_BIG)}, só leitura`, null, 'big');
-  }
-  activate(tab); seRemember(path);
-  if (line) revealAt(editor, line);
+  let bin = false;
+  try { const r = await fetch(`/api/raw?project=${encodeURIComponent(S.project.path)}&file=${encodeURIComponent(path)}&offset=0&len=8000`); bin = new Uint8Array(await r.arrayBuffer()).includes(0); } catch {}
+  vwOpen(path, bin || !VW.custom.big ? 'hex' : 'big', line);
 }
 
 // ----- desenho de cada tipo -----
@@ -62,6 +50,7 @@ function vwBar(t, extra) {
 function vwBuild(t) {
   const el = document.createElement('div'); el.className = 'vw-pane vw-' + t.kind; t.el = el;
   const k = t.kind;
+  if (VW.custom[k]) { VW.custom[k].build(t, el); return el; }
   if (k === 'image') {
     const svg = vwExt(t.path) === 'svg';
     el.innerHTML = vwBar(t, `<button class="chip" data-a="fit" title="Ajustar à janela / tamanho real (0)">Ajustar</button><button class="icon-btn" data-a="out" title="Diminuir (-)">−</button><span class="vw-zoom" data-zoom></span><button class="icon-btn" data-a="in" title="Aumentar (+)">+</button><button class="icon-btn" data-a="bg" title="Fundo: xadrez / claro / escuro">◩</button>${svg ? '<button class="chip" data-a="text" title="Abrir o SVG no editor">Editar como texto</button>' : ''}`)
@@ -155,9 +144,10 @@ function vwShow(t) {
   if (!t.el) vwBuild(t);
   [...VW.el.children].forEach(c => { if (c !== t.el) c.querySelectorAll('[data-media]').forEach(m => m.pause()); });
   if (VW.el.firstChild !== t.el) VW.el.replaceChildren(t.el);
-  if (t.size == null && t.kind !== 'hex') fetch(vwUrl(t, '&offset=0&len=0')).then(r => { t.size = +r.headers.get('x-file-size'); vwMeta(t); }).catch(() => {});
+  if (t.size == null && t.kind !== 'hex' && t.kind !== 'big') fetch(vwUrl(t, '&offset=0&len=0')).then(r => { t.size = +r.headers.get('x-file-size'); vwMeta(t); }).catch(() => {});
   requestAnimationFrame(() => vwZoom(t));
   $('#stPos').textContent = '';
+  VW.custom[t.kind]?.show?.(t);
 }
 // o arquivo mudou no disco: recarrega sem perder o lugar
 function vwReload(t) {
@@ -166,6 +156,7 @@ function vwReload(t) {
   const fr = t.el.querySelector('[data-frame]'); if (fr) fr.src = vwUrl(t);
   const m = t.el.querySelector('[data-media]'); if (m) { const at = m.currentTime, playing = !m.paused; m.src = vwUrl(t); m.currentTime = at; if (playing) m.play().catch(() => {}); }
   if (t.kind === 'font') vwFont(t);
+  VW.custom[t.kind]?.reload?.(t);
   if (t.kind === 'hex') { t.el.querySelector('[data-pre]').textContent = ''; t.hexAt = 0; vwHex(t); }
   if (S.active === t) vwShow(t);
 }
@@ -173,11 +164,14 @@ function vwReload(t) {
 (function vwInit() {
   VW.el = document.createElement('div'); VW.el.id = 'vw'; VW.el.style.display = 'none';
   $('#mon').appendChild(VW.el);
-  BS.fileViewer = { kind: vwKind, open: vwOpen, openBig: vwOpenBig, show: vwShow, reload: vwReload, kinds: VW_KINDS };
+  BS.fileViewer = { kind: vwKind, open: vwOpen, openBig: vwOpenBig, show: vwShow, reload: vwReload, kinds: VW_KINDS, custom: VW.custom, bar: vwBar, size: vwSize, act: vwAct,
+    // abas de visualizador que editam (arquivo grande): salvar passa pelo tipo
+    save: (t, auto) => VW.custom[t.kind]?.save?.(t, auto) };
   BS.hooks.on('tab:close', (t) => {
     if (t.mode !== 'view' || !t.el) return;
     t.el.querySelectorAll('[data-media]').forEach(m => { m.pause(); m.removeAttribute('src'); m.load(); });
     if (t.face) document.fonts.delete(t.face);
+    VW.custom[t.kind]?.close?.(t);
     t.el.remove(); t.el = null;
   });
   BS.hooks.on('files:changed', (proj, r) => {

@@ -4,6 +4,7 @@
 //! mostrada numa janela nativa com WebView2 (ou no navegador com --web).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bigfile;
 mod build;
 mod desktop;
 mod lint;

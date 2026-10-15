@@ -960,7 +960,7 @@ function renderTabs() {
 }
 function closeTab(t) {
   S.tabs.filter(x => x.owner === t).forEach(closeTab); // diff "EXTERNO" usa o mesmo modelo da aba dona
-  if (S.autoSave && t.dirty && !t.owner && !t.conflict && !t.gone) saveTab(t, true, t.model.getValue()); // fechar = salvar (o texto vai junto: o modelo é descartado já)
+  if (S.autoSave && t.dirty && !t.owner && !t.conflict && !t.gone) saveTab(t, true, t.model?.getValue()); // fechar = salvar (o texto vai junto: o modelo é descartado já)
   const i = S.tabs.indexOf(t); S.tabs.splice(i, 1);
   if (t.original && diffEditor && diffEditor.getModel()?.original === t.original) diffEditor.setModel(null); // o Monaco reclama de modelo descartado ainda em uso
   if (!t.owner) { BS.hooks.run('tab:close', t); t.model?.dispose(); }
@@ -983,15 +983,18 @@ function markDirty(model) {
   if (d !== t.dirty) { t.dirty = d; renderTabs(); syncUnsaved(); }
   if (d) autoSaveSoon();
 }
+// abas com o que salvar (as de arquivo grande editam pelo núcleo, sem modelo do Monaco)
+const savable = (t) => t.dirty && !t.owner && (t.editable || t.mode === 'view');
 async function save() { const t = S.active && (S.active.owner || S.active); if (t) await saveTab(t); }
 async function saveAll() {
-  const list = S.tabs.filter(t => t.dirty && t.editable && !t.owner);
+  const list = S.tabs.filter(savable);
   for (const t of list) await saveTab(t, list.length > 1 ? 'all' : false);
   if (list.length > 1) toast(`${list.length} arquivos salvos`, 'ok', 'save'); else if (!list.length) toast('Nada para salvar', null, 'save');
 }
 // auto: salvamento automático (sem aviso, não grava por cima de conflito com o disco)
 // body: texto já capturado (a aba está sendo fechada e o modelo vai ser descartado)
 async function saveTab(t, auto, body) {
+  if (t && t.mode === 'view') return BS.fileViewer.save(t, auto); // arquivo grande: o núcleo grava as edições
   if (!t || !t.editable || t.owner) return;
   if (auto === true && (t.conflict || t.gone || !t.dirty || t.saving)) return;
   // o arquivo mudou fora da IDE desde a última leitura? confere (e mescla) antes de gravar por cima
@@ -1022,7 +1025,7 @@ const AUTO_IDLE = 1500;
 S.autoSave = store.get('autoSave', false);
 let autoT = null;
 function autoSaveSoon() { if (!S.autoSave) return; clearTimeout(autoT); autoT = setTimeout(autoSaveAll, AUTO_IDLE); }
-function autoSaveAll() { clearTimeout(autoT); if (!S.autoSave) return; S.tabs.filter(t => t.dirty && t.editable && !t.owner).forEach(t => saveTab(t, true)); }
+function autoSaveAll() { clearTimeout(autoT); if (!S.autoSave) return; S.tabs.filter(savable).forEach(t => saveTab(t, true)); }
 function setAutoSave(on) {
   S.autoSave = !!on; store.set('autoSave', S.autoSave); renderSaveBtn();
   toast(S.autoSave ? 'Salvamento automático ligado' : 'Salvamento automático desligado', 'ok', 'save');
@@ -1040,9 +1043,9 @@ function saveMenu(e) {
   if ($('#ctx')?.dataset.menu === 'save') return closeMenu();
   closeMenu();
   const m = document.createElement('div'); m.className = 'ctx save-menu'; m.id = 'ctx'; m.dataset.menu = 'save';
-  const n = S.tabs.filter(t => t.dirty && t.editable && !t.owner).length;
+  const n = S.tabs.filter(savable).length;
   const cur = S.active && (S.active.owner || S.active);
-  m.innerHTML = `<div class="it${cur && cur.editable ? '' : ' off'}" data-a="cur">${SAVE_ICO}<span>Salvar arquivo atual</span><span class="k">Ctrl+S</span></div>`
+  m.innerHTML = `<div class="it${cur && (cur.editable || cur.mode === 'view' && cur.dirty) ? '' : ' off'}" data-a="cur">${SAVE_ICO}<span>Salvar arquivo atual</span><span class="k">Ctrl+S</span></div>`
     + `<div class="it${n ? '' : ' off'}" data-a="all">${SAVE_ICO}<span>Salvar todos${n ? ` (${n})` : ''}</span><span class="k">Ctrl+Shift+S</span></div>`
     + `<div class="sep"></div><label class="it chk"><input type="checkbox" ${S.autoSave ? 'checked' : ''}><span class="tx"><span>Salvar automaticamente</span><small>Ao parar de digitar, trocar de aba ou sair da janela</small></span></label>`;
   document.body.appendChild(m);

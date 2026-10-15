@@ -83,6 +83,8 @@ fn classify(rel: &str) -> Option<Kind> {
     if rel == ".git" { return Some(Kind::Vcs); }
     if let Some(s) = rel.strip_prefix(".svn/") { return (s == "wc.db").then_some(Kind::Vcs); }
     if rel.split('/').any(|seg| IGNORED.contains(&seg)) { return None; }
+    // arquivo temporário do salvar de arquivos grandes (bigfile.rs): vira o arquivo de verdade logo em seguida
+    if rel.ends_with(".bs-save~") { return None; }
     Some(Kind::Change)
 }
 

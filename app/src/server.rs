@@ -209,6 +209,40 @@ fn core_routes() -> HashMap<String, RouteFn> {
         }
         ok(json!({ "files": out }))
     }));
+    // arquivos grandes, lidos em janelas de linhas (ver bigfile.rs)
+    add("big/info", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        ok(blocking(move || crate::bigfile::info(&abs)).await?.map_err(|e| fail(e, 404))?)
+    }));
+    add("big/lines", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        let (from, count) = (r.q("from").and_then(|v| v.parse().ok()).unwrap_or(0), r.q("count").and_then(|v| v.parse().ok()).unwrap_or(500));
+        let full = r.flag("full");
+        ok(blocking(move || crate::bigfile::lines(&abs, from, count, full)).await?.map_err(|e| fail(e, 400))?)
+    }));
+    add("big/search", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        let (q, case, re) = (r.q_or("q", "").to_string(), r.flag("case"), r.flag("regex"));
+        ok(blocking(move || crate::bigfile::search(&abs, &q, case, re)).await?.map_err(|e| fail(e, 400))?)
+    }));
+    // edição: POST com o texto novo das linhas [from, to) no corpo; fica em memória até salvar
+    add("big/edit", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        let (from, to) = (r.q("from").and_then(|v| v.parse().ok()).unwrap_or(0), r.q("to").and_then(|v| v.parse().ok()).unwrap_or(0));
+        // del: apaga as linhas (corpo vazio seria "uma linha vazia")
+        let text = if r.flag("del") { None } else { Some(String::from_utf8_lossy(&r.body).into_owned()) };
+        ok(blocking(move || crate::bigfile::edit(&abs, from, to, text.as_deref())).await?.map_err(|e| fail(e, 409))?)
+    }));
+    // a = undo | redo | discard
+    add("big/history", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        let dir = match r.q_or("a", "") { "undo" => -1, "redo" => 1, "discard" => 0, _ => return Err(fail("a: undo, redo ou discard", 400)) };
+        ok(blocking(move || crate::bigfile::history(&abs, dir)).await?.map_err(|e| fail(e, 400))?)
+    }));
+    add("big/save", route_fn(|r| async move {
+        let (_, abs, _) = in_project(&r, "file")?;
+        ok(blocking(move || crate::bigfile::save(&abs)).await?.map_err(|e| fail(e, 409))?)
+    }));
     // alterações feitas fora da IDE (long-poll; ver watch.rs)
     add("watch", route_fn(|r| async move {
         let p = absolute(&project(&r)?);
