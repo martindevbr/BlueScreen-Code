@@ -2,7 +2,7 @@
 use crate::util::*;
 use regex::Regex;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -20,6 +20,7 @@ pub struct LintResult {
     pub problems: Vec<Problem>,
     #[serde(skip_serializing_if = "Option::is_none")] pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")] pub client: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub live: Option<bool>,
 }
 
 fn p(line: usize, col: usize, sev: &'static str, msg: impl Into<String>, rule: &str) -> Problem {
@@ -36,7 +37,7 @@ fn line_col(txt: &str, idx: usize) -> (usize, usize) {
 macro_rules! re { ($s:expr) => {{ static R: LazyLock<Regex> = LazyLock::new(|| Regex::new($s).unwrap()); &*R }}; }
 macro_rules! fre { ($s:expr) => {{ static R: LazyLock<fancy_regex::Regex> = LazyLock::new(|| fancy_regex::Regex::new($s).unwrap()); &*R }}; }
 
-const BINARY: &[&str] = &["gif", "png", "jpg", "jpeg", "ico", "ttf", "woff", "woff2", "eot", "otf", "zip", "jar", "war", "ear", "class", "pdf", "doc", "docx", "xls", "xlsx", "swf", "db", "wbmp", "exe", "dll", "bmp"];
+#[path = "lint_formats.rs"] mod formats;
 
 // ---------- genérico (todo arquivo de texto) ----------
 fn generic(txt: &str) -> Vec<Problem> {
@@ -50,6 +51,8 @@ fn generic(txt: &str) -> Vec<Problem> {
 }
 
 // ---------- XML (bem-formado) / HTML ----------
+/// tags do HTML cujo fechamento é opcional pela especificação (<li>a<li>b, <p>texto, <td>...)
+const OPTIONAL_END: &[&str] = &["p", "li", "td", "th", "tr", "dd", "dt", "option", "optgroup", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "rb", "rtc", "html", "head", "body"];
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr", "basefont", "frame", "isindex", "keygen"];
 fn xml(txt: &str, html: bool) -> Vec<Problem> {
     let mut o = vec![]; let mut stack: Vec<(String, usize, usize)> = vec![];
@@ -84,28 +87,33 @@ fn xml(txt: &str, html: bool) -> Vec<Problem> {
         }
         if k >= n { o.push(pl(line_col(txt, lt), "error", format!("Tag <{name}> não fechada com '>'"), "xml")); break; }
         if q != 0 { o.push(pl(line_col(txt, lt), "error", format!("Aspas não fechadas na tag <{name}>"), "xml")); }
-        if !html && !closing && re!(r#"\s[\w:.-]+=[^"'\s]"#).is_match(&txt[i + m[0].len()..k]) { o.push(pl(line_col(txt, i), "error", format!("Atributo sem aspas em <{name}>"), "xml")); }
+        // o "=" dentro de um valor entre aspas (Condition="'$(A)'=='1'") não conta
+        if !html && !closing && re!(r#"\s[\w:.-]+=[^"'\s]"#).is_match(&re!(r#""[^"]*"|'[^']*'"#).replace_all(&txt[i + m[0].len()..k], "\"\"")) { o.push(pl(line_col(txt, i), "error", format!("Atributo sem aspas em <{name}>"), "xml")); }
         let (line, col) = line_col(txt, lt);
         if closing {
             match stack.iter().rposition(|s| s.0 == name) {
                 None => o.push(p(line, col, soft, format!("</{name}> sem abertura"), rule)),
                 Some(idx) => {
-                    for s in stack[idx + 1..].iter().rev() { o.push(p(s.1, s.2, soft, format!("<{}> não fechada (fechou </{name}> antes)", s.0), rule)); }
+                    for s in stack[idx + 1..].iter().rev().filter(|s| !(html && OPTIONAL_END.contains(&s.0.as_str()))) { o.push(p(s.1, s.2, soft, format!("<{}> não fechada (fechou </{name}> antes)", s.0), rule)); }
                     stack.truncate(idx);
                 }
             }
         } else if !self_close && !(html && VOID.contains(&name.as_str())) { stack.push((name.clone(), line, col)); }
         i = k + 1;
-        if html && (name == "script" || name == "style") && !self_close {
-            match txt[i..].to_lowercase().find(&format!("</{name}")) { Some(e) => i += e, None => { o.push(p(line, col, "error", format!("<{name}> não fechada"), "html")); break; } }
+        // conteúdo de <script>/<style> é texto: pula até o fechamento (só na abertura; busca ASCII sem mudar o tamanho em bytes)
+        if html && !closing && (name == "script" || name == "style") && !self_close {
+            let close = format!("</{name}");
+            match txt.as_bytes()[i..].windows(close.len()).position(|w| w.eq_ignore_ascii_case(close.as_bytes())) { Some(e) => i += e, None => { o.push(p(line, col, "error", format!("<{name}> não fechada"), "html")); break; } }
         }
     }
-    for s in &stack { o.push(p(s.1, s.2, soft, format!("<{}> não fechada", s.0), rule)); }
+    for s in stack.iter().filter(|s| !(html && OPTIONAL_END.contains(&s.0.as_str()))) { o.push(p(s.1, s.2, soft, format!("<{}> não fechada", s.0), rule)); }
     if !html && !txt.trim().is_empty() && !re!(r"^\s*(<\?xml[^>]*\?>)?\s*(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>)?\s*<").is_match(txt) {
         o.push(p(1, 1, "error", "Conteúdo antes do elemento raiz", "xml"));
     }
     if !html {
-        for m in fre!(r"&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+|[A-Za-z][\w.-]*);)").find_iter(txt).flatten() {
+        // '&' solto não vale em comentários, CDATA nem instruções <? ?>: vira espaço com o mesmo tamanho em bytes
+        let masked = re!(r"(?s)<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>").replace_all(txt, |m: &regex::Captures| m[0].chars().map(|c| if c == '\n' { "\n".into() } else { " ".repeat(c.len_utf8()) }).collect::<String>());
+        for m in fre!(r"&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+|[A-Za-z][\w.-]*);)").find_iter(masked.as_ref()).flatten() {
             o.push(pl(line_col(txt, m.start()), "error", "'&' sem entidade (use &amp;)", "xml"));
             if o.len() > 200 { break; }
         }
@@ -147,7 +155,7 @@ fn css(txt: &str, ext: &str) -> Vec<Problem> {
     }
     if comment { let (l, cc) = pos.pop().unwrap_or((1, 1)); o.push(p(l, cc, "error", "Comentário /* não fechado", "css")); }
     if depth > 0 { let (l, cc) = pos.last().copied().unwrap_or((1, 1)); o.push(p(l, cc, "error", format!("'{{' não fechado ({depth})"), "css")); }
-    if ext == "css" { for m in re!(r":[^;{}]*[^;\s{}]\s*\n\s*\}").find_iter(txt) { o.push(pl(line_col(txt, m.start()), "warning", "Falta ';' no fim da declaração", "css")); } }
+    if ext == "css" { for m in re!(r":[^;{}]*[^;\s{}]\s*\n\s*\}").find_iter(txt) { o.push(pl(line_col(txt, m.start()), "info", "Sem ';' na última declaração (válido, mas fácil de esquecer ao acrescentar outra)", "css")); } }
     o
 }
 
@@ -176,20 +184,32 @@ fn properties(txt: &str) -> Vec<Problem> {
 
 fn yaml(txt: &str) -> Vec<Problem> {
     let mut o = vec![]; let mut keys: Vec<(String, usize, usize, Option<usize>)> = vec![];
+    let mut block: Option<usize> = None; // dentro de um bloco | ou >: indentação da linha que o abriu
     for (i, raw) in txt.split('\n').enumerate() {
         let l = raw.strip_suffix('\r').unwrap_or(raw);
+        let t = l.trim(); let ind = l.len() - l.trim_start().len();
+        if let Some(b) = block { if t.is_empty() || ind > b { continue; } block = None; }
         if re!(r"^\s*\t").is_match(l) { o.push(p(i + 1, 1, "error", "Tab na indentação (YAML exige espaços)", "yaml")); }
-        let t = l.trim(); if t.is_empty() || t.starts_with('#') || t == "---" || t == "..." { continue; }
-        let ind = l.len() - l.trim_start().len();
+        if t.is_empty() || t.starts_with('#') || t == "---" || t == "..." { continue; }
         if let Some(km) = re!(r"^([\w.\-/$]+)\s*:(\s|$)").captures(t) {
             while keys.last().is_some_and(|k| k.1 >= ind) { keys.pop(); }
             let parent = keys.iter().find(|k| k.1 < ind).map(|k| k.2);
             if keys.iter().any(|k| k.1 == ind && k.0 == km[1] && k.3 == parent) { o.push(p(i + 1, 1, "warning", format!("Chave duplicada \"{}\"", &km[1]), "yaml")); }
             keys.push((km[1].to_string(), ind, i + 1, parent));
-        } else if re!(r#"^[^\s\-'"\[{>|!&*%@`]"#).is_match(t) && !re!(r"^\S.*:\s").is_match(t) && ind == 0 && !re!(r"^[\w.\-/$]+\s*:").is_match(t) {
+        } else if ind == 0 && re!(r#"^[^\s\-'"\[{>|!&*%@`]"#).is_match(t) && !re!(r"^\S.*:(\s|$)").is_match(t) {
             o.push(p(i + 1, 1, "warning", "Linha solta sem \"chave:\" nem \"-\"", "yaml"));
         }
-        if re!(r#"(^|[^\\])""#).find_iter(t).count() % 2 == 1 { o.push(p(i + 1, 1, "error", "Aspas duplas não fechadas", "yaml")); }
+        // aspas: uma aspa só abre string no começo de um valor (depois de espaço, ':', '-', '[', '{' ou ','); "don't" não abre
+        let (mut sq, mut dq, mut prev, mut esc) = (false, false, ' ', false);
+        for ch in t.chars() {
+            if dq { if esc { esc = false; } else if ch == '\\' { esc = true; } else if ch == '"' { dq = false; } }
+            else if sq { if ch == '\'' { sq = false; } }
+            else if ch == '#' && (prev == ' ' || prev == '\t') { break; }
+            else if matches!(prev, ' ' | '\t' | ':' | '-' | '[' | '{' | ',') { if ch == '"' { dq = true; } else if ch == '\'' { sq = true; } }
+            prev = ch;
+        }
+        if dq && !t.ends_with('\\') { o.push(p(i + 1, 1, "error", "Aspas duplas não fechadas", "yaml")); }
+        if re!(r"(^|:|-)\s*[|>][-+0-9]*\s*(#.*)?$").is_match(t) { block = Some(ind); }
     }
     o
 }
@@ -211,7 +231,20 @@ fn sql(txt: &str) -> Vec<Problem> {
 }
 
 fn markdown(txt: &str) -> Vec<Problem> {
-    if re!(r"(?m)^\s*```").find_iter(txt).count() % 2 == 1 { vec![p(1, 1, "warning", "Bloco de código ``` não fechado", "markdown")] } else { vec![] }
+    // cerca de código: ``` ou ~~~ (3 ou mais); fecha com o mesmo caractere e pelo menos o mesmo tamanho
+    let mut open: Option<(char, usize, usize)> = None;
+    for (i, raw) in txt.split('\n').enumerate() {
+        let l = raw.strip_suffix('\r').unwrap_or(raw);
+        let t = l.trim_start();
+        if l.len() - t.len() > 3 && open.is_none() { continue; }
+        let Some(c) = t.chars().next().filter(|c| *c == '`' || *c == '~') else { continue };
+        let n = t.chars().take_while(|x| *x == c).count(); if n < 3 { continue; }
+        match open {
+            None => { if !(c == '`' && t[n..].contains('`')) { open = Some((c, n, i + 1)); } }
+            Some((oc, on, _)) => { if oc == c && n >= on && t[n..].trim().is_empty() { open = None; } }
+        }
+    }
+    match open { Some((c, n, ln)) => vec![p(ln, 1, "warning", format!("Bloco de código {} não fechado", c.to_string().repeat(n)), "markdown")], None => vec![] }
 }
 
 // ---------- Java (javac com classpath do projeto) ----------
@@ -349,7 +382,7 @@ async fn plugin_lint(project: &Path, rel: &str) -> Option<LintResult> {
                     sev: match x["sev"].as_str() { Some("error") => "error", Some("info") => "info", _ => "warning" },
                     msg: x["msg"].as_str().unwrap_or("").into(), rule: x["rule"].as_str().unwrap_or(&id).into(),
                 }).collect()).unwrap_or_default();
-                return Some(LintResult { tool: v["tool"].as_str().map(String::from).or(Some(id)), problems, note: None, client: (v["client"] == "ts").then_some("ts") });
+                return Some(LintResult { tool: v["tool"].as_str().map(String::from).or(Some(id)), problems, note: None, client: (v["client"] == "ts").then_some("ts"), live: None });
             }
             Ok(_) => {}
             Err(e) => log(format!("plugin {id}: lint falhou, usando o lint de sempre ({})", e.msg)),
@@ -359,40 +392,87 @@ async fn plugin_lint(project: &Path, rel: &str) -> Option<LintResult> {
 }
 
 // ---------- entrada ----------
-static XML_EXT: LazyLock<HashSet<&str>> = LazyLock::new(|| ["xml", "xsd", "wsdl", "xsl", "xslt", "tld", "jrxml", "xmi", "pom", "svg", "project", "classpath", "launch", "component", "factorypath", "jsdtscope", "container", "name", "plist", "dtd"].into_iter().collect());
-const PLAIN_EXT: &[&str] = &["txt", "mf", "gitignore", "editorconfig", "iml", "log", "csv", "tu", "ti", "prd", "hml", "dnx"];
+/// extensão e nome do arquivo em minúsculas; sem extensão, o shebang (#!/usr/bin/env python3) decide
+fn names(rel_file: &str, txt: Option<&str>) -> (String, String) {
+    let path = Path::new(rel_file);
+    let mut ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let base = path.file_name().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if ext.is_empty() { if let Some(e) = txt.and_then(formats::shebang) { ext = e.into(); } }
+    (ext, base)
+}
 pub async fn lint(project: &Path, rel_file: &str) -> LintResult {
     let abs = project.join(rel_file);
-    let ext = Path::new(rel_file).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    let base = Path::new(rel_file).file_name().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if BINARY.contains(&ext.as_str()) { return LintResult { note: Some("Binário, sem lint".into()), ..Default::default() }; }
-    let txt = match tokio::fs::read(&abs).await { Ok(b) => String::from_utf8_lossy(&b).into_owned(), Err(e) => return LintResult { note: Some(e.to_string()), ..Default::default() } };
+    let (ext, _) = names(rel_file, None);
+    if formats::BINARY.contains(&ext.as_str()) { return LintResult { note: Some("Binário, sem lint".into()), ..Default::default() }; }
+    let bytes = match tokio::fs::read(&abs).await { Ok(b) => b, Err(e) => return LintResult { note: Some(e.to_string()), ..Default::default() } };
+    let Some(txt) = formats::decode(&bytes) else { return LintResult { note: Some("Binário, sem lint".into()), ..Default::default() } };
+    let (ext, base) = names(rel_file, Some(&txt));
     if let Some(mut out) = plugin_lint(project, rel_file).await {
         let mut all = generic(&txt);
         all.append(&mut out.problems);
         out.problems = all;
         return out;
     }
-    let mut out = match ext.as_str() {
+    let mut out = match text_rules(&ext, &base, &txt) { Some(r) => r, None => match ext.as_str() {
         "java" => java(project, &abs).await,
         "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "vue" => js(project, &abs, &ext).await,
-        "html" | "htm" | "xhtml" | "jsp" | "jspf" | "tag" | "vm" | "ftl" => wrap("html/jsp", html_lint(&txt, &ext)),
-        e if XML_EXT.contains(e) || base.ends_with(".xml") => wrap("xml", if e == "dtd" { vec![] } else { xml(&txt, false) }),
-        "css" | "scss" | "less" => wrap(&ext, css(&txt, &ext)),
         "sass" => wrap("sass", vec![]),
-        "json" | "map" | "webmanifest" => wrap("json", json_lint(&txt)),
-        "properties" | "prefs" => wrap("properties", properties(&txt)),
-        "yml" | "yaml" => wrap("yaml", yaml(&txt)),
-        "sql" | "ddl" | "pks" | "pkb" => wrap("sql", sql(&txt)),
-        "md" | "markdown" => wrap("markdown", markdown(&txt)),
-        "py" => py(&abs, project).await,
-        "ps1" | "psm1" => ps1(&abs).await,
-        "sh" | "bash" => sh(&abs).await,
-        "bat" | "cmd" => wrap("bat", txt.split('\n').enumerate().filter(|(_, l)| l.matches('"').count() % 2 == 1).map(|(i, _)| p(i + 1, 1, "warning", "Aspas não fechadas", "bat")).collect()),
-        e if PLAIN_EXT.contains(&e) || e.is_empty() => wrap("texto", vec![]),
+        "py" | "pyw" => py(&abs, project).await,
+        "ps1" | "psm1" | "psd1" => ps1(&abs).await,
+        "sh" | "bash" | "ksh" => sh(&abs).await,
+        "zsh" => external(&abs, "zsh", &["-n"], "zsh -n").await,
+        "fish" => external(&abs, "fish", &["--no-execute"], "fish --no-execute").await,
+        "pl" | "pm" | "cgi" | "psgi" => external(&abs, "perl", &["-c"], "perl -c").await,
+        "bat" | "cmd" | "btm" => wrap("bat", txt.split('\n').enumerate().filter(|(_, l)| l.matches('"').count() % 2 == 1).map(|(i, _)| p(i + 1, 1, "warning", "Aspas não fechadas", "bat")).collect()),
+        "" => wrap("texto", vec![]),
         e => LintResult { tool: Some("texto".into()), note: Some(format!("Sem regras específicas para .{e}; só checagens genéricas")), ..Default::default() },
-    };
+    } };
     let mut all = generic(&txt);
+    all.append(&mut out.problems);
+    out.problems = all;
+    out
+}
+/// checagem de sintaxe pelo próprio interpretador (zsh -n, perl -c...), quando ele está instalado
+async fn external(file: &Path, prog: &str, args: &[&str], tool: &str) -> LintResult {
+    let mut a: Vec<String> = args.iter().map(|s| s.to_string()).collect(); a.push(file.to_string_lossy().into_owned());
+    let a: Vec<&str> = a.iter().map(String::as_str).collect();
+    let r = run(prog, &a, file.parent().unwrap_or(file), 30000).await;
+    if r.not_found { return LintResult { note: Some(format!("{prog} não encontrado: sem checagem de sintaxe")), ..Default::default() }; }
+    let problems = if r.ok { vec![] } else {
+        // tira o caminho do arquivo da mensagem: "x.pl line 3" / "x.zsh:3:" viram só o texto do erro
+        let fname = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let msg = format!("{}\n{}", r.err, r.out).replace(&*file.to_string_lossy(), &fname);
+        re!(r"(?m)^(.*?)(?:line |:)(\d+)[:,.]?\s*(.*)$").captures_iter(&msg).filter(|m| !m[0].contains("syntax OK")).take(20)
+            .map(|m| p(m[2].parse().unwrap_or(1), 1, "error", format!("{} {}", m[1].replace(&fname, "").trim_end_matches([' ', ':', ',']), m[3].trim()).replace(" at  ", " ").trim().to_string(), prog)).collect()
+    };
+    LintResult { tool: Some(tool.into()), problems, ..Default::default() }
+}
+fn head(txt: &str) -> &str { let mut n = txt.len().min(4000); while !txt.is_char_boundary(n) { n -= 1; } &txt[..n] }
+/// regras que só olham o texto (sem ferramenta externa nem o arquivo em disco): o catálogo de lint_formats.rs
+fn text_rules(ext: &str, base: &str, txt: &str) -> Option<LintResult> {
+    use formats::Kind::*;
+    let txt = txt.strip_prefix('\u{feff}').unwrap_or(txt); // BOM do UTF-8
+    let k = formats::classify(base, ext, head(txt))?;
+    let problems = match &k {
+        Html(t) => { let mut v = html_lint(txt, ext); if *t == "template" { v.extend(formats::template_blocks(txt)); } v }
+        Xml => if ext == "dtd" { vec![] } else { xml(txt, false) },
+        Json => json_lint(txt), Jsonc => formats::jsonc(txt), Jsonl => formats::jsonl(txt),
+        Yaml => yaml(txt), Toml => formats::toml(txt), Ini(d) => formats::ini(txt, *d), Env => formats::dotenv(txt),
+        Properties => properties(txt), Csv(d) => formats::csv(txt, *d), Css(e) => css(txt, e),
+        Sql => sql(txt), Markdown => markdown(txt), Docker => formats::dockerfile(txt), Make => formats::makefile(txt),
+        Latex => formats::latex(txt), Vb => formats::vb(txt), Manifest => formats::manifest(txt), Po => formats::po(txt),
+        Diff => formats::diff(txt), Subs(v) => formats::subtitles(txt, *v),
+        GoTpl => { let mut v = formats::go_template(txt); if txt.contains("</") { v.extend(html_lint(txt, ext)); } v }
+        Code(s) => formats::code(txt, s), Plain => vec![],
+    };
+    Some(wrap(formats::tool(&k), problems))
+}
+/// lint ao vivo do editor: o texto ainda não salvo, só com as regras de texto (o resto espera o salvar).
+/// live: false avisa a página que este tipo não tem lint ao vivo (ela para de mandar o texto)
+pub fn lint_text(rel_file: &str, txt: &str) -> LintResult {
+    let (ext, base) = names(rel_file, Some(txt));
+    let Some(mut out) = text_rules(&ext, &base, txt) else { return LintResult { note: Some("Sem lint ao vivo para este tipo".into()), live: Some(false), ..Default::default() } };
+    let mut all = generic(txt);
     all.append(&mut out.problems);
     out.problems = all;
     out

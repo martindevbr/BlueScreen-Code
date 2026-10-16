@@ -436,6 +436,8 @@ async function goTo(uri, range) {
 
 // ----- status bar: servidor do arquivo aberto -----
 let stEl = null;
+// linguagens com análise embutida (lint ao vivo do núcleo + html.js): sem servidor não é "sem análise" nem pede instalar
+const BUILTIN = { html: 'HTML/JSP embutido' };
 function lsStatus() {
   if (!stEl) return;
   const t = S.active; const lang = t && t.mode === 'editor' ? t.lang : null;
@@ -443,6 +445,7 @@ function lsStatus() {
   if (!lang || !known.length) { stEl.hidden = true; return; }
   stEl.hidden = false;
   const tool = serverFor(lang);
+  if (!tool && BUILTIN[lang]) { stEl.innerHTML = `<span class="lsp-dot ok"></span>${esc(BUILTIN[lang])}`; stEl.title = `${BUILTIN[lang]}: erros, autocompletar e navegação embutidos, sem instalar nada.\nClique para opções`; return; }
   if (!tool) { stEl.innerHTML = '<span class="lsp-dot off"></span>sem análise'; stEl.title = `Nenhum servidor de linguagem para ${lang}. Clique para instalar.`; return; }
   const c = LS.clients.get(tool.id + '|' + keyOf(t.project));
   const busy = [...LS.progress.keys()].some(k => k.startsWith(tool.id));
@@ -456,7 +459,7 @@ function lsMenu(e) {
   const t = S.active; if (!t) return; const lang = t.lang; const tool = serverFor(lang);
   // sem servidor: vai direto para o aviso de instalação, em vez de um menu no canto
   const absent = knownFor(lang).filter(x => !x.installed);
-  if (!tool && absent.length) return lsNotify(absent.map(x => ({ tool: x, langs: [lang] })), { title: 'Análise de ' + (LS_MAIN[lang] || lang) + ' não instalada' });
+  if (!tool && absent.length && !BUILTIN[lang]) return lsNotify(absent.map(x => ({ tool: x, langs: [lang] })), { title: 'Análise de ' + (LS_MAIN[lang] || lang) + ' não instalada' });
   const items = [];
   if (tool) {
     items.push({ label: 'Reiniciar ' + tool.name, icon: I.refresh, action: () => restart(tool, t.project) });
@@ -465,7 +468,7 @@ function lsMenu(e) {
     items.push({ label: 'Formatar arquivo', k: 'Shift+Alt+F', icon: I.edit, action: () => editor.trigger('bs', 'editor.action.formatDocument') });
   }
   const missing = knownFor(lang).filter(x => !x.installed);
-  if (missing.length) { if (items.length) items.push('-'); missing.forEach(x => items.push({ label: 'Instalar ' + x.name, icon: I.pkg || I.edit, action: () => install(x) })); }
+  if (missing.length) { if (items.length) items.push('-'); missing.forEach(x => items.push({ label: 'Instalar ' + x.name + (BUILTIN[lang] ? ' (opcional, análise mais completa)' : ''), icon: I.pkg || I.edit, action: () => install(x) })); }
   items.push('-', { label: 'Procurar servidores de novo', icon: I.refresh, action: async () => { await lsTools(true); const n = LS.tools.filter(x => x.installed).length; toast(`${n} ferramentas encontradas`); S.tabs.filter(x => x.mode === 'editor').forEach(openDoc); lsStatus(); } });
   showMenu(e, items, 'Análise de ' + lang);
 }

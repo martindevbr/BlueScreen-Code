@@ -251,7 +251,12 @@ fn core_routes() -> HashMap<String, RouteFn> {
     }));
     add("index", route_fn(|r| async move { ok(&*workspace::file_index(&absolute(&project(&r)?), r.flag("fresh")).await) }));
     add("search", route_fn(|r| async move { ok(workspace::search_text(&absolute(&project(&r)?), r.q_or("q", ""), r.flag("case"), r.flag("regex")).await?) }));
-    add("lint", route_fn(|r| async move { let (p, _, rel) = in_project(&r, "file")?; ok(lint::lint(&p, &rel).await) }));
+    // POST com o texto no corpo: lint ao vivo do editor (o texto ainda não salvo)
+    add("lint", route_fn(|r| async move {
+        let (p, _, rel) = in_project(&r, "file")?;
+        if r.is_post() { return ok(lint::lint_text(&rel, &r.body_text())); }
+        ok(lint::lint(&p, &rel).await)
+    }));
     // lista de plugins; POST { id, enabled } liga/desliga (persistido em ~/.bluescreen/plugins.json) e POST { reload: true } relê a pasta
     add("plugins", route_fn(|r| async move {
         if r.is_post() {

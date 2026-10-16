@@ -1049,7 +1049,7 @@ async function openFile(path, mode, line, preview) {
       tab.saved = tab.model.getValue(); tab.model._tab = tab;
     } catch (e) { toast(e.message); return; }
     tab.preview = !!preview;
-    S.tabs.push(tab); BS.hooks.run('tab:open', tab);
+    S.tabs.push(tab); BS.hooks.run('tab:open', tab); liveLintSoon(tab, 0);
   } else if (!preview) tab.preview = false; // aberta de propósito por outro caminho: fica
   if (tab.mode === 'diff' && tab.changeMode === 'last') markSeen(path, tab.rev);
   activate(tab); seRemember(path);
@@ -1127,6 +1127,7 @@ function markDirty(model) {
   const d = model.getValue() !== t.saved;
   if (d !== t.dirty) { t.dirty = d; renderTabs(); syncUnsaved(); }
   if (d) autoSaveSoon();
+  liveLintSoon(t);
 }
 // abas com o que salvar (as de arquivo grande editam pelo núcleo, sem modelo do Monaco)
 const savable = (t) => t.dirty && !t.owner && (t.editable || t.mode === 'view');
@@ -1262,6 +1263,30 @@ async function runLint(tab = S.active, quiet) {
     if (r.problems.length) { if (quiet !== 'auto') $('#problems').hidden = false; } else if (!quiet) toast(r.tool ? 'Lint ok' : r.note);
     return r;
   } catch (e) { toast('Lint falhou: ' + e.message); $('#stLint').textContent = ''; }
+}
+// lint ao vivo: as regras de texto do núcleo (HTML, JSP, XML, JSON, TOML, YAML, Dockerfile, Makefile, LaTeX, shaders,
+// centenas de formatos: lint_formats.rs) sobre o texto do editor, ao abrir e enquanto digita, sem esperar o salvar.
+// O núcleo responde live: false para o que precisa do arquivo em disco ou de ferramenta (Java, Python...): esses tipos
+// ficam anotados e seguem só no salvar.
+const NO_LIVE = new Set();
+const liveKey = (p) => { const n = p.split('/').pop().toLowerCase(); return n.includes('.') ? n.slice(n.lastIndexOf('.')) : n; };
+function liveLintSoon(tab, ms = 600) {
+  if (!tab || tab.mode !== 'editor' || !tab.model || NO_LIVE.has(liveKey(tab.path))) return;
+  clearTimeout(tab.liveT); tab.liveT = setTimeout(() => liveLint(tab), ms);
+}
+async function liveLint(tab) {
+  if (tab.model.isDisposed()) return;
+  const body = tab.model.getValue(); if (body.length > 2e6) return;
+  const u = new URL('/api/lint', location.origin); u.searchParams.set('project', tab.project); u.searchParams.set('file', tab.path);
+  let r; try { r = await (await fetch(u, { method: 'POST', body })).json(); } catch { return; }
+  if (r && r.live === false) { NO_LIVE.add(liveKey(tab.path)); return; }
+  // resposta velha (você continuou digitando) ou aba fechada: descarta
+  if (!r || r.error || !r.problems || tab.model.isDisposed() || tab.model.getValue() !== body) return;
+  tab.problems = r.problems; tab.lintTool = r.tool || r.note;
+  if (tab !== S.active) return; // ao ativar a aba, lintMarkers aplica o que ficou guardado
+  lintMarkers(tab);
+  $('#stLint').textContent = r.tool ? `${r.tool}: ${r.problems.length ? r.problems.length + ' problema(s)' : 'ok'}` : r.note || '';
+  $('#stLint').className = 's ' + (r.tool && !r.problems.length ? 'ok' : '');
 }
 function lintMarkers(tab) {
   const p = tab.problems || [];
