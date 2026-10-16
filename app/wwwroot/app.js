@@ -577,8 +577,13 @@ async function refreshProject() {
 // Os painéis (do núcleo e dos plugins) ficam em BS.tools; a barra da esquerda é desenhada a partir deles.
 function renderStrip() {
   const el = $('#strip'); const tools = BS.tools.list();
-  const btn = (t) => `<button class="icon-btn" data-tool="${esc(t.id)}" title="${esc(t.title)}${t.key ? ' (' + t.key + ')' : ''}">${t.icon}<span class="badge" id="badge-${esc(t.id)}" hidden></span></button>`;
-  el.innerHTML = tools.filter(t => !t.bottom).map(btn).join('') + '<div class="grow"></div>' + tools.filter(t => t.bottom).map(btn).join('') + `<button class="icon-btn" id="btnRefresh" title="Atualizar (F5)">${I.refresh}</button>`;
+  // Ao passar o mouse a barra se expande e mostra o nome de cada painel; --i escalona a entrada dos rótulos.
+  let i = 0;
+  const item = (attrs, icon, label, key, extra = '') => `<button class="icon-btn" ${attrs} aria-label="${esc(label)}" style="--i:${i++}">${icon}<span class="lbl">${esc(label)}</span>${key ? `<kbd class="k">${esc(key)}</kbd>` : ''}${extra}</button>`;
+  const btn = (t) => item(`data-tool="${esc(t.id)}"`, t.icon, t.title, t.key, `<span class="badge" id="badge-${esc(t.id)}" hidden></span>`);
+  const top = tools.filter(t => !t.bottom).map(btn).join('');
+  const bottom = tools.filter(t => t.bottom).map(btn).join('') + item('id="btnRefresh"', I.refresh, 'Atualizar', 'F5');
+  el.innerHTML = top + '<div class="grow"></div>' + bottom;
   el.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   $('#btnRefresh').onclick = refreshAll;
   btnState();
