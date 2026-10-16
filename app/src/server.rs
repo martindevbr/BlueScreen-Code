@@ -17,7 +17,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub enum UiEvent { Activate }
 pub static UI: OnceLock<Box<dyn Fn(UiEvent) + Send + Sync>> = OnceLock::new();
 
-pub struct Lan { pub pin: Option<String>, pub port: u16, stop: Option<tokio::sync::oneshot::Sender<()>> }
+/// project: nome do projeto aberto na janela deste PC, anunciado na rede (share.rs)
+pub struct Lan { pub pin: Option<String>, pub port: u16, pub project: Option<String>, stop: Option<tokio::sync::oneshot::Sender<()>> }
 #[allow(dead_code)]
 pub struct App {
     pub root: PathBuf,
@@ -31,7 +32,7 @@ static APP: OnceLock<Shared> = OnceLock::new();
 pub fn app() -> &'static Shared { APP.get().expect("app") }
 
 pub fn create(root: PathBuf, port: u16, lan_port: u16) -> Shared {
-    let a = Arc::new(App { root, port, lan: Mutex::new(Lan { pin: None, port: lan_port, stop: None }), sessions: Mutex::new(HashSet::new()), host: OnceLock::new() });
+    let a = Arc::new(App { root, port, lan: Mutex::new(Lan { pin: None, port: lan_port, project: None, stop: None }), sessions: Mutex::new(HashSet::new()), host: OnceLock::new() });
     let _ = APP.set(a.clone());
     // token dos plugins: quem chama o núcleo com ele é um plugin ou o próprio núcleo (pode usar rotas internas)
     let token: String = (0..40).map(|_| format!("{:x}", rand::random_range(0..16u8))).collect();
@@ -72,6 +73,7 @@ pub async fn lan_enable() -> ApiResult<Value> {
     tokio::spawn(async move {
         let _ = axum::serve(listener, router).with_graceful_shutdown(async { let _ = rx.await; }).await;
     });
+    crate::share::announce_start();
     Ok(lan_status())
 }
 pub async fn lan_disable() -> Value {
@@ -124,9 +126,19 @@ fn core_routes() -> HashMap<String, RouteFn> {
         r.local_only()?;
         if r.is_post() {
             let b: Value = r.body_json()?;
+            // { project: "nome" | null }: o que o anúncio na rede mostra como aberto
+            if let Some(p) = b.get("project") { app().lan.lock().project = p.as_str().map(String::from); return ok(lan_status()); }
             return ok(if b["enable"].as_bool().unwrap_or(false) { lan_enable().await? } else { lan_disable().await });
         }
         ok(lan_status())
+    }));
+    // espaços de trabalho de outros PCs que anunciaram na rede (share.rs)
+    add("network/discover", route_fn(|r| async move { r.local_only()?; ok(blocking(crate::share::discovered).await?) }));
+    // GET ?addr=: o endereço é de um BlueScreen alcançável? (a janela só navega para lá se for)
+    add("network/probe", route_fn(|r| async move {
+        r.local_only()?;
+        let Some(url) = crate::share::normalize(r.q_or("addr", "")) else { return Err(fail("Endereço inválido. Use o IP do outro PC, ex.: 192.168.0.10", 400)) };
+        ok(crate::share::probe(&url).await.map_err(|e| fail(e, 502))?)
     }));
     add("projects", route_fn(|r| async move {
         let root = absolute(&r.q("root").map(PathBuf::from).unwrap_or_else(|| app().root.clone()));
@@ -254,7 +266,7 @@ fn core_routes() -> HashMap<String, RouteFn> {
     // POST com o texto no corpo: lint ao vivo do editor (o texto ainda não salvo)
     add("lint", route_fn(|r| async move {
         let (p, _, rel) = in_project(&r, "file")?;
-        if r.is_post() { return ok(lint::lint_text(&rel, &r.body_text())); }
+        if r.is_post() { return ok(lint::lint_live(&p, &rel, &r.body_text()).await); }
         ok(lint::lint(&p, &rel).await)
     }));
     // lista de plugins; POST { id, enabled } liga/desliga (persistido em ~/.bluescreen/plugins.json) e POST { reload: true } relê a pasta
@@ -473,6 +485,7 @@ async fn handle(req: Request<Body>, remote: bool) -> Response {
     }
     if !path.starts_with("/api/") { return serve_static(&path).await; }
     if path == "/api/rpc/ws" { let q = parse_query(req.uri().query()); return crate::rpc::ws(req, remote, q).await; }
+    if path == "/api/mirror/ws" { return crate::share::mirror_ws(req, remote).await; }
     if path == "/api/terminal/ws" { let q = parse_query(req.uri().query()); return crate::terminal::ws(req, remote, q).await; }
     let name = path[5..].to_string();
     let reg = host().get();

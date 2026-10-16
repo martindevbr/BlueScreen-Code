@@ -75,7 +75,9 @@ function xsApply(model, text) {
   if (q > 0 && cur[cur.length - q] === '\n' && cur[cur.length - q - 1] === '\r' && cur.length - q - 1 >= p) q--;
   const before = cur.split('\n');
   model.pushStackElement();
-  model.pushEditOperations([], [{ range: monaco.Range.fromPositions(model.getPositionAt(p), model.getPositionAt(cur.length - q)), text: text.slice(p, text.length - q) }], () => null);
+  XS.applying = true; // o espelho (share.js) não repassa: cada janela lê o disco sozinha
+  try { model.pushEditOperations([], [{ range: monaco.Range.fromPositions(model.getPositionAt(p), model.getPositionAt(cur.length - q)), text: text.slice(p, text.length - q) }], () => null); }
+  finally { XS.applying = false; }
   model.pushStackElement();
   // linhas que vieram de fora, para piscar
   const after = text.split('\n'); let delta = 0; const lines = [];

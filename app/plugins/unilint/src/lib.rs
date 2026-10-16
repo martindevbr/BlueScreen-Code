@@ -8,6 +8,7 @@
 //! - `lint_files`: arquivos em paralelo (rayon), um parser reaproveitado por thread.
 pub mod diag;
 mod engine;
+pub mod jsp;
 pub mod lang;
 pub mod rules;
 mod spec;

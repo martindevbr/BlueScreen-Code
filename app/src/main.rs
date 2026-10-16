@@ -14,6 +14,7 @@ mod plugins;
 mod rpc;
 mod sdk;
 mod server;
+mod share;
 mod terminal;
 mod update;
 mod watch;

@@ -137,11 +137,22 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 
 <div class="pop" id="netPop" hidden>
   <h3>Rede local</h3>
+  <div id="netRemote" class="net-remote" hidden><span>Conectado a <b id="netRemoteHost"></b></span><button class="chip" id="netLeave">Desconectar</button></div>
   <label class="toggle" id="netToggle"><span class="sw"></span><span>Permitir acesso pela rede</span></label>
   <div id="netInfo" hidden>
-    <p>Abra no celular ou em outro PC da mesma rede:</p>
+    <p>Abra no celular ou conecte de outro PC da mesma rede:</p>
     <div id="netUrls"></div>
     <p>PIN de acesso</p><div class="pin" id="netPin"></div>
+  </div>
+  <div class="pop-sec" id="netJoin" hidden>
+    <h4>Conectar a um espaço de trabalho</h4>
+    <div id="netFound"><p class="net-empty">Procurando na rede…</p></div>
+    <form class="net-addr" id="netAddrForm"><input id="netAddr" placeholder="IP do outro PC, ex.: 192.168.0.10" spellcheck="false" autocomplete="off"><button class="chip" id="netGo">Conectar</button></form>
+    <p class="net-err" id="netErr"></p>
+  </div>
+  <div class="pop-sec">
+    <label class="toggle" id="mirrorToggle"><span class="sw"></span><span>Espelhar ações</span></label>
+    <p id="mirrorInfo">Projeto, abas, edição, cursor e rolagem se repetem em todas as janelas com o espelho ligado.</p>
   </div>
   <div class="actions"><button class="chip" id="netClose">Fechar</button></div>
 </div>
@@ -154,6 +165,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
   <input id="loginPin" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off">
   <div class="err" id="loginErr"></div>
   <button class="chip primary" id="loginBtn" style="width:100%;justify-content:center">Entrar</button>
+  <button class="chip" id="loginBack" style="width:100%;justify-content:center;margin-top:8px" hidden>Voltar ao meu BlueScreen</button>
 </div></div>
 <div id="toasts" aria-live="polite"></div>
 <div class="rz" data-r="n"></div><div class="rz" data-r="s"></div><div class="rz" data-r="e"></div><div class="rz" data-r="w"></div>
@@ -171,6 +183,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="dock.js"></script>
 <script src="preview.js"></script>
 <script src="sync.js"></script>
+<script src="share.js"></script>
 <script src="viewer.js"></script>
 <script src="bigview.js"></script>
 <script src="sdk.js"></script>

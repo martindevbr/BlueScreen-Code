@@ -27,9 +27,21 @@ fn problem(d: &unilint::Diagnostic) -> Value {
     json!({ "line": d.line, "col": d.col, "end_line": d.end_line, "end_col": d.end_col, "sev": d.severity.as_str(), "msg": d.message, "rule": d.rule, "fixes": d.fixes })
 }
 
-fn lint_one(project: &Path, rel: &str) -> ApiResult<Value> {
+/// JSP: o Java dos scriptlets (unilint::jsp). `text`: o texto do editor (lint ao vivo); sem ele, o do disco.
+fn lint_jsp(abs: &Path, text: Option<String>) -> ApiResult<Value> {
+    let src = match text { Some(t) => t, None => String::from_utf8_lossy(&std::fs::read(abs)?).into_owned() };
+    let t = Instant::now();
+    let name = abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let d = unilint::jsp::lint(&src, &name);
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    Ok(json!({ "handled": true, "tool": format!("Linter Universal (java em jsp, {ms:.1} ms)"), "problems": d.iter().map(problem).collect::<Vec<_>>() }))
+}
+const JSP: &[&str] = &["jsp", "jspf", "tag"];
+
+fn lint_one(project: &Path, rel: &str, text: Option<String>) -> ApiResult<Value> {
     let abs = absolute(&project.join(rel));
     if !within(project, &abs) { return Err(fail("fora do projeto", 400)); }
+    if abs.extension().is_some_and(|e| JSP.contains(&e.to_string_lossy().to_lowercase().as_str())) { return lint_jsp(&abs, text); }
     let Some(lang) = unilint::Lang::from_path(&abs) else { return Ok(json!({ "handled": false })) };
     // projeto com ESLint configurado: as regras do time valem mais que as nossas
     if matches!(lang, unilint::Lang::JavaScript | unilint::Lang::TypeScript | unilint::Lang::Tsx) && ESLINT_CFG.iter().any(|c| project.join(c).exists()) {
@@ -71,7 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let body: Value = r.body_json().unwrap_or_default();
         let project = PathBuf::from(arg(&r, &body, "project").ok_or_else(|| fail("project obrigatório", 400))?);
         let file = arg(&r, &body, "file").ok_or_else(|| fail("file obrigatório", 400))?;
-        let v = tokio::task::spawn_blocking(move || lint_one(&project, &file)).await.map_err(|e| fail(e.to_string(), 500))??;
+        let text = body["text"].as_str().map(String::from);
+        let v = tokio::task::spawn_blocking(move || lint_one(&project, &file, text)).await.map_err(|e| fail(e.to_string(), 500))??;
         ok(v)
     });
     p.route("unilint/project", |r: Arc<Req>| async move {

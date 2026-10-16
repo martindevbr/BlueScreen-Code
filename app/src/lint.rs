@@ -371,9 +371,11 @@ async fn js(dir: &Path, file: &Path, ext: &str) -> LintResult {
 // ---------- plugins (gancho "lint") ----------
 /// Plugin inscrito no gancho `lint` (o Linter Universal) responde primeiro. Se ele recusar (`handled: false`,
 /// linguagem que ele não conhece), falhar ou estiver desligado, o lint segue o caminho de sempre.
-async fn plugin_lint(project: &Path, rel: &str) -> Option<LintResult> {
+/// `text`: o texto do editor (lint ao vivo); o plugin que não conhece o campo lê o disco
+async fn plugin_lint(project: &Path, rel: &str, text: Option<&str>) -> Option<LintResult> {
     for (id, route) in crate::server::host().hooks("lint") {
-        let body = serde_json::json!({ "project": project.to_string_lossy(), "file": rel });
+        let mut body = serde_json::json!({ "project": project.to_string_lossy(), "file": rel });
+        if let Some(t) = text { body["text"] = serde_json::json!(t); }
         match bluescreen_sdk::plugin::core().post(&route, &[], &body).await {
             Ok(v) if v["handled"] == true => {
                 let n = |x: &serde_json::Value, k: &str| x[k].as_u64().unwrap_or(0) as usize;
@@ -407,8 +409,10 @@ pub async fn lint(project: &Path, rel_file: &str) -> LintResult {
     let bytes = match tokio::fs::read(&abs).await { Ok(b) => b, Err(e) => return LintResult { note: Some(e.to_string()), ..Default::default() } };
     let Some(txt) = formats::decode(&bytes) else { return LintResult { note: Some("Binário, sem lint".into()), ..Default::default() } };
     let (ext, base) = names(rel_file, Some(&txt));
-    if let Some(mut out) = plugin_lint(project, rel_file).await {
+    if let Some(mut out) = plugin_lint(project, rel_file, None).await {
         let mut all = generic(&txt);
+        // JSP: o plugin vê o Java dos scriptlets; as regras de HTML/JSP do núcleo continuam valendo
+        if is_jsp(&ext) { if let Some(mut r) = text_rules(&ext, &base, &txt) { all.append(&mut r.problems); out.tool = Some(format!("html/jsp + {}", out.tool.unwrap_or_default())); } }
         all.append(&mut out.problems);
         out.problems = all;
         return out;
@@ -469,6 +473,19 @@ fn text_rules(ext: &str, base: &str, txt: &str) -> Option<LintResult> {
 }
 /// lint ao vivo do editor: o texto ainda não salvo, só com as regras de texto (o resto espera o salvar).
 /// live: false avisa a página que este tipo não tem lint ao vivo (ela para de mandar o texto)
+fn is_jsp(ext: &str) -> bool { matches!(ext, "jsp" | "jspf" | "tag") }
+/// lint ao vivo (texto do editor): as regras de texto e, no JSP, também o Java dos scriptlets pelo plugin
+pub async fn lint_live(project: &Path, rel_file: &str, txt: &str) -> LintResult {
+    let mut out = lint_text(rel_file, txt);
+    if is_jsp(&names(rel_file, None).0) {
+        if let Some(mut p) = plugin_lint(project, rel_file, Some(txt)).await {
+            out.problems.append(&mut p.problems);
+            out.problems.sort_by_key(|x| (x.line, x.col));
+            out.tool = Some(format!("{} + {}", out.tool.unwrap_or_default(), p.tool.unwrap_or_default()));
+        }
+    }
+    out
+}
 pub fn lint_text(rel_file: &str, txt: &str) -> LintResult {
     let (ext, base) = names(rel_file, Some(txt));
     let Some(mut out) = text_rules(&ext, &base, txt) else { return LintResult { note: Some("Sem lint ao vivo para este tipo".into()), live: Some(false), ..Default::default() } };

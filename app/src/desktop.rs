@@ -11,7 +11,8 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::{Fullscreen, Icon, Window, WindowBuilder};
 use wry::{NewWindowResponse, WebContext, WebViewBuilder};
 
-enum Ev { Activate, Ipc(String), Title(String), Show }
+/// Ipc(mensagem, endereço da página que mandou)
+enum Ev { Activate, Ipc(String, String), Title(String), Show }
 
 fn state_file() -> PathBuf { user_dir().join("window.json") }
 
@@ -89,6 +90,10 @@ pub fn run(url: String, devtools: bool) -> ! {
     let mut ctx = WebContext::new(Some(data));
     let origin = url.trim_end_matches('/').to_string();
     let (o1, o2) = (origin.clone(), origin.clone());
+    // espaço de trabalho de outro PC aberto nesta janela (Conectar, share.rs): as páginas dele também ficam aqui
+    let remote: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+    let (r1, r2) = (remote.clone(), remote.clone());
+    let inside = |u: &str, o: &str, r: &std::sync::Mutex<Option<String>>| u.starts_with(o) || r.lock().unwrap().as_deref().is_some_and(|r| u == r || u.starts_with(&format!("{r}/")));
     let (pi, pt) = (proxy.clone(), proxy.clone());
     let builder = WebViewBuilder::new_with_web_context(&mut ctx)
         .with_url(&url)
@@ -96,11 +101,11 @@ pub fn run(url: String, devtools: bool) -> ! {
         .with_hotkeys_zoom(false) // Ctrl+roda é o zoom da fonte do código; o tamanho da interface fica em Aparência
         .with_background_color(if dark { (15, 26, 46, 255) } else { (217, 227, 245, 255) })
         .with_initialization_script(format!("window.BS_DESKTOP = true; window.BS_MAX = {}; window.BS_WELCOME = {};", window.is_maximized(), welcome))
-        .with_ipc_handler(move |req| { let _ = pi.send_event(Ev::Ipc(req.body().clone())); })
+        .with_ipc_handler(move |req| { let _ = pi.send_event(Ev::Ipc(req.body().clone(), req.uri().to_string())); })
         .with_document_title_changed_handler(move |t| { let _ = pt.send_event(Ev::Title(t)); })
         // links para fora abrem no navegador; janelas do próprio app (páginas servidas pelo BlueScreen) abrem aqui
-        .with_new_window_req_handler(move |u, _| { if u.starts_with(&o1) { NewWindowResponse::Allow } else { open_url(&u); NewWindowResponse::Deny } })
-        .with_navigation_handler(move |u| { if u.starts_with(&o2) || u.starts_with("about:") || u.starts_with("data:") { true } else { open_url(&u); false } });
+        .with_new_window_req_handler(move |u, _| { if inside(&u, &o1, &r1) { NewWindowResponse::Allow } else { open_url(&u); NewWindowResponse::Deny } })
+        .with_navigation_handler(move |u| { if inside(&u, &o2, &r2) || u.starts_with("about:") || u.starts_with("data:") { true } else { open_url(&u); false } });
     #[cfg(windows)]
     let builder = {
         use wry::WebViewBuilderExtWindows;
@@ -138,9 +143,21 @@ pub fn run(url: String, devtools: bool) -> ! {
             }
             Event::UserEvent(Ev::Show) => if !window.is_visible() { window.set_visible(true); window.set_focus(); },
             Event::UserEvent(Ev::Title(t)) => window.set_title(&t),
-            Event::UserEvent(Ev::Ipc(msg)) => {
+            Event::UserEvent(Ev::Ipc(msg, from)) => {
                 let m: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
                 match m["type"].as_str() {
+                    // só a página local escolhe para onde conectar (o endereço já foi conferido por /api/network/probe)
+                    Some("connect") if from.starts_with(&origin) => if let Some(u) = m["url"].as_str().filter(|u| u.starts_with("http://")) {
+                        let u = u.trim_end_matches('/').to_string();
+                        log(format!("Conectando ao espaço de trabalho {u}"));
+                        *remote.lock().unwrap() = Some(u.clone());
+                        let _ = webview.load_url(&format!("{u}/"));
+                    },
+                    Some("disconnect") => {
+                        log("Voltando ao espaço de trabalho deste PC.");
+                        let _ = webview.load_url(&url);
+                        *remote.lock().unwrap() = None;
+                    }
                     Some("shown") => if !window.is_visible() { window.set_visible(true); window.set_focus(); },
                     Some("theme") => {
                         dark = m["dark"].as_bool().unwrap_or(true);

@@ -352,6 +352,22 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 .pop .url span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pop .pin { font: 600 24px var(--mono); letter-spacing: .3em; color: var(--accent-2); text-align: center; margin: 8px 0; }
 .pop .actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+.pop .pop-sec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+.pop .pop-sec[hidden], .pop .net-remote[hidden] { display: none; }
+.pop h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--fg-2); }
+.pop .net-remote { display: flex; align-items: center; gap: 8px; justify-content: space-between; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; margin-bottom: 10px; font-size: 12px; }
+.pop .net-ws { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin: 4px 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); font-size: 12px; }
+.pop .net-ws div { flex: 1; min-width: 0; }
+.pop .net-ws b, .pop .net-ws small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop .net-ws small { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.pop .net-empty { color: var(--muted); }
+.pop .net-addr { display: flex; gap: 6px; margin-top: 8px; }
+.pop .net-addr input { flex: 1; min-width: 0; font-size: 12px; padding: 5px 8px; }
+.pop .net-err { color: var(--del); min-height: 0; }
+.pop .net-err:empty { display: none; }
+.s.mirror-on { color: var(--accent-2); }
+#netLost { position: fixed; left: 50%; top: 46px; transform: translateX(-50%); z-index: 120; display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--del); border-radius: var(--r); box-shadow: var(--shadow); padding: 8px 12px; font-size: 12.5px; }
+#netLost[hidden] { display: none; }
 .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .toggle .sw { width: 30px; height: 17px; border-radius: 9px; background: var(--line-2); position: relative; transition: background .15s; flex: none; }
 .toggle .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: left .15s; }

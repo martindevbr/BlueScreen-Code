@@ -66,7 +66,9 @@ async function modelOf(tab, rel) {
 }
 function register() {
   const L = monaco.languages;
-  L.registerDefinitionProvider('html', { provideDefinition: async (model, pos) => {
+  // JSP tem gramática própria (app.js); tags, atributos e o resto do HTML vêm do mesmo serviço de linguagem do HTML
+  try { L.html.registerHTMLLanguageService('jsp', { format: L.html.htmlDefaults.options.format, suggest: { html5: true } }, { completionItems: true, hovers: true, documentHighlights: true, links: true, documentSymbols: true, foldingRanges: true, selectionRanges: true, linkedEditing: true }); } catch (e) { console.warn('jsp: serviço de HTML', e); }
+  L.registerDefinitionProvider(['html', 'jsp'], { provideDefinition: async (model, pos) => {
     const a = attrAt(model, pos); const tab = tabOf(model); if (!a || !tab) return null;
     if (a.value.startsWith('#') && a.value.length > 1) {
       const id = a.value.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -77,7 +79,7 @@ function register() {
     const m = await modelOf(tab, target); return m ? { uri: m.uri, range: new monaco.Range(1, 1, 1, 1) } : null;
   } });
   // caminhos de arquivo: completa a pasta digitada até agora com o que existe no projeto
-  L.registerCompletionItemProvider('html', { triggerCharacters: ['"', "'", '/'], provideCompletionItems: async (model, pos) => {
+  L.registerCompletionItemProvider(['html', 'jsp'], { triggerCharacters: ['"', "'", '/'], provideCompletionItems: async (model, pos) => {
     const a = attrAt(model, pos); const tab = tabOf(model);
     if (!a || !tab || (a.before && DYNAMIC.test(a.before))) return { suggestions: [] };
     const set = await fileSet(); const typed = a.before; const dirTyped = typed.slice(0, typed.lastIndexOf('/') + 1);
@@ -112,7 +114,7 @@ function register() {
     ['c:import', '<c:import url="$1" />$0'], ['c:url', '<c:url value="$1" />$0'], ['c:redirect', '<c:redirect url="$1" />$0'], ['c:catch', '<c:catch var="${1:erro}">\n\t$0\n</c:catch>'],
     ['fmt:message', '<fmt:message key="$1" />$0'], ['fmt:formatDate', '<fmt:formatDate value="\\${$1}" pattern="${2:dd/MM/yyyy}" />$0'], ['fmt:formatNumber', '<fmt:formatNumber value="\\${$1}" type="${2:number}" />$0'], ['fmt:setBundle', '<fmt:setBundle basename="$1" />$0'],
   ];
-  L.registerCompletionItemProvider('html', { triggerCharacters: ['<', '%', ':'], provideCompletionItems: (model, pos) => {
+  L.registerCompletionItemProvider(['html', 'jsp'], { triggerCharacters: ['<', '%', ':'], provideCompletionItems: (model, pos) => {
     const tab = tabOf(model); if (!tab || !isJsp(tab.path)) return { suggestions: [] };
     const line = model.getLineContent(pos.lineNumber).slice(0, pos.column - 1);
     const m = line.match(/<[%@!=\w:-]*$/); if (!m) return { suggestions: [] };

@@ -102,9 +102,38 @@ require(['vs/editor/editor.main'], () => {
     ...semRules({ fn: '#00627A', type: '#000000', field: '#871094', konst: '#871094', macro: '#9E880D', lifetime: '#20999D', kw: '#0033B3' }),
   ], colors: { 'editor.background': '#FFFFFF', 'editor.lineHighlightBackground': '#F5F8FE', 'editor.selectionBackground': '#A6D2FF', 'editorLineNumber.foreground': '#AEB3C2', 'editorGutter.background': '#FFFFFF', 'diffEditor.insertedTextBackground': '#BEE6BE80', 'diffEditor.removedTextBackground': '#FFD5CC80' } });
   try { const ts = monaco.languages.typescript; const co = { allowJs: true, checkJs: false, allowNonTsExtensions: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.NodeJs, experimentalDecorators: true, noEmit: true, jsx: ts.JsxEmit.Preserve }; ts.typescriptDefaults.setCompilerOptions(co); ts.javascriptDefaults.setCompilerOptions(co); ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false }); } catch {}
+  registerJsp();
   applyTheme();
   boot();
 });
+// JSP: a gramática de HTML do próprio Monaco com o Java dos scriptlets (<% %>, <%= %>, <%! %>) colorido como Java,
+// diretivas <%@ %>, comentários <%-- --%> e EL ${ } / #{ }. Completar tags e atributos: html.js.
+function registerJsp() {
+  const L = monaco.languages;
+  L.register({ id: 'jsp', extensions: ['.jsp', '.jspf', '.tag'], aliases: ['JSP'] });
+  const html = new Promise((ok, no) => require(['vs/basic-languages/html/html'], ok, no));
+  html.then(m => L.setLanguageConfiguration('jsp', m.conf)).catch(() => {});
+  L.setMonarchTokensProvider('jsp', html.then(({ language: h }) => {
+    const code = { token: 'tag', next: '@jspCode', nextEmbedded: 'java' };
+    // o texto solto do HTML ([^<]+) engoliria ${ e %>: para antes deles
+    const root = h.tokenizer.root.map(r => String(r[0]) === '/[^<]+/' ? [/[^<$#%]+/] : r);
+    return { ...h, tokenizer: { ...h.tokenizer,
+      root: [
+        [/<%--/, 'comment', '@jspComment'],
+        [/(<%@)(\s*)([\w:-]+)/, ['tag', '', { token: 'keyword', next: '@jspDirective' }]],
+        [/<%[!=]?/, code],
+        [/%>/, 'tag'],
+        [/[$#]\{/, 'keyword', '@el'],
+        ...root, [/[$#%]/, ''],
+      ],
+      otherTag: [[/<%=?/, code], [/[$#]\{/, 'keyword', '@el'], ...h.tokenizer.otherTag],
+      jspComment: [[/--%>/, 'comment', '@pop'], [/[^-]+/, 'comment'], [/./, 'comment']],
+      jspDirective: [[/%>/, 'tag', '@pop'], [/[\w.-]+(?=\s*=)/, 'attribute.name'], [/=/, 'delimiter'], [/"[^"]*"|'[^']*'/, 'attribute.value'], [/\s+/, ''], [/./, '']],
+      jspCode: [[/%>/, { token: '@rematch', next: '@pop', nextEmbedded: '@pop' }]],
+      el: [[/\}/, 'keyword', '@pop'], [/"[^"]*"|'[^']*'/, 'string'], [/\b(?:empty|not|and|or|eq|ne|lt|gt|le|ge|div|mod|instanceof|true|false|null)\b/, 'keyword'], [/\d+(?:\.\d+)?/, 'number'], [/[A-Za-z_]\w*/, 'identifier'], [/[^}]/, 'delimiter']],
+    } };
+  }));
+}
 const editorOpts = () => ({ fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace", fontSize: S.fontSize || 13, fontLigatures: true, lineHeight: Math.round((S.fontSize || 13) * 1.7), minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'all', smoothScrolling: true, cursorBlinking: 'smooth', padding: { top: 8 }, wordWrap: S.wrap ? 'on' : 'off', automaticLayout: true, bracketPairColorization: { enabled: true }, guides: { bracketPairs: true, indentation: true }, scrollbar: { verticalScrollbarSize: 10 }, roundedSelection: false, stickyScroll: { enabled: true }, showFoldingControls: 'mouseover', cursorSmoothCaretAnimation: 'on', lineNumbersMinChars: 4, renderWhitespace: 'trailing', 'semanticHighlighting.enabled': true, inlayHints: { enabled: 'on', fontSize: Math.max(10, (S.fontSize || 13) - 2), padding: true }, theme: themeName() });
 const themeName = () => window.BS_MONACO_THEME || (document.documentElement.dataset.theme === 'light' ? 'bs-light' : 'bs-dark');
 // tema: Monaco + barra de título da janela nativa (cor do fundo azul)
@@ -116,7 +145,7 @@ function applyTheme() {
 // janela do aplicativo (WebView2): mensagens para a parte nativa; no navegador não faz nada
 const desktop = (msg) => { try { if (window.BS_DESKTOP && window.ipc) window.ipc.postMessage(JSON.stringify(msg)); } catch {} };
 
-const LANG = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', json: 'json', html: 'html', htm: 'html', jsp: 'html', vue: 'html', xml: 'xml', xsd: 'xml', wsdl: 'xml', css: 'css', scss: 'scss', less: 'less', md: 'markdown', py: 'python', java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cs: 'csharp', php: 'php', rb: 'ruby', sh: 'shell', bat: 'bat', ps1: 'powershell', yml: 'yaml', yaml: 'yaml', sql: 'sql', properties: 'ini', ini: 'ini', toml: 'ini', dockerfile: 'dockerfile', gradle: 'groovy', groovy: 'groovy', txt: 'plaintext' };
+const LANG = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', json: 'json', html: 'html', htm: 'html', jsp: 'jsp', jspf: 'jsp', tag: 'jsp', vue: 'html', xml: 'xml', xsd: 'xml', wsdl: 'xml', css: 'css', scss: 'scss', less: 'less', md: 'markdown', py: 'python', java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cs: 'csharp', php: 'php', rb: 'ruby', sh: 'shell', bat: 'bat', ps1: 'powershell', yml: 'yaml', yaml: 'yaml', sql: 'sql', properties: 'ini', ini: 'ini', toml: 'ini', dockerfile: 'dockerfile', gradle: 'groovy', groovy: 'groovy', txt: 'plaintext' };
 const langOf = (f) => { const n = f.toLowerCase(); if (n.endsWith('dockerfile')) return 'dockerfile'; return LANG[n.split('.').pop()] || 'plaintext'; };
 
 // ===== Boot =====
@@ -131,7 +160,7 @@ async function boot() {
 async function start() {
   const cfg = await api('config');
   if (!S.root) S.root = cfg.root;
-  S.net = cfg.network; renderNet(); BS.version = cfg.version;
+  S.net = cfg.network; S.hostName = cfg.host; renderNet(); BS.version = cfg.version;
   splash('Carregando plugins…');
   await BS.plugins.load(cfg.plugins); // plugins antes de tudo: eles registram painéis, atalhos e cards
   const reopen = store.get('reopenTool', null);
@@ -591,10 +620,10 @@ function renderStrip() {
 function setTool(t) {
   const def = BS.tools.get(t); if (!def) return;
   if (def.toggle) { if (!BS.dock || !BS.dock.claim(t)) def.toggle(); return; }
-  if (S.tool === t && !$('#app').classList.contains('no-tool')) { $('#app').classList.add('no-tool'); btnState(); return; }
-  $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool();
+  if (S.tool === t && !$('#app').classList.contains('no-tool')) { $('#app').classList.add('no-tool'); btnState(); BS.hooks.run('tool:show', t, false); return; }
+  $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool(); BS.hooks.run('tool:show', t, true);
 }
-function openTool(t) { const def = BS.tools.get(t); if (!def) return; if (def.toggle) { BS.dock && BS.dock.claim(t); def.toggle(true); return; } $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool(); }
+function openTool(t) { const def = BS.tools.get(t); if (!def) return; if (def.toggle) { BS.dock && BS.dock.claim(t); def.toggle(true); return; } $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool(); BS.hooks.run('tool:show', t, true); }
 function btnState() { document.querySelectorAll('#strip [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === S.tool && !$('#app').classList.contains('no-tool'))); }
 function renderTool() {
   const t = BS.tools.get(S.tool) || BS.tools.get('project'); S.tool = t.id;
@@ -1361,8 +1390,8 @@ function present(on) {
 $('#present-exit').onclick = () => present(false);
 
 // ===== Rede =====
-$('#btnNet').onclick = () => { const p = $('#netPop'); p.hidden = !p.hidden; const r = $('#btnNet').getBoundingClientRect(); p.style.top = r.bottom + 6 + 'px'; p.style.right = (innerWidth - r.right) + 'px'; };
-$('#netClose').onclick = () => $('#netPop').hidden = true;
+$('#btnNet').onclick = () => { const p = $('#netPop'); p.hidden = !p.hidden; const r = $('#btnNet').getBoundingClientRect(); p.style.top = r.bottom + 6 + 'px'; p.style.right = (innerWidth - r.right) + 'px'; BS.hooks.run('net:pop', !p.hidden); };
+$('#netClose').onclick = () => { $('#netPop').hidden = true; BS.hooks.run('net:pop', false); };
 $('#netToggle').onclick = async () => { try { S.net = await api('network', {}, { method: 'POST', body: JSON.stringify({ enable: !S.net.enabled }) }); renderNet(); toast(S.net.enabled ? 'Rede ligada' : 'Rede desligada'); } catch (e) { toast(e.message); } };
 function renderNet() {
   const n = S.net || { enabled: false, urls: [] };
