@@ -524,7 +524,7 @@ function lsNotify(items, o = {}) {
   el.innerHTML = `<div class="nt-hd"><span class="nt-ic">!</span><b>${esc(o.title || 'Análise de código não instalada')}</b><button class="icon-btn nt-x" title="Fechar">×</button></div>`
     + (o.start ? '' : `<p class="nt-tx">Instale para ter erros, autocompletar e navegação em <b>${esc(list)}</b>.</p>`)
     + items.map((x, i) => `<div class="nt-row" data-i="${i}"><div class="nt-nm"><b>${esc(x.tool.name)}</b><small>${esc(x.tool.auto ? 'instala com ' + x.tool.auto : x.tool.needs || x.tool.install)}</small></div>`
-      + `${x.tool.auto ? '<button class="chip primary" data-a="go">Instalar</button>' : `<button class="chip" data-a="copy" title="${esc(x.tool.install)}">Copiar comando</button>`}`
+      + `${x.tool.auto ? '<button class="chip primary" data-a="go">Instalar</button>' : `<button class="chip" data-a="copy" title="${esc(x.tool.install)}">Copiar comando</button><button class="chip" data-a="recheck" title="Procura de novo (o PATH atual do Windows, sem reiniciar a IDE)">Já instalei</button>`}`
       + `<div class="nt-prog" hidden><div class="nt-bar"><i></i></div><span class="nt-step"></span><a data-a="log">log</a></div><pre class="nt-log" hidden></pre></div>`).join('')
     + (o.start ? '' : `<div class="nt-ft">${items.filter(x => x.tool.auto).length > 1 ? '<button class="chip primary" data-a="all">Instalar todos</button>' : ''}<span class="spacer"></span><button class="chip" data-a="later">Agora não</button>${o.proj ? '<button class="chip" data-a="never">Não perguntar neste projeto</button>' : ''}</div>`);
   host.appendChild(el);
@@ -543,6 +543,15 @@ function lsNotify(items, o = {}) {
   rows.forEach((r, i) => {
     r.querySelector('[data-a="go"]')?.addEventListener('click', () => run(i));
     r.querySelector('[data-a="copy"]')?.addEventListener('click', () => { copyText(items[i].tool.install); toast('Comando copiado'); });
+    r.querySelector('[data-a="recheck"]')?.addEventListener('click', async () => {
+      await lsTools(true);
+      const t = LS.tools.find(t => t.id === items[i].tool.id);
+      if (t && t.installed) { r.dataset.st = 'done'; S.tabs.filter(x => x.mode === 'editor').forEach(openDoc); lsStatus(); toast(`${t.name} encontrado: análise ligada`, 'ok'); if (items.every((x, k) => rows[k].dataset.st === 'done')) close(); return; }
+      // ainda não: mostra o motivo (ex.: falta o Java 21) e, se agora der, o botão de instalar
+      if (t) items[i].tool = t;
+      r.querySelector('.nt-nm small').textContent = t ? (t.needs || 'ainda não encontrado no PATH') : 'ainda não encontrado';
+      toast('Ainda não encontrei ' + items[i].tool.name);
+    });
     r.querySelector('[data-a="log"]').onclick = () => { const l = r.querySelector('.nt-log'); l.hidden = !l.hidden; };
   });
   el.querySelector('[data-a="all"]')?.addEventListener('click', () => rows.forEach((r, i) => { if (items[i].tool.auto && !r.dataset.st) run(i); }));

@@ -24,6 +24,8 @@ pub enum Recipe {
     Cmd(&'static str, &'static [&'static str], &'static str),
     /// repositório no GitHub e o padrão (regex) do nome do pacote para Windows x64
     Github(&'static str, &'static str),
+    /// pacote num endereço fixo (zip ou tar.gz)
+    Url(&'static str),
 }
 
 pub fn recipes(id: &str) -> &'static [Recipe] {
@@ -46,19 +48,21 @@ pub fn recipes(id: &str) -> &'static [Recipe] {
         "yaml" => &[Cmd("npm", &["install", "-g", "yaml-language-server"], "Node.js (npm)")],
         "bash" => &[Cmd("npm", &["install", "-g", "bash-language-server"], "Node.js (npm)")],
         "zls" => &[Github("zigtools/zls", r"x86_64-windows\.zip$")],
+        "jdtls" => &[Url("https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz")],
         _ => &[],
     }
 }
 
 /// a receita que dá para usar neste PC (o gerenciador existe, ou é download direto)
 pub fn pick(id: &str) -> Option<Recipe> {
-    recipes(id).iter().copied().find(|r| match r { Recipe::Cmd(p, ..) => which(p).is_some(), Recipe::Github(..) => true })
+    recipes(id).iter().copied().find(|r| match r { Recipe::Cmd(p, ..) => which(p).is_some(), Recipe::Github(..) | Recipe::Url(_) => true })
 }
 /// como a IDE vai instalar (para mostrar antes de clicar), ou o que falta para poder instalar
 pub fn describe(id: &str) -> (Option<String>, Option<String>) {
     match pick(id) {
         Some(Recipe::Cmd(p, a, _)) => (Some(format!("{p} {}", a.join(" "))), None),
         Some(Recipe::Github(repo, _)) => (Some(format!("download do GitHub ({repo})")), None),
+        Some(Recipe::Url(url)) => (Some(format!("download de {}", url.split('/').nth(2).unwrap_or(url))), None),
         None => (None, recipes(id).iter().find_map(|r| if let Recipe::Cmd(_, _, need) = r { Some(format!("precisa de {need} instalado")) } else { None })),
     }
 }
@@ -114,7 +118,7 @@ pub fn start(id: &str) -> Result<Value, String> {
     }
     let id2 = id.to_string();
     tokio::spawn(async move {
-        let r = match recipe { Recipe::Cmd(p, a, _) => run_cmd(&id2, p, a).await, Recipe::Github(repo, pat) => github(&id2, repo, pat).await };
+        let r = match recipe { Recipe::Cmd(p, a, _) => run_cmd(&id2, p, a).await, Recipe::Github(repo, pat) => github(&id2, repo, pat).await, Recipe::Url(url) => from_url(&id2, url).await };
         crate::build::detect::forget_which();
         let tools = tokio::task::spawn_blocking(|| crate::rpc::tools(true)).await.ok();
         let ok = tools.as_ref().is_some_and(|t| t.iter().any(|t| t.id == id2 && t.installed));
@@ -156,11 +160,21 @@ async fn github(id: &str, repo: &str, pat: &str) -> Result<(), String> {
         .ok_or_else(|| format!("a versão {} não tem pacote para Windows", rel["tag_name"].as_str().unwrap_or("?")))?;
     let (name, url, size) = (asset["name"].as_str().unwrap_or("pacote.zip").to_string(), asset["browser_download_url"].as_str().unwrap_or("").to_string(), asset["size"].as_u64().unwrap_or(0));
     line(id, &format!("{} · {name} ({:.1} MB)", rel["tag_name"].as_str().unwrap_or(""), size as f64 / 1048576.0));
+    download(id, &http, &url, &name, size).await
+}
+
+async fn from_url(id: &str, url: &str) -> Result<(), String> {
+    let http = reqwest::Client::builder().user_agent("BlueScreen-IDE").build().map_err(|e| e.to_string())?;
+    download(id, &http, url, url.rsplit('/').next().unwrap_or("pacote"), 0).await
+}
+
+/// baixa o pacote (zip ou tar.gz) e extrai em tools/<id>
+async fn download(id: &str, http: &reqwest::Client, url: &str, name: &str, size: u64) -> Result<(), String> {
     let base = tools_dir();
     tokio::fs::create_dir_all(&base).await.map_err(|e| e.to_string())?;
-    let zip = base.join(format!("{id}.download.zip"));
+    let zip = base.join(format!("{id}.download"));
     // download em blocos, com progresso
-    let resp = http.get(&url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("download: {e}"))?;
+    let resp = http.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("download: {e}"))?;
     let total = resp.content_length().unwrap_or(size).max(1);
     let mut f = tokio::fs::File::create(&zip).await.map_err(|e| e.to_string())?;
     let (mut got, mut stream) = (0u64, resp.bytes_stream());

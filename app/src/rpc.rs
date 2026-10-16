@@ -50,7 +50,9 @@ const fn dap(id: &'static str, name: &'static str, langs: &'static [&'static str
 
 const DEFS: &[Def] = &[
     // ----- análise e refatoração (LSP) -----
-    lsp("jdtls", "Eclipse JDT LS (Java)", &["java"], &["jdtls"], &["-data", "{data}"], "scoop install jdtls  (ou baixe em download.eclipse.org/jdtls e ponha o bin no PATH)"),
+    // o jdtls não é aberto pelo jdtls.bat (que precisa de Python e usa o java do JAVA_HOME, muitas vezes 8 ou 17):
+    // a IDE acha a pasta dele e um Java 21+ e roda o launcher direto (ver jdtls())
+    lsp("jdtls", "Eclipse JDT LS (Java)", &["java"], &["jdtls"], &[], "scoop install jdtls"),
     lsp("tsserver", "TypeScript Language Server", &["typescript", "javascript"], &["typescript-language-server"], &["--stdio"], "npm i -g typescript typescript-language-server"),
     lsp("basedpyright", "basedpyright (Python)", &["python"], &["basedpyright-langserver"], &["--stdio"], "pip install basedpyright"),
     lsp("pyright", "Pyright (Python)", &["python"], &["pyright-langserver"], &["--stdio"], "npm i -g pyright"),
@@ -103,8 +105,82 @@ fn extra_check(id: &str, prog: &Path) -> bool {
     }
 }
 
+/// pasta do jdtls (a que tem plugins/org.eclipse.equinox.launcher_*.jar): baixada pela IDE, do scoop ou o bin no PATH
+fn jdtls_home() -> Option<PathBuf> {
+    let ok = |d: &Path| launcher_jar(d).is_some();
+    let scoop = std::env::var_os("SCOOP").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join("scoop")));
+    let mut cands = vec![tools_dir().join("jdtls")];
+    cands.extend(scoop.map(|s| s.join("apps").join("jdtls").join("current")));
+    cands.push(PathBuf::from("C:\\ProgramData\\scoop\\apps\\jdtls\\current"));
+    // jdtls.bat no PATH: <pasta>\bin\jdtls.bat
+    cands.extend(which("jdtls").and_then(|p| p.parent()?.parent().map(Path::to_path_buf)));
+    cands.into_iter().find(|d| ok(d))
+}
+fn launcher_jar(home: &Path) -> Option<PathBuf> {
+    let plugins = home.join("plugins");
+    if plugins.join("org.eclipse.equinox.launcher.jar").is_file() { return Some(plugins.join("org.eclipse.equinox.launcher.jar")); }
+    std::fs::read_dir(&plugins).ok()?.flatten().map(|e| e.path())
+        .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("org.eclipse.equinox.launcher_") && n.ends_with(".jar")))
+}
+/// versão principal de um java (java -version escreve no stderr: openjdk version "21.0.2" / "1.8.0_402")
+fn java_major(java: &Path) -> u32 {
+    let mut c = std::process::Command::new(java);
+    c.arg("-version").stdout(Stdio::null()).stderr(Stdio::piped());
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+    let Ok(o) = c.output() else { return 0 };
+    let s = String::from_utf8_lossy(&o.stderr);
+    let v = s.split('"').nth(1).unwrap_or("");
+    let mut it = v.split(['.', '_', '-', '+']).filter_map(|x| x.parse::<u32>().ok());
+    match it.next() { Some(1) => it.next().unwrap_or(0), Some(n) => n, None => 0 }
+}
+/// Java mínimo do jdtls instalado: o que o org.eclipse.jdt.core declara (JavaSE-25 nas versões de 2026; o jdtls.py
+/// ainda fala em 21 e, com 21, o servidor sai na hora com código 13). O tar do Windows lê o .jar (é um zip).
+fn jdtls_java_min(home: &Path) -> u32 {
+    let jar = std::fs::read_dir(home.join("plugins")).ok().and_then(|rd| rd.flatten().map(|e| e.path())
+        .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("org.eclipse.jdt.core_") && n.ends_with(".jar"))));
+    let Some(jar) = jar else { return 21 };
+    let mut c = std::process::Command::new("tar");
+    c.arg("-xOf").arg(&jar).arg("META-INF/MANIFEST.MF").stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+    let text = c.output().map(|o| String::from_utf8_lossy(&o.stdout).replace(['\r', '\n', ' '], "")).unwrap_or_default();
+    regex::Regex::new(r"JavaSE-(\d+)|osgi\.ee=JavaSE\)\(version=(\d+)").ok()
+        .and_then(|re| re.captures_iter(&text).filter_map(|c| c.get(1).or(c.get(2))?.as_str().parse().ok()).max()).unwrap_or(21)
+}
+/// o Java mais novo que sirva ao jdtls: os JDKs conhecidos (JAVA_HOME, Program Files, ~/.jdks), depois o java do PATH
+fn java_for_jdtls(min: u32) -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "java.exe" } else { "java" };
+    let mut jdks = crate::build::jdks(); jdks.sort_by(|a, b| b.major.cmp(&a.major));
+    jdks.into_iter().filter(|j| j.major >= min).map(|j| Path::new(&j.home).join("bin").join(exe)).find(|p| p.is_file())
+        .or_else(|| which("java").filter(|p| java_major(p) >= min))
+}
+/// (comando, argumentos) do jdtls, ou o que falta (texto vazio = não instalado)
+fn jdtls() -> Result<(PathBuf, Vec<String>), String> {
+    let home = jdtls_home();
+    let min = home.as_deref().map(jdtls_java_min).unwrap_or(25);
+    let Some(java) = java_for_jdtls(min) else {
+        return Err(if home.is_some() { format!("o jdtls está instalado, mas precisa do Java {min} ou mais novo (JDK)") } else { format!("precisa do Java {min} ou mais novo (JDK) instalado") });
+    };
+    let home = home.ok_or_else(String::new)?;
+    let jar = launcher_jar(&home).ok_or_else(String::new)?;
+    let config = home.join(if cfg!(windows) { "config_win" } else if cfg!(target_os = "macos") { "config_mac" } else { "config_linux" });
+    let mut args: Vec<String> = vec![
+        "-Declipse.application=org.eclipse.jdt.ls.core.id1".into(), "-Dosgi.bundles.defaultStartLevel=4".into(), "-Declipse.product=org.eclipse.jdt.ls.core.product".into(),
+        "-Dosgi.checkConfiguration=true".into(), format!("-Dosgi.sharedConfiguration.area={}", config.display()), "-Dosgi.sharedConfiguration.area.readOnly=true".into(), "-Dosgi.configuration.cascaded=true".into(),
+        "-Xms256m".into(), "--add-modules=ALL-SYSTEM".into(), "--add-opens".into(), "java.base/java.util=ALL-UNNAMED".into(), "--add-opens".into(), "java.base/java.lang=ALL-UNNAMED".into(),
+    ];
+    if java_major(&java) >= 24 { args.splice(0..0, ["-Djdk.xml.maxGeneralEntitySizeLimit=0".to_string(), "-Djdk.xml.totalEntitySizeLimit=0".to_string()]); }
+    args.extend(["-jar".into(), jar.to_string_lossy().into_owned(), "-data".into(), "{data}".into()]);
+    Ok((java, args))
+}
+
 pub fn detect() -> Vec<Tool> {
     let mut out: Vec<Tool> = DEFS.iter().map(|d| {
+        if d.id == "jdtls" {
+            let r = jdtls();
+            let (auto, needs) = match &r { Ok(_) => (None, None), Err(e) if !e.is_empty() => (None, Some(e.clone())), Err(_) => crate::install::describe(d.id) };
+            let (command, args) = r.map(|(j, a)| (j.to_string_lossy().into_owned(), a)).unwrap_or_default();
+            return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: !command.is_empty(), command, args, install: d.install.into(), tcp: false, auto, needs };
+        }
         // baixada pela IDE (~/.bluescreen/tools/<id>) primeiro, depois o PATH
         let found = d.progs.iter().find_map(|p| crate::install::local(d.id, p).or_else(|| which(p).filter(|w| extra_check(d.id, w))));
         let (auto, needs) = if found.is_some() { (None, None) } else { crate::install::describe(d.id) };
@@ -136,6 +212,8 @@ pub fn detect() -> Vec<Tool> {
 static TOOLS: parking_lot::Mutex<Option<std::sync::Arc<Vec<Tool>>>> = parking_lot::const_mutex(None);
 pub fn tools(fresh: bool) -> std::sync::Arc<Vec<Tool>> {
     if !fresh { if let Some(t) = TOOLS.lock().clone() { return t; } }
+    // procurar de novo: sem isto o which devolvia o "não achei" guardado e nada instalado depois aparecia
+    else { crate::build::detect::forget_which(); }
     let t = std::sync::Arc::new(detect()); *TOOLS.lock() = Some(t.clone()); t
 }
 

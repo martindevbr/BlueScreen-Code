@@ -67,16 +67,40 @@ pub fn which(prog: &str) -> Option<PathBuf> {
         } else { vec![String::new()] };
         // PATH do processo e, depois, as pastas onde os gerenciadores põem programas globais (npm -g, go install,
         // dotnet tool, cargo): instalado agora há pouco, o PATH desta janela ainda não sabe delas
-        let extra = [dirs::data_dir().map(|d| d.join("npm")), dirs::home_dir().map(|h| h.join("go").join("bin")), dirs::home_dir().map(|h| h.join(".dotnet").join("tools")), dirs::home_dir().map(|h| h.join(".cargo").join("bin"))];
-        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(extra.into_iter().flatten()).find_map(|d| {
+        let scoop = std::env::var_os("SCOOP").map(PathBuf::from).or_else(|| dirs::home_dir().map(|h| h.join("scoop")));
+        let extra = [dirs::data_dir().map(|d| d.join("npm")), dirs::home_dir().map(|h| h.join("go").join("bin")), dirs::home_dir().map(|h| h.join(".dotnet").join("tools")), dirs::home_dir().map(|h| h.join(".cargo").join("bin")), scoop.map(|s| s.join("shims"))];
+        // e o PATH atual do Windows (registro): o que você pôs no PATH depois de abrir a IDE
+        let reg = REG_PATH.lock().clone().unwrap_or_default();
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(extra.into_iter().flatten()).chain(reg).find_map(|d| {
             exts.iter().map(|e| d.join(format!("{prog}{e}"))).find(|c| c.is_file() && (cfg!(not(windows)) || c.extension().is_some()))
         })
     };
     WHICH.lock().insert(prog.into(), found.clone());
     found
 }
-/// esquece o que já foi procurado (depois de instalar algo)
-pub fn forget_which() { WHICH.lock().clear(); }
+/// esquece o que já foi procurado (depois de instalar algo) e relê o PATH do registro
+pub fn forget_which() { *REG_PATH.lock() = Some(registry_path()); WHICH.lock().clear(); }
+static REG_PATH: Mutex<Option<Vec<PathBuf>>> = parking_lot::const_mutex(None);
+/// PATH do usuário e do sistema como estão agora no registro (o do processo é o de quando a IDE abriu)
+fn registry_path() -> Vec<PathBuf> {
+    if !cfg!(windows) { return vec![]; }
+    let mut out = vec![];
+    for key in ["HKCU\\Environment", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"] {
+        let mut c = std::process::Command::new("reg");
+        c.args(["query", key, "/v", "Path"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+        #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+        let Ok(o) = c.output() else { continue };
+        let text = String::from_utf8_lossy(&o.stdout);
+        // "    Path    REG_EXPAND_SZ    C:\a;%USERPROFILE%\b"
+        let Some(v) = text.lines().find_map(|l| l.split_once("REG_EXPAND_SZ").or_else(|| l.split_once("REG_SZ")).map(|(_, v)| v.trim().to_string())) else { continue };
+        let var = Regex::new(r"%([^%]+)%").unwrap();
+        for d in v.split(';').filter(|d| !d.trim().is_empty()) {
+            let d = var.replace_all(d.trim(), |c: &regex::Captures| std::env::var(&c[1]).unwrap_or_else(|_| c[0].to_string()));
+            out.push(PathBuf::from(d.as_ref()));
+        }
+    }
+    out
+}
 fn first_tool(cands: &[&str]) -> (String, bool) {
     for c in cands { if which(c).is_some() { return (c.to_string(), true); } }
     (cands[0].to_string(), false)
