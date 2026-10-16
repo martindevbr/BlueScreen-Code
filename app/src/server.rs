@@ -104,7 +104,7 @@ fn core_routes() -> HashMap<String, RouteFn> {
     add("reveal", route_fn(|r| async move {
         r.local_only()?;
         let target = absolute(Path::new(r.q_or("path", "")));
-        if !target.exists() { return Err(fail("não existe", 400)); }
+        if !target.exists() { return Err(fail(format!("Não existe: {}", target.display()), 400)); }
         let t = target.to_string_lossy().to_string();
         if target.is_dir() { fire("explorer.exe", &[&t]); } else { fire("explorer.exe", &[&format!("/select,{t}")]); }
         ok(json!({ "ok": true }))

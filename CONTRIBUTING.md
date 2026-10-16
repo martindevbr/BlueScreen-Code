@@ -39,7 +39,12 @@ Para suportar uma linguagem nova, quase sempre basta acrescentar o servidor (ou 
 - Teste o que mudou no aplicativo de verdade, no tema escuro e no claro.
 - Siga o estilo do código ao redor: comentários curtos em português explicando o porquê, nomes no mesmo padrão.
 - Textos da interface em português, diretos, dizendo o que acontece ("Abrir com terminal", não "Prosseguir").
-- Nada de dependências baixadas de CDN: o BlueScreen roda offline. Bibliotecas novas vão para `app/wwwroot/vendor` com a licença junto.
+- Nada de dependências baixadas de CDN: o BlueScreen roda offline. Bibliotecas novas vão para `app/wwwroot/vendor` com a licença junto, e entram em `THIRD-PARTY-NOTICES.md`.
+- Só dependências com licença permissiva (MIT, Apache-2.0, BSD, Zlib, ISC, Unicode, OFL para fontes). Nada de GPL, LGPL ou AGPL: são incompatíveis com a licença do BlueScreen. MPL-2.0 só sem modificar os arquivos da biblioteca.
+
+## Licença das contribuições
+
+O BlueScreen não é software livre (veja [LICENSE](LICENSE)). Ao abrir um pull request você confirma que o código é seu e concede ao autor do projeto o direito de usá-lo, modificá-lo e distribuí-lo como parte do BlueScreen, sob esta ou outra licença (seção 3 da licença). O fork serve só para propor contribuições: não publique versões próprias do BlueScreen.
 
 ## Relatando um problema
 

@@ -2,6 +2,8 @@
 name = "bluescreen-sdk"
 version = "2.0.0"
 edition = "2024"
+license-file = "../../LICENSE"
+publish = false
 description = "Base comum do BlueScreen e dos seus plugins: utilidades, Git/SVN, servidor de plugin e cliente do núcleo."
 
 [dependencies]

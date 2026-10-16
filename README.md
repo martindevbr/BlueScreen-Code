@@ -220,8 +220,10 @@ Correções, ideias e plugins são bem-vindos. Veja [CONTRIBUTING.md](CONTRIBUTI
 
 ## Créditos
 
-O BlueScreen usa [Monaco Editor](https://github.com/microsoft/monaco-editor) e [xterm.js](https://github.com/xtermjs/xterm.js) (MIT), [marked](https://github.com/markedjs/marked) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache 2.0 / MPL 2.0), as fontes [IBM Plex Sans](https://github.com/IBM/plex) e [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (OFL), e no núcleo [axum](https://github.com/tokio-rs/axum), [tokio](https://tokio.rs), [wry e tao](https://github.com/tauri-apps) e [portable-pty](https://github.com/wezterm/wezterm). As licenças de cada um ficam junto dos arquivos em `app/wwwroot/vendor`.
+O BlueScreen usa [Monaco Editor](https://github.com/microsoft/monaco-editor) e [xterm.js](https://github.com/xtermjs/xterm.js) (MIT), [marked](https://github.com/markedjs/marked) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache 2.0 / MPL 2.0), as fontes [IBM Plex Sans](https://github.com/IBM/plex) e [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (OFL), e no núcleo [axum](https://github.com/tokio-rs/axum), [tokio](https://tokio.rs), [wry e tao](https://github.com/tauri-apps) e [portable-pty](https://github.com/wezterm/wezterm). Cada um segue a própria licença; a lista completa, com as bibliotecas Rust, está em [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Licença
 
-A definir.
+Copyright (c) 2025-2026 Martin Hartfelder. Todos os direitos reservados.
+
+O código está aberto para leitura, uso e contribuições, mas **não é software livre**: copiar, redistribuir, publicar versões modificadas ou usar comercialmente partes do BlueScreen exige autorização por escrito. Plugins próprios feitos com o SDK podem ser distribuídos sob a licença que o autor do plugin quiser. Os termos completos estão em [LICENSE](LICENSE); componentes de terceiros mantêm as licenças deles ([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)).

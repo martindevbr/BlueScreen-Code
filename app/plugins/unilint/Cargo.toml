@@ -2,6 +2,8 @@
 name = "bluescreen-unilint"
 version = "0.1.0"
 edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
 description = "Linter Universal do BlueScreen: gramáticas Tree-sitter embutidas, uma passada por arquivo, regras por conceito"
 
 [lib]

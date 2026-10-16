@@ -87,6 +87,8 @@ fn norm_manifest(m: &Value, fallback: &str) -> anyhow::Result<Manifest> {
 }
 fn discover() -> Vec<Entry> {
     let mut found: HashMap<String, Entry> = HashMap::new();
+    // a pasta do usuário nasce vazia: sem ela, "Abrir a pasta dos seus plugins" não tem o que abrir
+    let _ = std::fs::create_dir_all(user_dir().join("plugins"));
     for (rank, dir) in dirs().iter().enumerate() {
         let Ok(rd) = std::fs::read_dir(dir) else { continue };
         for e in rd.flatten() {

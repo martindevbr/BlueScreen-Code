@@ -1,0 +1,93 @@
+LICENÇA DE USO DO BLUESCREEN — CÓDIGO-FONTE DISPONÍVEL, TODOS OS DIREITOS RESERVADOS
+
+Copyright (c) 2025-2026 Martin Hartfelder <contato@hexor.com.br>
+Todos os direitos reservados.
+
+O BlueScreen (o "Software") — código-fonte, binários, instalador, interface,
+textos, ícones, logotipo, imagens e documentação deste repositório — é obra
+protegida pela Lei de Direitos Autorais (Lei nº 9.610/1998), pela Lei de
+Software (Lei nº 9.609/1998) e pelos tratados internacionais de que o Brasil é
+signatário. O código-fonte é publicado para consulta e colaboração, NÃO como
+software livre ou de código aberto.
+
+1. O QUE VOCÊ PODE FAZER
+
+   a) Ler e estudar o código-fonte publicado no repositório oficial
+      (https://github.com/martindevbr/BlueScreen-Code).
+   b) Baixar, instalar e usar o Software, para fins pessoais ou profissionais,
+      a partir do repositório oficial ou de versões publicadas pelo autor.
+   c) Compilar o Software a partir do código-fonte para uso próprio, sem
+      distribuir o resultado.
+   d) Criar um fork no GitHub e modificar o código com o único propósito de
+      propor contribuições (pull requests) ao repositório oficial, conforme a
+      seção 3.
+   e) Escrever plugins para o BlueScreen usando o SDK (pasta app/sdk), a
+      interface de plugins e a documentação em docs/PLUGINS.md, e distribuir
+      esses plugins sob a licença que preferir, conforme a seção 4.
+
+2. O QUE VOCÊ NÃO PODE FAZER sem autorização prévia e por escrito do autor
+
+   a) Copiar, reproduzir ou redistribuir o Software ou qualquer parte do seu
+      código-fonte, no todo ou em trechos, em outro projeto, repositório,
+      site, pacote ou produto.
+   b) Distribuir versões modificadas, derivadas, renomeadas ou rebatizadas do
+      Software, ou publicar forks com outro propósito que não o da seção 1(d).
+   c) Vender, sublicenciar, alugar, oferecer como serviço (SaaS) ou explorar
+      comercialmente o Software ou obras derivadas dele.
+   d) Remover, ocultar ou alterar avisos de direitos autorais, desta licença ou
+      das licenças de terceiros.
+   e) Usar o nome "BlueScreen", o logotipo ou os ícones para identificar outro
+      produto, ou de forma a sugerir vínculo ou endosso do autor.
+   f) Usar o código-fonte deste repositório para treinar, ajustar ou avaliar
+      modelos de inteligência artificial, ou reproduzi-lo por meio deles.
+
+3. CONTRIBUIÇÕES
+
+   Ao enviar um pull request, patch, issue com código ou qualquer outra
+   contribuição ao repositório oficial, você declara que é o autor dela (ou
+   tem o direito de enviá-la) e concede ao autor do BlueScreen uma licença
+   perpétua, mundial, gratuita, irrevogável e não exclusiva para usar,
+   modificar, sublicenciar, relicenciar e distribuir a contribuição como parte
+   do Software ou de qualquer produto relacionado, sob esta ou outra licença.
+   Você continua dono do que escreveu, mas não pode exigir remuneração,
+   crédito além do registrado no histórico do Git, nem a retirada da
+   contribuição depois de incorporada.
+
+4. PLUGINS DE TERCEIROS
+
+   Plugins criados por terceiros pertencem aos seus autores, que escolhem a
+   licença deles. Um plugin pode usar e incluir o SDK (app/sdk) e seguir a
+   documentação e o formato de plugin.json do BlueScreen, mas não pode copiar
+   outras partes do Software (núcleo, interface, ou o plugin oficial
+   unilint), nem ser distribuído junto com uma cópia do BlueScreen.
+
+5. COMPONENTES DE TERCEIROS
+
+   O Software inclui bibliotecas, fontes e outros componentes de terceiros,
+   que continuam sob as licenças originais dos seus autores (MIT, Apache 2.0,
+   BSD, Zlib, Unicode, MPL 2.0, SIL Open Font License, entre outras). Esta
+   licença não se aplica a eles nem limita os direitos que as licenças deles
+   concedem. A lista completa e os textos das licenças estão em
+   THIRD-PARTY-NOTICES.md e junto dos arquivos em app/wwwroot/vendor.
+
+6. GARANTIA E RESPONSABILIDADE
+
+   O SOFTWARE É FORNECIDO "NO ESTADO EM QUE SE ENCONTRA", SEM GARANTIAS DE
+   QUALQUER TIPO, EXPRESSAS OU IMPLÍCITAS, INCLUSIVE DE COMERCIALIZAÇÃO,
+   ADEQUAÇÃO A UM FIM ESPECÍFICO OU NÃO VIOLAÇÃO. EM NENHUMA HIPÓTESE O AUTOR
+   SERÁ RESPONSÁVEL POR DANOS, PERDA DE DADOS, LUCROS CESSANTES OU QUALQUER
+   OUTRO PREJUÍZO DECORRENTE DO USO OU DA IMPOSSIBILIDADE DE USO DO SOFTWARE,
+   NA MÁXIMA EXTENSÃO PERMITIDA PELA LEI.
+
+7. ENCERRAMENTO
+
+   Qualquer violação desta licença encerra automaticamente os direitos que ela
+   concede, sem prejuízo das medidas civis e penais cabíveis (inclusive as do
+   art. 12 da Lei nº 9.609/1998 e do art. 184 do Código Penal).
+
+8. LEI APLICÁVEL
+
+   Esta licença é regida pelas leis da República Federativa do Brasil.
+
+Para pedir autorização de uso fora destes termos, licenciamento comercial ou
+redistribuição: contato@hexor.com.br
