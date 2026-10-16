@@ -81,9 +81,13 @@ A ideia em uma frase: **a IDE é fina e as ferramentas são as de verdade.** Qua
 
 Precisa de Windows 10 ou 11, 64 bits, com o [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/), que já vem no Windows 11.
 
-### Pelo release
+### Pelo setup (recomendado)
 
-Baixe o `BlueScreen-X.Y.Z-windows-x64.zip` da última versão na página de releases do repositório, extraia e rode `BlueScreen.exe`. A pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
+Baixe o `BlueScreen-Setup-X.Y.Z.exe` da última versão na [página de releases](https://github.com/martindevbr/BlueScreen-IDE/releases/latest) e siga o assistente: escolha a pasta, os atalhos (área de trabalho e menu Iniciar) e pronto. Instala só para o seu usuário, sem administrador, e aparece em Configurações › Apps com desinstalador. Não precisa de Rust nem do código-fonte.
+
+### Pelo zip
+
+Baixe o `BlueScreen-X.Y.Z-windows-x64.zip` da mesma página, extraia e rode `BlueScreen.exe`. A pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
 
 ### Pelo instalador
 
@@ -423,7 +427,7 @@ Build, terminal, depurador e plugins só respondem no próprio PC, porque rodam 
 
 ### Atualização automática
 
-Cada push na `main` que mexe no aplicativo vira uma versão nova: o GitHub Actions ([`release.yml`](.github/workflows/release.yml)) roda os testes, compila no Windows e publica o zip num Release `vX.Y.Z`, com a lista do que mudou. O BlueScreen instalado confere o último Release toda vez que abre:
+Cada push na `main` que mexe no aplicativo vira uma versão nova: o GitHub Actions ([`release.yml`](.github/workflows/release.yml)) roda os testes, compila no Windows e publica num Release `vX.Y.Z` o setup (`BlueScreen-Setup-X.Y.Z.exe`, feito com o Inno Setup a partir de [`app/installer/BlueScreen.iss`](app/installer/BlueScreen.iss)) e o zip, com a lista do que mudou. O BlueScreen instalado confere o último Release toda vez que abre:
 
 ```mermaid
 flowchart TD

@@ -125,6 +125,8 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
 // ---------- versões publicadas (GitHub Releases, .github/workflows/release.yml) ----------
 /// pacote de cada versão: BlueScreen-X.Y.Z-windows-x64.zip (+ .sha256)
 const ASSET: &str = "-windows-x64.zip";
+/// registro dos instaladores: AppId do app/installer/BlueScreen.iss (+ "_is1" do Inno Setup) e o do Instalar BlueScreen.cmd
+const UNINSTALL_KEYS: &[&str] = &["{6B3F2D1A-9C4E-4E8B-A7D2-B1E5C0F3A9D4}_is1", "BlueScreen"];
 fn releases_api() -> Option<String> {
     let slug = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/').strip_prefix("https://github.com/")?.to_string();
     Some(format!("https://api.github.com/repos/{slug}/releases/latest"))
@@ -226,6 +228,15 @@ async fn apply_release(info: Value) -> Result<(), String> {
     tokio::task::spawn_blocking(move || copy_tree(&out, &d2)).await.map_err(|e| e.to_string())?.map_err(|e| format!("instalação em {}: {e}", dir.display()))?;
     push(&format!("instalado em {}", dir.display()));
     let _ = tokio::fs::remove_dir_all(&stage).await;
+    // Configurações > Apps mostra a versão nova (instalado pelo BlueScreen-Setup.exe ou pelo Instalar BlueScreen.cmd)
+    if let Some(v) = info["remoteVersion"].as_str() {
+        for key in UNINSTALL_KEYS {
+            let k = format!(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{key}");
+            if run("reg", &["query", &k, "/v", "DisplayVersion"], &dir, 5_000).await.ok {
+                let _ = run("reg", &["add", &k, "/v", "DisplayVersion", "/d", v, "/f"], &dir, 5_000).await;
+            }
+        }
+    }
     set(|j| { j.exe = Some(dir.join("BlueScreen.exe")); j.step = 3; j.progress = 1.0; j.done = true; j.running = false; });
     *LAST.lock() = None;
     Ok(())
