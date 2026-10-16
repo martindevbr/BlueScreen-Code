@@ -204,17 +204,19 @@ pub fn tree(project: &Path, rel: &str, compact: bool, fresh: bool) -> ApiResult<
             it.vcs = crate::vcs::here(&e.path);
             it.kind = Some(if let Some(k) = m.roots.get(&r) { *k } else if m.modules.contains_key(&r) { "module" } else if in_code && JAVA_ID.is_match(&e.name) { "package" } else { "dir" });
             it.module = m.modules.get(&r).copied();
-            if it.kind == Some("package") && compact {
-                // pacotes intermediários vazios: br > com > empresa vira "br.com.empresa"
+            let pkg = it.kind == Some("package");
+            if compact && (pkg || it.kind == Some("dir")) && !e.reparse {
+                // intermediários vazios: pacotes br > com > empresa vira "br.com.empresa";
+                // pastas comuns a > b > c (cada uma só com a próxima dentro) vira "a/b/c"
                 let mut chain = vec![e.name.clone()]; let mut cur = e.path.clone(); let mut cr = r.clone();
-                for _ in 0..20 {
+                for _ in 0..30 {
                     let vis: Vec<Ent> = entries(&cur).into_iter().filter(|x| !IGNORED_DIRS.contains(x.name.as_str())).collect();
-                    if vis.len() != 1 || !vis[0].is_dir || !JAVA_ID.is_match(&vis[0].name) { break; }
+                    if vis.len() != 1 || !vis[0].is_dir || vis[0].reparse || (pkg && !JAVA_ID.is_match(&vis[0].name)) { break; }
                     let nr = format!("{cr}/{}", vis[0].name);
                     if m.roots.contains_key(&nr) || m.modules.contains_key(&nr) { break; }
                     chain.push(vis[0].name.clone()); cur = vis[0].path.clone(); cr = nr;
                 }
-                if chain.len() > 1 { it.sub = Some(chain.join("/")); it.label = Some(chain.join(".")); }
+                if chain.len() > 1 { it.sub = Some(chain.join("/")); it.label = Some(chain.join(if pkg { "." } else { "/" })); }
             }
         } else if in_code && e.name.ends_with(".java") && e.name.len() > 5 {
             let cls = &e.name[..e.name.len() - 5];

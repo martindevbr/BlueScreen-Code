@@ -784,9 +784,12 @@ async function treeReveal(target) {
     let rel = '';
     for (let i = 0; i < 60; i++) {
       const items = await loadDir(rel);
-      const hit = items.find(it => { const p = childPath(rel, it); return p === target || (it.dir && target.startsWith(p + '/')); });
+      const hit = items.find(it => { const p = childPath(rel, it); return p === target || (it.dir && (target.startsWith(p + '/') || p.startsWith(target + '/'))); });
       if (!hit) break;
-      const p = childPath(rel, hit); S.treeOpen.add(p); if (p === target) break; rel = p;
+      const p = childPath(rel, hit); S.treeOpen.add(p);
+      // pasta no meio de uma cadeia compactada (a/b/c): seleciona a linha agrupada
+      if (p !== target && p.startsWith(target + '/')) { target = p; break; }
+      if (p === target) break; rel = p;
     }
   }
   saveTreeOpen(); S.treeSel = target;
