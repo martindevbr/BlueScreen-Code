@@ -41,10 +41,13 @@ sha2 = "0.10"
 [build-dependencies]
 winresource = "0.1.34"
 
+# LTO "thin" e 16 unidades: o otimizador e o link usam todos os núcleos. Medido aqui (12 núcleos): atualizar só o
+# núcleo cai de ~90 s ("fat" com 1 unidade, link num núcleo só) para ~30 s, e a instalação do zero fica em ~2 min.
+# O exe fica ~1 MB maior; a diferença de velocidade numa IDE que passa o tempo esperando o usuário não aparece.
 [profile.release]
 opt-level = 3
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 panic = "abort"
 strip = true
 

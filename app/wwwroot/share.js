@@ -9,7 +9,7 @@
 //   Edição: cada lote de trocas leva o tamanho do texto depois dela; se não bater (alguém digitou ao mesmo tempo,
 //   ou a aba abriu do disco sem as alterações em andamento), a janela pede o texto inteiro ('need' -> 'full').
 const NET = { pollT: null, addr: store.get('netAddr', '') };
-const MR = { on: store.get('mirror', false), ws: null, peers: 0, quiet: 0, lastLocal: 0, retryT: null, wantState: false, bound: new WeakSet(), selT: null, scrollT: null };
+const MR = { on: store.get('mirror', false), ws: null, peers: 0, quiet: 0, lastLocal: 0, retryT: null, wantState: false, bound: new WeakSet(), opening: new Map(), selT: null, scrollT: null };
 const inDesktop = () => !!(window.BS_DESKTOP && window.ipc);
 // esta página é a de outro PC (acesso pela rede)? Vale antes do login, quando S.remote ainda não chegou
 const netAway = !['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
@@ -163,11 +163,14 @@ async function mrOpen(m) {
   if (S.active && S.active.key === m.k) return;
   const t = mrTab(m.k);
   if (t) return mrQuiet(() => activate(t));
-  await mrQuietAsync(async () => {
+  if (MR.opening.has(m.k)) return MR.opening.get(m.k);
+  const p = mrQuietAsync(async () => {
     if (m.project && (!S.project || S.project.path !== m.project)) await openProject(m.project);
     if (!S.project || S.project.path !== m.project) return;
-    await openFile(m.path, m.mode === 'diff' ? 'diff' : undefined);
+    await openFile(m.path, m.mode === 'diff' ? 'diff' : 'editor'); // sem o modo, a aba nasce com o editor escondido
   });
+  MR.opening.set(m.k, p);
+  try { await p; } finally { MR.opening.delete(m.k); }
 }
 
 // ----- edição -----
@@ -181,7 +184,9 @@ function mrWatch(tab) {
     mrSend({ t: 'edit', k: model._tab.key, ch: e.changes.map(c => ({ r: [c.range.startLineNumber, c.range.startColumn, c.range.endLineNumber, c.range.endColumn], x: c.text })), n: model.getValueLength() });
   });
 }
-function mrEdit(m) {
+async function mrEdit(m) {
+  // a aba ainda está abrindo (o arquivo vem do disco, sem esta edição): espera e pede o texto inteiro
+  if (!mrTab(m.k) && MR.opening.has(m.k)) { await MR.opening.get(m.k); return mrSend({ t: 'need', k: m.k }); }
   const t = mrTab(m.k); if (!t || !t.model || t.model.isDisposed() || !t.editable) return;
   const model = t.model;
   mrQuiet(() => {

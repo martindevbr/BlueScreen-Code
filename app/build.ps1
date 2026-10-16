@@ -1,7 +1,9 @@
 ﻿# BlueScreen: monta a versão final em dist\BlueScreen (núcleo + interface + plugins).
 #   .\build.ps1            compila em release e monta dist\BlueScreen
 #   .\build.ps1 -Plugin <id> monta só dist\plugins\<id> (para copiar em ~\.bluescreen\plugins de outra máquina)
-param([string]$Plugin = '', [string]$Out = "$PSScriptRoot\dist")
+#   .\build.ps1 -Packages bluescreen,bluescreen-unilint   compila só esses pacotes (o atualizador passa o que mudou);
+#                         os outros exes vêm do target\release da compilação anterior (sem eles, compila tudo)
+param([string]$Plugin = '', [string]$Out = "$PSScriptRoot\dist", [string[]]$Packages = @())
 $ErrorActionPreference = 'Continue' # o cargo escreve o progresso no stderr; o que vale é o código de saída
 Set-Location $PSScriptRoot
 
@@ -50,7 +52,17 @@ if ($Plugin) {
   exit 0
 }
 
-if (Invoke-Cargo @('build', '--release', '--workspace')) { exit 1 }
+# exe que cada pacote gera em target\release (o núcleo e os plugins com servidor)
+$exes = @{ 'bluescreen' = 'target\release\bluescreen.exe' }
+Get-ChildItem 'plugins' -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') } | ForEach-Object { $exes["bluescreen-$($_.Name)"] = "target\release\bluescreen-$($_.Name).exe" }
+$Packages = @($Packages | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+# só compila parte se os exes que ficam de fora já existem de uma compilação anterior
+$partial = $Packages.Count -gt 0 -and -not ($exes.Keys | Where-Object { $Packages -notcontains $_ -and -not (Test-Path $exes[$_]) })
+if ($partial) {
+  Write-Host "Compilando só: $($Packages -join ', ')"
+  $cargoArgs = @('build', '--release'); foreach ($p in $Packages) { $cargoArgs += @('-p', $p) }
+  if (Invoke-Cargo $cargoArgs) { exit 1 }
+} elseif (Invoke-Cargo @('build', '--release', '--workspace')) { exit 1 }
 $dist = Join-Path $Out 'BlueScreen'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null

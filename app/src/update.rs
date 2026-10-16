@@ -49,6 +49,21 @@ fn native(f: &str) -> bool {
     true
 }
 
+/// Pacotes do cargo que os arquivos mudados afetam (o resto não recompila). None = todos: mudou o SDK, que
+/// núcleo e plugins usam, ou o Cargo.toml/Cargo.lock do workspace (versões das dependências).
+fn packages(files: &[String]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    let mut add = |p: String| if !out.contains(&p) { out.push(p) };
+    for f in files.iter().filter(|f| native(f)) {
+        if f.starts_with("app/sdk/") || f == "app/Cargo.toml" || f == "app/Cargo.lock" { return None; }
+        match f.strip_prefix("app/plugins/").and_then(|r| r.split('/').next()) {
+            Some(id) => add(format!("bluescreen-{id}")),
+            None => add("bluescreen".into()),
+        }
+    }
+    Some(out)
+}
+
 pub fn routes() -> Vec<(&'static str, RouteFn)> {
     vec![
         ("update/check", route_fn(|r| async move {
@@ -100,21 +115,32 @@ async fn check() -> Value {
     let up = git(&repo, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], 10_000).await;
     if !up.ok { return json!({ "available": false, "repo": repo, "reason": "O branch atual não segue nenhum branch remoto." }); }
     let upstream = up.out.trim().to_string();
-    let behind: u64 = git(&repo, &["rev-list", "--count", "HEAD..@{u}"], 10_000).await.out.trim().parse().unwrap_or(0);
-    let ahead: u64 = git(&repo, &["rev-list", "--count", "@{u}..HEAD"], 10_000).await.out.trim().parse().unwrap_or(0);
-    let log_out = git(&repo, &["log", "--no-merges", "-n", "60", "--format=%h%x1f%an%x1f%at%x1f%s", "HEAD..@{u}"], 10_000).await.out;
+    // o resto não depende um do outro: em paralelo (cada git no Windows custa um processo novo)
+    let (behind, ahead, log_out, diff, status, cargo_toml, head) = tokio::join!(
+        git(&repo, &["rev-list", "--count", "HEAD..@{u}"], 10_000),
+        git(&repo, &["rev-list", "--count", "@{u}..HEAD"], 10_000),
+        git(&repo, &["log", "--no-merges", "-n", "60", "--format=%h%x1f%an%x1f%at%x1f%s", "HEAD..@{u}"], 10_000),
+        git(&repo, &["diff", "--name-only", "HEAD...@{u}"], 10_000),
+        git(&repo, &["status", "--porcelain", "--untracked-files=no"], 10_000),
+        git(&repo, &["show", "@{u}:app/Cargo.toml"], 10_000),
+        git(&repo, &["rev-parse", "--short", "@{u}"], 10_000),
+    );
+    let behind: u64 = behind.out.trim().parse().unwrap_or(0);
+    let ahead: u64 = ahead.out.trim().parse().unwrap_or(0);
+    let log_out = log_out.out;
     let commits: Vec<Value> = log_out.lines().filter_map(|l| {
         let p: Vec<&str> = l.split('\x1f').collect();
         (p.len() == 4).then(|| json!({ "hash": p[0], "author": p[1], "when": rel_time_unix(p[2]), "subject": p[3] }))
     }).collect();
-    let files: Vec<String> = git(&repo, &["diff", "--name-only", "HEAD...@{u}"], 10_000).await.out.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let files: Vec<String> = diff.out.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     let needs_build = files.iter().any(|f| native(f));
-    let dirty = !git(&repo, &["status", "--porcelain", "--untracked-files=no"], 10_000).await.out.trim().is_empty();
-    let remote_version = git(&repo, &["show", "@{u}:app/Cargo.toml"], 10_000).await.out.lines()
+    let packages = packages(&files);
+    let dirty = !status.out.trim().is_empty();
+    let remote_version = cargo_toml.out.lines()
         .find_map(|l| l.trim().strip_prefix("version").and_then(|v| v.split('"').nth(1)).map(String::from)).unwrap_or_default();
-    let head = git(&repo, &["rev-parse", "--short", "@{u}"], 10_000).await.out.trim().to_string();
+    let head = head.out.trim().to_string();
     json!({ "available": true, "repo": repo, "upstream": upstream, "behind": behind, "ahead": ahead, "commits": commits, "files": files.len(),
-        "needsBuild": needs_build, "dirty": dirty, "version": crate::server::VERSION, "remoteVersion": remote_version, "remoteHead": head,
+        "needsBuild": needs_build, "packages": packages, "dirty": dirty, "version": crate::server::VERSION, "remoteVersion": remote_version, "remoteHead": head,
         "offline": !fetch.ok, "appDir": app_dir() })
 }
 
@@ -163,12 +189,16 @@ async fn apply(info: Value) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&stage);
     let total = std::fs::read_to_string(app.join("Cargo.lock")).map(|t| t.matches("[[package]]").count()).unwrap_or(400).max(150) as f64 * 0.8;
     let ps1 = app.join("build.ps1");
+    // só o que mudou: os pacotes que ficam de fora vêm do target\release da compilação anterior
+    let only: Vec<String> = info["packages"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let total = if only.is_empty() { total } else { only.len() as f64 * 3.0 };
     let mut c = tokio::process::Command::new("powershell");
     c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]).arg(&ps1).arg("-Out").arg(&stage).current_dir(&app)
         .env("CARGO_TERM_COLOR", "never").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
     if let Some(home) = dirs::home_dir() { let path = std::env::var("PATH").unwrap_or_default(); c.env("PATH", format!("{};{path}", home.join(".cargo").join("bin").display())); }
+    if !only.is_empty() { c.arg("-Packages").arg(only.join(",")); }
     crate::install::hidden(&mut c);
-    push("$ build.ps1");
+    push(&format!("$ build.ps1{}", if only.is_empty() { String::new() } else { format!(" -Packages {}", only.join(",")) }));
     let mut child = c.spawn().map_err(|e| format!("não abriu o powershell: {e}"))?;
     let (out, err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let compiled = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -276,7 +306,7 @@ pub fn cleanup() {
 
 #[cfg(test)]
 mod tests {
-    use super::native;
+    use super::{native, packages};
     #[test]
     fn classify() {
         assert!(native("app/src/main.rs"));
@@ -286,5 +316,14 @@ mod tests {
         assert!(!native("app/plugins/unilint/ui.js"));
         assert!(!native("README.md"));
         assert!(!native("Instalar BlueScreen.cmd"));
+    }
+    #[test]
+    fn only_what_changed() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(packages(&v(&["app/src/main.rs", "app/wwwroot/app.js"])), Some(v(&["bluescreen"])));
+        assert_eq!(packages(&v(&["app/plugins/unilint/src/jsp.rs"])), Some(v(&["bluescreen-unilint"])));
+        assert_eq!(packages(&v(&["app/src/lint.rs", "app/plugins/unilint/src/a.rs", "app/src/x.rs"])), Some(v(&["bluescreen", "bluescreen-unilint"])));
+        assert_eq!(packages(&v(&["app/sdk/src/lib.rs"])), None);
+        assert_eq!(packages(&v(&["app/Cargo.lock"])), None);
     }
 }
