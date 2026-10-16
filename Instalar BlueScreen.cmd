@@ -5,17 +5,21 @@ start "" powershell -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden 
 exit /b
 ###PS
 # ===== Instalador do BlueScreen =====
-# Fluxo: requisitos (Rust, linker C++, WebView2) -> app\build.ps1 (cargo + montagem de app\dist\BlueScreen)
-# -> cópia para a pasta escolhida (robocopy) -> atalhos, desinstalador e registro em Configurações > Apps (HKCU).
+# Fluxo: versão pronta do GitHub Releases (publicada pelo GitHub Actions a cada push: download, SHA-256 e tar) ou,
+# sem ela ou com "Compilar a partir deste código", requisitos (Rust, linker C++) -> app\build.ps1 -> app\dist\BlueScreen;
+# depois, cópia para a pasta escolhida (robocopy) -> atalhos, desinstalador e registro em Configurações > Apps (HKCU).
 # Tudo que demora roda em processo separado; um timer no thread da janela lê a saída e anima o progresso.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 # GitHub só aceita TLS 1.2+
 function Fatal([string]$msg) { [Windows.MessageBox]::Show($msg, 'Instalar BlueScreen', 'OK', 'Error') | Out-Null; exit 1 }
 
 $Root = Split-Path -Parent $SetupFile
 $App = Join-Path $Root 'app'
 if (-not (Test-Path (Join-Path $App 'build.ps1'))) { Fatal "Não encontrei app\build.ps1 ao lado do instalador.`nRode o instalador a partir da raiz do repositório do BlueScreen." }
 $Version = if ([IO.File]::ReadAllText((Join-Path $App 'Cargo.toml')) -match 'version\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+# Releases do repositório (o mesmo do Cargo.toml): a versão pronta mais recente
+$ReleasesApi = if ([IO.File]::ReadAllText((Join-Path $App 'Cargo.toml')) -match 'repository\s*=\s*"https://github\.com/([^"/]+/[^"/]+?)/?"') { "https://api.github.com/repos/$($Matches[1])/releases/latest" } else { $null }
 $UninstKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BlueScreen'
 
 try {
@@ -178,7 +182,7 @@ $xaml = @'
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <StackPanel>
             <TextBlock Text="Instalar o BlueScreen" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="25" FontWeight="SemiBold" Foreground="{StaticResource Fg}"/>
-            <TextBlock Text="Compila a partir do código desta pasta e instala só para o seu usuário, sem pedir administrador." TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="13" Margin="0,6,0,0"/>
+            <TextBlock Text="Baixa a versão pronta mais recente (ou compila a partir do código desta pasta) e instala só para o seu usuário, sem pedir administrador." TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="13" Margin="0,6,0,0"/>
             <TextBlock Text="PASTA DE INSTALAÇÃO" Foreground="#6F82A6" FontSize="10.5" FontWeight="SemiBold" Margin="0,22,0,7"/>
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -188,6 +192,7 @@ $xaml = @'
             <StackPanel Margin="0,16,0,0">
               <CheckBox x:Name="OptDesktop" Content="Atalho na área de trabalho" IsChecked="True"/>
               <CheckBox x:Name="OptMenu" Content="Atalho no menu Iniciar" IsChecked="True"/>
+              <CheckBox x:Name="OptBuild" Content="Compilar a partir deste código (em vez de baixar a versão pronta)" IsChecked="False"/>
             </StackPanel>
             <Grid Margin="0,8,0,7">
               <TextBlock Text="REQUISITOS" Foreground="#6F82A6" FontSize="10.5" FontWeight="SemiBold"/>
@@ -300,7 +305,7 @@ function Show-Page([string]$name) {
 # ----- estado -----
 $S = @{ phase = 'idle'; proc = $null; reader = $null; task = $null; log = [Text.StringBuilder]::new(); lines = [Collections.Generic.List[string]]::new()
         target = 0.0; shown = 0.0; compiled = 0; total = 300; sw = [Diagnostics.Stopwatch]::new(); dest = ''; cargo = $null; files = 1; copied = 0; deadline = $null
-        rustupProc = $null; rustupDl = $null }
+        rustupProc = $null; rustupDl = $null; release = $null; relTask = $null; relError = ''; mode = 'build'; dl = $null; dlFile = ''; src = ''; instVersion = $Version }
 $lock = Join-Path $App 'Cargo.lock'
 if (Test-Path $lock) { $S.total = [Math]::Max(120, [int](([regex]::Matches([IO.File]::ReadAllText($lock), '(?m)^\[\[package\]\]')).Count * 0.8)) }
 
@@ -334,7 +339,7 @@ $reqXaml = @'
 </Grid>
 '@
 $Req = @{}
-foreach ($id in 'rust', 'linker', 'webview') {
+foreach ($id in 'release', 'rust', 'linker', 'webview') {
   $g = [Windows.Markup.XamlReader]::Parse($reqXaml); $ui.ReqList.Children.Add($g) | Out-Null
   $Req[$id] = @{ root = $g; Dot = $g.FindName('Dot'); Nm = $g.FindName('Nm'); Det = $g.FindName('Det'); Act = $g.FindName('Act') }
 }
@@ -349,12 +354,40 @@ function Set-Req([string]$id, [string]$name, [string]$state, [string]$detail, [s
 foreach ($id in $Req.Keys) { $Req[$id].Act.Add_Click({ param($s, $e) foreach ($k in $Req.Keys) { if ($Req[$k].Act -eq $s -and $Req[$k].ActHandler) { & $Req[$k].ActHandler } } }) }
 $Req.linker.root.Visibility = 'Collapsed'
 
+# ----- versão pronta (GitHub Releases) -----
+function New-Web { $w = [Net.WebClient]::new(); $w.Headers['User-Agent'] = 'BlueScreen-Setup'; $w.Encoding = [Text.Encoding]::UTF8; $w }
+function Start-ReleaseCheck {
+  $S.release = $null; $S.relError = ''
+  if (-not $ReleasesApi) { $S.relError = 'o Cargo.toml não aponta um repositório do GitHub'; return }
+  Set-Req release 'Versão pronta' busy 'procurando no GitHub…'
+  $w = New-Web; $w.Headers['Accept'] = 'application/vnd.github+json'
+  $S.relTask = $w.DownloadStringTaskAsync($ReleasesApi)
+}
+function On-ReleaseCheck {
+  $t = $S.relTask; $S.relTask = $null
+  if ($t.IsFaulted) { $S.relError = $t.Exception.InnerException.Message }
+  else {
+    $r = $t.Result | ConvertFrom-Json
+    $zip = @($r.assets | Where-Object { $_.name -like '*-windows-x64.zip' })[0]
+    if ($zip) {
+      $sha = @($r.assets | Where-Object { $_.name -eq "$($zip.name).sha256" })[0]
+      $S.release = @{ version = ($r.tag_name -replace '^v', ''); url = $zip.browser_download_url; size = [long]$zip.size; name = $zip.name
+                      digest = $zip.digest; shaUrl = $(if ($sha) { $sha.browser_download_url }) }
+    } else { $S.relError = "$($r.tag_name) não tem o pacote para Windows" }
+  }
+  Test-Requirements
+}
+
 function Find-Cargo {
   $c = Get-Command cargo -ErrorAction SilentlyContinue; if ($c) { return $c.Source }
   $p = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'; if (Test-Path $p) { return $p }
 }
 function Test-Requirements {
   $S.cargo = Find-Cargo
+  $dl = $S.release -and -not $ui.OptBuild.IsChecked
+  if ($S.relTask) { }
+  elseif ($S.release) { Set-Req release 'Versão pronta' ok ("v$($S.release.version) · {0:N1} MB · sem compilar" -f ($S.release.size / 1MB)) }
+  else { Set-Req release 'Versão pronta' warn ("indisponível ($($S.relError)): compila a partir do código") 'Tentar de novo' { Start-ReleaseCheck } }
   if ($S.cargo) {
     $ver = try { ((& $S.cargo --version) -replace '^cargo\s+', '' -split ' ')[0] } catch { '' }
     $rustc = Join-Path (Split-Path $S.cargo) 'rustc.exe'
@@ -369,15 +402,17 @@ function Test-Requirements {
     } else { $Req.linker.root.Visibility = 'Collapsed' }
   } else {
     $Req.linker.root.Visibility = 'Collapsed'
-    Set-Req rust 'Rust' bad 'não encontrado: é preciso para compilar' 'Instalar Rust' { Install-Rust }
+    Set-Req rust 'Rust' $(if ($dl) { 'ok' } else { 'bad' }) $(if ($dl) { 'não precisa: a versão pronta já vem compilada' } else { 'não encontrado: é preciso para compilar' }) 'Instalar Rust' { Install-Rust }
   }
   $wv = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
   $pv = foreach ($k in "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$wv", "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$wv", "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$wv") {
     $v = (Get-ItemProperty $k -ErrorAction SilentlyContinue).pv; if ($v -and $v -ne '0.0.0.0') { $v; break } }
   if ($pv) { Set-Req webview 'WebView2' ok "runtime $pv" }
   else { Set-Req webview 'WebView2' warn 'runtime não encontrado (o app não abre sem ele)' 'Baixar' { Start-Process 'https://developer.microsoft.com/microsoft-edge/webview2/' } }
-  $ui.BtnInstall.IsEnabled = [bool]$S.cargo
-  $ui.SetupNote.Text = if (-not $S.cargo) { 'Instale o Rust para continuar. O instalador dele abre numa janela própria.' }
+  $ui.BtnInstall.IsEnabled = [bool]($dl -or $S.cargo) -and -not $S.relTask
+  $ui.SetupNote.Text = if ($S.relTask) { 'Procurando a versão pronta…' }
+                       elseif ($dl) { "Baixa a v$($S.release.version) pronta: menos de um minuto." }
+                       elseif (-not $S.cargo) { 'Instale o Rust para continuar. O instalador dele abre numa janela própria.' }
                        elseif (Test-Path (Join-Path $App 'target\release\bluescreen.exe')) { 'Já há uma compilação anterior: deve ser rápido.' }
                        else { 'Primeira compilação: leva de 3 a 10 minutos.' }
 }
@@ -388,7 +423,8 @@ function Install-Rust {
   $wc = [Net.WebClient]::new(); $S.rustupDl = $wc.DownloadFileTaskAsync('https://win.rustup.rs/x86_64', $exe); $S.rustupExe = $exe
   $S.phase = 'rustup-dl'; $ui.BtnInstall.IsEnabled = $false
 }
-$ui.BtnRecheck.Add_Click({ Test-Requirements })
+$ui.BtnRecheck.Add_Click({ if (-not $S.release) { Start-ReleaseCheck }; Test-Requirements })
+$ui.OptBuild.Add_Click({ Test-Requirements })
 
 # ----- etapas -----
 $stepXaml = @'
@@ -427,6 +463,11 @@ function Set-Step([int]$i, [string]$state) {
     }
     'bad' { $s.Bad.Visibility = 'Visible'; $s.Txt.Foreground = Brush '#FF9AA2' }
   }
+}
+function Set-StepNames {
+  $names = if ($S.mode -eq 'download') { 'Preparar', "Baixar a versão $($S.instVersion)", 'Conferir (SHA-256) e extrair', 'Copiar para a pasta de instalação', 'Criar atalhos e o desinstalador' }
+           else { 'Preparar', 'Compilar o BlueScreen', 'Montar a versão final', 'Copiar para a pasta de instalação', 'Criar atalhos e o desinstalador' }
+  for ($k = 0; $k -lt $Steps.Count; $k++) { $Steps[$k].Txt.Text = $names[$k] }
 }
 function Go-Step([int]$i) { for ($k = 0; $k -lt $Steps.Count; $k++) { if ($k -lt $i) { if ($Steps[$k].Ok.Visibility -ne 'Visible') { Set-Step $k ok } } elseif ($k -eq $i) { Set-Step $k run } else { Set-Step $k wait } }; $S.step = $i }
 
@@ -470,20 +511,50 @@ function Start-Install {
   $full = [IO.Path]::GetFullPath($d); $rootFull = [IO.Path]::GetFullPath($Root)
   if ($full.StartsWith($rootFull, 'OrdinalIgnoreCase')) { [Windows.MessageBox]::Show('Instale fora da pasta do código-fonte (o build apaga e recria app\dist).', 'Instalar BlueScreen') | Out-Null; return }
   $ui.PathBox.Text = $full; $S.dest = $full
+  $S.mode = if ($S.release -and -not $ui.OptBuild.IsChecked) { 'download' } else { 'build' }
+  $S.instVersion = if ($S.mode -eq 'download') { $S.release.version } else { $Version }; Set-StepNames
   $S.log.Clear() | Out-Null; $S.lines.Clear(); $ui.LogBox.Clear(); $S.target = 0; $S.shown = 0; $S.compiled = 0
   $ui.Bar.Value = 0; $ui.Percent.Text = '0%'; $ui.CurLine.Text = ''; $ui.WorkTitle.Text = 'Instalando…'
   $ui.BtnCancel.IsEnabled = $true
   Show-Page PageWork; Go-Step 0; $S.sw.Restart()
-  Add-Log "Instalando BlueScreen $Version em $full"
+  Add-Log "Instalando BlueScreen $($S.instVersion) em $full ($(if ($S.mode -eq 'download') { 'versão pronta do GitHub' } else { 'compilando deste código' }))"
   $running = @(Get-Running)
   if ($running) {
     $ui.CurLine.Text = 'Fechando o BlueScreen aberto…'
     $running | ForEach-Object { [void]$_.CloseMainWindow() }
     $S.deadline = (Get-Date).AddSeconds(12); $S.phase = 'closing'
-  } else { Start-Build }
+  } else { Start-Work }
+}
+function Start-Work { if ($S.mode -eq 'download') { Start-Download } else { Start-Build } }
+# ----- versão pronta: baixar, conferir a soma e extrair -----
+function Start-Download {
+  Go-Step 1; Set-Target 0.03; $S.phase = 'download'
+  $dir = Join-Path $env:TEMP 'bluescreen-setup'
+  if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $S.dlFile = Join-Path $dir $S.release.name; $S.src = Join-Path $dir 'BlueScreen'
+  Add-Log "baixando $($S.release.url)"
+  $S.dl = (New-Web).DownloadFileTaskAsync($S.release.url, $S.dlFile)
+}
+function On-DownloadTick {
+  $got = if (Test-Path $S.dlFile) { (Get-Item $S.dlFile).Length } else { 0 }
+  $p = [Math]::Min(1, $got / [Math]::Max(1, $S.release.size))
+  $ui.CurLine.Text = '{0:N1} de {1:N1} MB' -f ($got / 1MB), ($S.release.size / 1MB); Set-Target (0.03 + 0.67 * $p)
+  if (-not $S.dl.IsCompleted) { return }
+  if ($S.dl.IsFaulted) { Fail-Install ('O download falhou: ' + $S.dl.Exception.InnerException.Message + '. Marque "Compilar a partir deste código" para instalar sem baixar.'); return }
+  Go-Step 2; Set-Target 0.72; $ui.CurLine.Text = 'conferindo a soma SHA-256'
+  $want = if ($S.release.digest -like 'sha256:*') { $S.release.digest.Substring(7) }
+          elseif ($S.release.shaUrl) { ((New-Web).DownloadString($S.release.shaUrl) -split '\s+')[0] }
+  $have = (Get-FileHash $S.dlFile -Algorithm SHA256).Hash
+  if (-not $want) { Fail-Install 'O Release não publica a soma SHA-256 do pacote; por segurança, nada foi instalado.'; return }
+  if ($want -ne $have) { Fail-Install "O pacote baixado não confere com a soma publicada (esperado $want, veio $have). Nada foi instalado."; return }
+  Add-Log "sha256 conferido: $($have.ToLower())"
+  New-Item -ItemType Directory -Force $S.src | Out-Null
+  $S.phase = 'extract'; $ui.CurLine.Text = 'extraindo'
+  Start-Reader 'tar.exe' "-xf `"$($S.dlFile)`" -C `"$($S.src)`"" ([Text.Encoding]::UTF8)
 }
 function Start-Build {
-  Go-Step 1; Set-Target 0.03; $S.phase = 'build'
+  Go-Step 1; Set-Target 0.03; $S.phase = 'build'; $S.src = Join-Path $App 'dist\BlueScreen'
   $ps1 = Join-Path $App 'build.ps1'
   # chcp 65001: o powershell filho escreve UTF-8 (acentos do build.ps1); 2>&1: o cargo escreve o progresso no stderr
   Start-Reader 'cmd.exe' "/d /s /c `"chcp 65001 >nul & powershell -NoProfile -ExecutionPolicy Bypass -File `"$ps1`" 2>&1`"" ([Text.UTF8Encoding]::new($false))
@@ -497,7 +568,7 @@ function On-BuildLine([string]$l) {
 }
 function Start-Copy {
   Go-Step 3; Set-Target 0.88; $S.phase = 'copy'
-  $src = Join-Path $App 'dist\BlueScreen'
+  $src = $S.src
   $S.files = [Math]::Max(1, @(Get-ChildItem -LiteralPath $src -Recurse -File).Count); $S.copied = 0
   $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
   # /MIR deixa a pasta igual à versão nova (remove arquivos de versões antigas); a pasta é só do BlueScreen (Resolve-InstallDir)
@@ -538,7 +609,7 @@ timeout /t 2 >nul 2>&1
   [IO.File]::WriteAllText((Join-Path $dest 'source.txt'), $Root, [Text.UTF8Encoding]::new($false))
   $kb = [int]((Get-ChildItem -LiteralPath $dest -Recurse -File | Measure-Object Length -Sum).Sum / 1KB)
   New-Item $UninstKey -Force | Out-Null
-  $props = @{ DisplayName = 'BlueScreen'; DisplayVersion = $Version; Publisher = 'BlueScreen'; DisplayIcon = "$exe,0"; InstallLocation = $dest
+  $props = @{ DisplayName = 'BlueScreen'; DisplayVersion = $S.instVersion; Publisher = 'BlueScreen'; DisplayIcon = "$exe,0"; InstallLocation = $dest
               UninstallString = "`"$(Join-Path $dest 'Desinstalar.cmd')`""; InstallDate = (Get-Date -Format 'yyyyMMdd') }
   foreach ($k in $props.Keys) { New-ItemProperty $UninstKey -Name $k -Value $props[$k] -PropertyType String -Force | Out-Null }
   foreach ($k in @{ NoModify = 1; NoRepair = 1; EstimatedSize = $kb }.GetEnumerator()) { New-ItemProperty $UninstKey -Name $k.Key -Value $k.Value -PropertyType DWord -Force | Out-Null }
@@ -577,9 +648,10 @@ $timer.Add_Tick({
     if ($S.shown -lt $S.target) { $S.shown += [Math]::Max(0.0015, ($S.target - $S.shown) * 0.12); if ($S.shown -gt $S.target) { $S.shown = $S.target }
       $ui.Bar.Value = $S.shown * 1000; $ui.Percent.Text = ('{0}%' -f [int][Math]::Floor($S.shown * 100)) }
     if ($S.sw.IsRunning) { $ui.Elapsed.Text = $S.sw.Elapsed.ToString('mm\:ss') }
+    if ($S.relTask -and $S.relTask.IsCompleted) { On-ReleaseCheck }
     switch ($S.phase) {
       'closing' {
-        if (-not @(Get-Running)) { Start-Build }
+        if (-not @(Get-Running)) { Start-Work }
         elseif ((Get-Date) -gt $S.deadline) { Fail-Install 'O BlueScreen continua aberto (talvez com arquivos não salvos). Feche-o e tente de novo.' }
       }
       'build' {
@@ -594,6 +666,15 @@ $timer.Add_Tick({
         if (Pump ${function:On-CopyLine}) {
           $S.proc.WaitForExit(); $code = $S.proc.ExitCode; $S.proc = $null
           if ($code -ge 8) { Fail-Install "Não foi possível copiar para $($S.dest) (robocopy $code). A pasta está em uso ou sem permissão?" } else { Finish-Install }
+        }
+      }
+      'download' { On-DownloadTick }
+      'extract' {
+        if (Pump { param($l) }) {
+          $S.proc.WaitForExit(); $code = $S.proc.ExitCode; $S.proc = $null
+          if ($code -ne 0) { Fail-Install "Não deu para extrair o pacote (tar $code)." }
+          elseif (-not (Test-Path (Join-Path $S.src 'BlueScreen.exe'))) { Fail-Install 'O pacote baixado não tem o BlueScreen.exe.' }
+          else { Start-Copy }
         }
       }
       'done-wait' { if ($S.shown -ge 0.999 -and (Get-Date) -gt $S.deadline) { Show-Done } }
@@ -633,5 +714,6 @@ $win.Dispatcher.Add_UnhandledException({ param($s, $e)
   try { [IO.File]::AppendAllText((Join-Path $env:TEMP 'bluescreen-setup.log'), "$(Get-Date -Format s) $msg`r`n") } catch {}
   Fail-Install ('Erro inesperado no instalador: ' + $e.Exception.Message) })
 
+Start-ReleaseCheck
 Test-Requirements
 [void]$win.ShowDialog()

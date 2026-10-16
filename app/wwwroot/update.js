@@ -1,4 +1,5 @@
-/* BlueScreen: atualização pelo repositório git de origem (update.rs). Alguns segundos depois de abrir, pergunta ao
+/* BlueScreen: atualização (update.rs). Instalado: baixa a versão pronta do GitHub Releases (o GitHub Actions compila
+   e publica uma a cada push); rodando do código-fonte, ou sem Release: pelo repositório git de origem. Alguns segundos depois de abrir, pergunta ao
    núcleo se chegaram commits; havendo, aparece o selo "Atualização" no topo. O diálogo mostra o que mudou e o
    tamanho da atualização: só interface (git pull e a página recarrega) ou núcleo (git pull, compila, troca os
    arquivos e reinicia). O progresso vem de update/status. "Pular esta versão" esconde o selo até o próximo commit. */
@@ -48,20 +49,23 @@ async function check(fresh, quiet = true) {
 function close() { box.classList.add('out'); setTimeout(() => { back.hidden = true; box.classList.remove('out'); }, 180); }
 function openDialog() {
   const i = U.info; if (!i || !i.available) return;
-  const build = i.needsBuild;
+  const build = i.needsBuild, rel = i.mode === 'release';
+  const mb = (n) => (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
   const ver = i.remoteVersion && i.remoteVersion !== i.version ? `<span class="v-old">v${esc(i.version)}</span><span class="v-arrow">→</span><span class="v-new">v${esc(i.remoteVersion)}</span>` : `<span class="v-new">${i.behind} ${i.behind > 1 ? 'alterações novas' : 'alteração nova'}</span>`;
   box.innerHTML = `
     <header class="up-hero"><div class="up-glow"></div><span class="up-mark">;)</span>
       <div class="up-badge">${IC.up}</div>
       <div class="up-h"><small>Nova versão do BlueScreen</small><div class="up-ver">${ver}</div>
-      <div class="up-meta">${esc(i.upstream)} · ${i.behind} commit${i.behind > 1 ? 's' : ''} · ${i.files} arquivo${i.files > 1 ? 's' : ''}</div></div>
+      <div class="up-meta">${rel ? `${esc(i.upstream)}${i.size ? ' · ' + mb(i.size) : ''}` : `${esc(i.upstream)} · ${i.behind} commit${i.behind > 1 ? 's' : ''} · ${i.files} arquivo${i.files > 1 ? 's' : ''}`}</div></div>
       <button class="icon-btn up-x" title="Fechar">${IC.x}</button></header>
-    <div class="up-kind ${build ? 'build' : 'quick'}">${build ? IC.gear : IC.bolt}<div><b>${build ? 'Inclui o núcleo: compila e reinicia' : 'Só interface: aplica na hora'}</b>
-      <span>${build ? 'git pull, compilação (1 a 5 min) e troca dos arquivos. Seus arquivos abertos são salvos antes de reiniciar.' : 'git pull e a página recarrega, sem compilar nem reiniciar.'}</span></div></div>
+    ${rel ? `<div class="up-kind quick">${IC.bolt}<div><b>Versão pronta: baixa e reinicia, sem compilar</b>
+      <span>Pacote compilado pelo GitHub Actions${i.size ? ` (${mb(i.size)})` : ''}, conferido pela soma SHA-256 antes de trocar os arquivos. Seus arquivos abertos são salvos antes de reiniciar.</span></div></div>`
+    : `<div class="up-kind ${build ? 'build' : 'quick'}">${build ? IC.gear : IC.bolt}<div><b>${build ? 'Inclui o núcleo: compila e reinicia' : 'Só interface: aplica na hora'}</b>
+      <span>${build ? 'git pull, compilação (30 s a 2 min) e troca dos arquivos. Seus arquivos abertos são salvos antes de reiniciar.' : 'git pull e a página recarrega, sem compilar nem reiniciar.'}</span></div></div>`}
     ${i.dirty ? `<div class="up-warn">O repositório tem alterações locais. Elas são guardadas e reaplicadas depois do pull (autostash).</div>` : ''}
     ${i.ahead ? `<div class="up-warn">O branch local tem ${i.ahead} commit(s) que não estão no remoto: o pull só avança se não houver conflito.</div>` : ''}
     <div class="up-log-h">O que mudou</div>
-    <ol class="up-log">${(i.commits || []).map((c, k) => `<li style="--i:${Math.min(k, 14)}">${IC.commit}<div><span class="s">${esc(c.subject)}</span><span class="m">${esc(c.author)} · ${esc(c.when)} · <code>${esc(c.hash)}</code></span></div></li>`).join('')}</ol>
+    <ol class="up-log">${(i.commits || []).map((c, k) => `<li style="--i:${Math.min(k, 14)}">${IC.commit}<div><span class="s">${esc(c.subject)}</span><span class="m">${[c.author, c.when].filter(Boolean).map(esc).join(' · ')}${c.author || c.when ? ' · ' : ''}${c.hash ? `<code>${esc(c.hash)}</code>` : ''}</span></div></li>`).join('')}</ol>
     <footer><button class="up-link up-skip">Pular esta versão</button><span class="spacer"></span>
       <button class="chip up-later">Agora não</button><button class="chip primary up-go">${IC.up}<span>Atualizar</span></button></footer>`;
   back.hidden = false;
@@ -96,7 +100,7 @@ async function tick() {
     steps.innerHTML = s.steps.map((t, k) => `<li class="${s.error && k === cur ? 'bad' : k < cur ? 'ok' : k === cur ? 'run' : ''}"><span class="st">${k < cur ? IC.ok : s.error && k === cur ? IC.x : ''}</span>${esc(t)}</li>`).join('');
   }
   // com as dependências já compiladas o cargo mostra poucas linhas "Compiling": o tempo também empurra a barra
-  const prog = s.restart && s.step === 1 && !s.done ? Math.max(s.progress, 0.08 + 0.7 * (1 - Math.exp(-s.elapsed / 150))) : s.progress;
+  const prog = s.restart && !s.release && s.step === 1 && !s.done ? Math.max(s.progress, 0.08 + 0.7 * (1 - Math.exp(-s.elapsed / 150))) : s.progress;
   $('#upBar').style.width = (prog * 100).toFixed(1) + '%'; $('#upPct').textContent = Math.floor(prog * 100) + '%';
   $('#upTime').textContent = String(Math.floor(s.elapsed / 60)).padStart(2, '0') + ':' + String(s.elapsed % 60).padStart(2, '0');
   $('#upLine').textContent = s.line || '';

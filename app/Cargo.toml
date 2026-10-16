@@ -1,7 +1,9 @@
 [package]
 name = "bluescreen"
-version = "2.0.0"
+# X.Y daqui; o Z de cada versão publicada é o GitHub Actions que escolhe (.github/workflows/release.yml)
+version = "2.1.0"
 edition = "2024"
+repository = "https://github.com/martindevbr/BlueScreen-IDE"
 license-file = "../LICENSE"
 publish = false
 

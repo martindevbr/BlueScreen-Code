@@ -83,22 +83,25 @@ Precisa de Windows 10 ou 11, 64 bits, com o [WebView2](https://developer.microso
 
 ### Pelo release
 
-Baixe a última versão na página de releases do repositório, extraia e rode `BlueScreen.exe`. A pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
+Baixe o `BlueScreen-X.Y.Z-windows-x64.zip` da última versão na página de releases do repositório, extraia e rode `BlueScreen.exe`. A pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
 
-### Pelo código-fonte
+### Pelo instalador
 
-Clone o repositório e dê dois cliques em `Instalar BlueScreen.cmd`, na raiz.
+Clone o repositório e dê dois cliques em `Instalar BlueScreen.cmd`, na raiz. Ele baixa a versão pronta mais recente do GitHub (sem precisar do Rust, em menos de um minuto) e confere a soma SHA-256 antes de instalar. Marque **Compilar a partir deste código** para instalar o que está na sua pasta.
 
 ```mermaid
 flowchart LR
-    a["Instalar BlueScreen.cmd"] --> b{"Rust, linker C++<br/>e WebView2?"}
+    a["Instalar BlueScreen.cmd"] --> r{"versão pronta<br/>no GitHub?"}
+    r -- sim --> dl["baixa o zip<br/>+ confere SHA-256"]
+    r -- "não, ou<br/>'Compilar daqui'" --> b{"Rust e<br/>linker C++?"}
     b -- falta algo --> c["mostra o que instalar"]
     b -- tudo certo --> d["compila<br/>(build.ps1)"]
-    d --> e["instala só para o seu usuário<br/><sub>sem administrador</sub>"]
+    dl --> e["instala só para o seu usuário<br/><sub>sem administrador</sub>"]
+    d --> e
     e --> f["atalhos +<br/>Configurações › Apps<br/>com desinstalador"]
 ```
 
-Instalado assim, a IDE procura atualizações no repositório ao abrir (veja [Atualização automática](#atualização-automática)).
+Instalado assim, a IDE procura atualizações ao abrir (veja [Atualização automática](#atualização-automática)).
 
 ### Linha de comando
 
@@ -420,16 +423,21 @@ Build, terminal, depurador e plugins só respondem no próprio PC, porque rodam 
 
 ### Atualização automática
 
-Instalado pelo `Instalar BlueScreen.cmd`, o BlueScreen confere o repositório de onde foi compilado toda vez que abre. O tamanho da atualização depende do que mudou:
+Cada push na `main` que mexe no aplicativo vira uma versão nova: o GitHub Actions ([`release.yml`](.github/workflows/release.yml)) roda os testes, compila no Windows e publica o zip num Release `vX.Y.Z`, com a lista do que mudou. O BlueScreen instalado confere o último Release toda vez que abre:
 
 ```mermaid
 flowchart TD
-    abre["IDE abre"] --> fetch["git fetch:<br/>chegaram commits?"]
-    fetch -- não --> nada["segue normal"]
-    fetch -- sim --> oque{"o que mudou?"}
-    oque -- "só interface<br/>(wwwroot, ui.js, docs)" --> leve["git pull + copiar arquivos<br/>→ a página recarrega"]
-    oque -- "núcleo<br/>(Rust, Cargo, ícone)" --> pesado["git pull + build numa pasta temporária<br/>→ troca os arquivos → reinicia na versão nova"]
+    push["push na main"] --> ci["GitHub Actions:<br/>testes + build.ps1"]
+    ci --> rel["Release vX.Y.Z<br/>zip + .sha256"]
+    abre["IDE abre"] --> chk{"Release mais novo<br/>que esta versão?"}
+    rel -.-> chk
+    chk -- não --> nada["segue normal"]
+    chk -- sim --> baixa["baixa o zip → confere SHA-256<br/>→ troca os arquivos → reinicia"]
 ```
+
+**Versões.** `X.Y` vem do `app/Cargo.toml` (mude lá para subir a versão maior ou a menor); `Z` é o próximo número livre entre as tags `vX.Y.*`. Para um push não gerar versão, ponha `[skip release]` na mensagem do commit.
+
+**Rodando do código-fonte** (`app\target\...`, `app\dist\...`), ou sem acesso ao GitHub, a atualização é pelo git: `git pull` e, se mudou Rust, compila só os pacotes afetados (o núcleo ou o plugin que mudou) e reinicia; se mudou só a interface, a página recarrega.
 
 O Windows não deixa sobrescrever um `.exe` em uso, mas deixa renomear: a versão antiga vira `*.old-<n>.exe` e é apagada no próximo início.
 
@@ -476,7 +484,10 @@ Precisa do Rust (toolchain stable MSVC) e do Visual Studio Build Tools com C++. 
 cargo build --workspace; cargo run -- C:\meus\projetos   # desenvolvimento
 powershell -File build.ps1                               # versão final em app\dist\BlueScreen
 powershell -File build.ps1 -Plugin <id>                  # só um plugin
+powershell -File build.ps1 -Packages bluescreen          # recompila só o núcleo (os plugins vêm da compilação anterior)
 ```
+
+O perfil de release usa LTO "thin" com 16 unidades de código: a compilação usa todos os núcleos do processador (recompilar só o núcleo leva ~30 s, contra ~90 s com LTO "fat").
 
 A interface (`app/wwwroot`) não passa por build: edite o `.js` ou o `.css` e recarregue a página. Só mudanças em `app/src` pedem `cargo build`.
 

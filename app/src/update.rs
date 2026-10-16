@@ -30,6 +30,8 @@ struct Job {
     started: Option<Instant>,
     /// exe a abrir no reinício (o caminho de antes da troca)
     exe: Option<PathBuf>,
+    /// versão publicada (GitHub Releases): baixa o pacote pronto em vez de compilar
+    release: bool,
 }
 static JOB: LazyLock<Mutex<Job>> = LazyLock::new(Default::default);
 static LAST: LazyLock<Mutex<Option<(Instant, Value)>>> = LazyLock::new(Default::default);
@@ -78,9 +80,21 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             if !r.is_post() { return Err(fail("use POST", 405)); }
             let info = check().await;
             if info["behind"].as_u64().unwrap_or(0) == 0 { return Err(fail("Nada para atualizar.", 409)); }
+            let release = info["mode"] == "release";
             {
                 let mut j = JOB.lock();
                 if j.running { return Err(fail("A atualização já está rodando.", 409)); }
+                if release {
+                    *j = Job { running: true, started: Some(Instant::now()), restart: true, release: true,
+                        steps: vec!["Baixar a versão nova", "Conferir e extrair", "Instalar a versão nova", "Reiniciar"], ..Default::default() };
+                }
+            }
+            if release {
+                tokio::spawn(async move { if let Err(e) = apply_release(info).await { let mut j = JOB.lock(); j.error = Some(e); j.running = false; } });
+                return ok(json!({ "started": true }));
+            }
+            {
+                let mut j = JOB.lock();
                 let build = info["needsBuild"].as_bool() == Some(true);
                 *j = Job { running: true, started: Some(Instant::now()), restart: build,
                     steps: if build { vec!["Baixar as alterações (git pull)", "Compilar o BlueScreen", "Instalar a versão nova", "Reiniciar"] } else { vec!["Baixar as alterações (git pull)", "Atualizar a interface"] },
@@ -92,7 +106,7 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
         ("update/status", route_fn(|_r| async move {
             let j = JOB.lock();
             ok(json!({ "running": j.running, "step": j.step, "steps": j.steps, "progress": j.progress, "line": j.line, "error": j.error, "done": j.done,
-                "restart": j.restart, "elapsed": j.started.map(|t| t.elapsed().as_secs()).unwrap_or(0), "tail": j.lines.iter().rev().take(80).rev().collect::<Vec<_>>() }))
+                "restart": j.restart, "release": j.release, "elapsed": j.started.map(|t| t.elapsed().as_secs()).unwrap_or(0), "tail": j.lines.iter().rev().take(80).rev().collect::<Vec<_>>() }))
         })),
         ("update/restart", route_fn(|r| async move {
             r.local_only()?;
@@ -108,7 +122,123 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
     ]
 }
 
+// ---------- versões publicadas (GitHub Releases, .github/workflows/release.yml) ----------
+/// pacote de cada versão: BlueScreen-X.Y.Z-windows-x64.zip (+ .sha256)
+const ASSET: &str = "-windows-x64.zip";
+fn releases_api() -> Option<String> {
+    let slug = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/').strip_prefix("https://github.com/")?.to_string();
+    Some(format!("https://api.github.com/repos/{slug}/releases/latest"))
+}
+fn semver(v: &str) -> (u64, u64, u64) {
+    let mut p = v.trim().trim_start_matches('v').split(['.', '-', '+']).map(|x| x.parse().unwrap_or(0));
+    (p.next().unwrap_or(0), p.next().unwrap_or(0), p.next().unwrap_or(0))
+}
+/// rodando do código-fonte (app\, app\target\..., app\dist\...): quem programa atualiza pelo git e compila
+fn from_source() -> bool {
+    let d = absolute(&app_dir());
+    repo().is_some_and(|r| { let app = absolute(&r.join("app")); d == app || within(&app.join("target"), &d) || within(&app.join("dist"), &d) })
+}
+fn http(timeout: Option<u64>) -> Result<reqwest::Client, String> {
+    let b = reqwest::Client::builder().user_agent(concat!("BlueScreen-IDE/", env!("CARGO_PKG_VERSION"))).connect_timeout(Duration::from_secs(15));
+    let b = match timeout { Some(s) => b.timeout(Duration::from_secs(s)), None => b };
+    b.build().map_err(|e| e.to_string())
+}
+/// último Release: { mode: "release", behind: 1 se é mais novo que esta versão, commits (das notas), url do zip... }
+async fn check_release() -> Result<Value, String> {
+    let api = releases_api().ok_or("o Cargo.toml não aponta um repositório do GitHub")?;
+    let v: Value = http(Some(15))?.get(&api).header("Accept", "application/vnd.github+json").send().await.and_then(|r| r.error_for_status())
+        .map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
+    let tag = v["tag_name"].as_str().ok_or("Release sem tag")?.to_string();
+    let assets = v["assets"].as_array().cloned().unwrap_or_default();
+    let zip = assets.iter().find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(ASSET))).ok_or_else(|| format!("{tag} não tem o pacote para Windows"))?;
+    let name = zip["name"].as_str().unwrap_or_default();
+    let sha = assets.iter().find(|a| a["name"].as_str() == Some(&format!("{name}.sha256"))).and_then(|a| a["browser_download_url"].as_str());
+    let remote = tag.trim_start_matches('v').to_string();
+    let newer = semver(&remote) > semver(crate::server::VERSION);
+    // notas geradas pelo workflow: "- assunto (hash)"
+    let body = v["body"].as_str().unwrap_or_default();
+    let commits: Vec<Value> = body.lines().filter_map(|l| l.trim().strip_prefix("- ")).map(|l| {
+        let (subject, hash) = match l.rsplit_once(" (") { Some((s, h)) if h.ends_with(')') => (s, h.trim_end_matches(')')), _ => (l, "") };
+        json!({ "subject": subject, "hash": hash, "author": "", "when": "" })
+    }).collect();
+    Ok(json!({ "available": true, "mode": "release", "behind": if newer { 1 } else { 0 }, "ahead": 0, "commits": commits, "files": 0,
+        "needsBuild": true, "dirty": false, "version": crate::server::VERSION, "remoteVersion": remote, "remoteHead": tag,
+        "upstream": format!("GitHub · {tag}"), "size": zip["size"], "url": zip["browser_download_url"], "digest": zip["digest"], "sha256Url": sha,
+        "published": v["published_at"], "appDir": app_dir() }))
+}
+
+/// Baixa o zip do Release, confere o SHA-256, extrai e troca os arquivos da pasta do programa. Sem compilar.
+async fn apply_release(info: Value) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use sha2::Digest;
+    use tokio::io::AsyncWriteExt;
+    let url = info["url"].as_str().ok_or("Release sem endereço do pacote")?.to_string();
+    let dir = app_dir();
+    let stage = std::env::temp_dir().join("bluescreen-release");
+    let _ = tokio::fs::remove_dir_all(&stage).await;
+    tokio::fs::create_dir_all(&stage).await.map_err(|e| e.to_string())?;
+    let zip = stage.join("pacote.zip");
+
+    // 1. baixar (a soma é calculada enquanto chega)
+    set(|j| { j.step = 0; j.progress = 0.02; });
+    push(&format!("$ baixar {url}"));
+    let client = http(None)?;
+    let resp = client.get(&url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("download: {e}"))?;
+    let total = resp.content_length().or(info["size"].as_u64()).unwrap_or(0).max(1);
+    let mut f = tokio::fs::File::create(&zip).await.map_err(|e| e.to_string())?;
+    let mut h = sha2::Sha256::new();
+    let (mut got, mut stream) = (0u64, resp.bytes_stream());
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("download: {e}"))?;
+        f.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        h.update(&chunk);
+        got += chunk.len() as u64;
+        let p = (got as f64 / total as f64).min(1.0);
+        set(|j| { j.progress = 0.02 + 0.68 * p; j.line = format!("{:.1} de {:.1} MB", got as f64 / 1048576.0, total as f64 / 1048576.0); });
+    }
+    f.flush().await.map_err(|e| e.to_string())?;
+    drop(f);
+    push(&format!("baixado: {:.1} MB", got as f64 / 1048576.0));
+
+    // 2. conferir a soma publicada e extrair
+    set(|j| { j.step = 1; j.progress = 0.72; });
+    let have = format!("{:x}", h.finalize());
+    let want = match info["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")) {
+        Some(d) => d.to_string(),
+        None => match info["sha256Url"].as_str() {
+            Some(u) => client.get(u).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("soma: {e}"))?.text().await.map_err(|e| e.to_string())?
+                .split_whitespace().next().unwrap_or_default().to_string(),
+            None => return Err("O Release não publica a soma SHA-256 do pacote; por segurança, nada foi instalado.".into()),
+        },
+    };
+    if !want.eq_ignore_ascii_case(&have) { return Err(format!("O pacote baixado não confere com a soma publicada (esperado {want}, veio {have}). Nada foi instalado.")); }
+    push(&format!("sha256 conferido: {have}"));
+    let out = stage.join("BlueScreen");
+    tokio::fs::create_dir_all(&out).await.map_err(|e| e.to_string())?;
+    let x = run("tar", &["-xf", &zip.to_string_lossy(), "-C", &out.to_string_lossy()], &stage, 120_000).await;
+    if !x.ok { return Err(format!("não deu para extrair o pacote: {}", x.err.trim())); }
+    if !out.join("BlueScreen.exe").is_file() { return Err("o pacote não tem o BlueScreen.exe".into()); }
+    set(|j| j.progress = 0.85);
+
+    // 3. instalar: troca os arquivos (exe e dll em uso são renomeados, ver unlock)
+    set(|j| j.step = 2);
+    let d2 = dir.clone();
+    tokio::task::spawn_blocking(move || copy_tree(&out, &d2)).await.map_err(|e| e.to_string())?.map_err(|e| format!("instalação em {}: {e}", dir.display()))?;
+    push(&format!("instalado em {}", dir.display()));
+    let _ = tokio::fs::remove_dir_all(&stage).await;
+    set(|j| { j.exe = Some(dir.join("BlueScreen.exe")); j.step = 3; j.progress = 1.0; j.done = true; j.running = false; });
+    *LAST.lock() = None;
+    Ok(())
+}
+
 async fn check() -> Value {
+    // instalado (fora do código-fonte): a versão pronta publicada pelo GitHub Actions; sem internet ou sem Release, o git
+    if !from_source() {
+        match check_release().await {
+            Ok(v) => return v,
+            Err(e) => { log(format!("atualização: Releases indisponíveis ({e}); tentando pelo git")); if repo().is_none() { return json!({ "available": false, "reason": format!("Não deu para consultar as versões publicadas: {e}") }); } }
+        }
+    }
     let Some(repo) = repo() else { return json!({ "available": false, "reason": "Este BlueScreen não foi compilado de um repositório git (sem pasta de origem)." }) };
     if which("git").is_none() { return json!({ "available": false, "reason": "git não está no PATH." }); }
     let fetch = git(&repo, &["fetch", "--quiet", "--no-tags"], 45_000).await;
@@ -306,7 +436,13 @@ pub fn cleanup() {
 
 #[cfg(test)]
 mod tests {
-    use super::{native, packages};
+    use super::{native, packages, semver};
+    #[test]
+    fn versions() {
+        assert!(semver("v2.1.10") > semver("2.1.9"));
+        assert!(semver("2.1.0") > semver("2.0.37"));
+        assert_eq!(semver("v3.0.1"), (3, 0, 1));
+    }
     #[test]
     fn classify() {
         assert!(native("app/src/main.rs"));
