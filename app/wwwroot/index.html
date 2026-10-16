@@ -12,8 +12,42 @@
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
 <script>/* pinta o tema salvo antes de tudo (sem piscar); a Aparência (theme.js) confirma depois */
 try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStorage.getItem('bs.theme')) || 'dark'; const v = JSON.parse(localStorage.getItem('bs.themeCache') || 'null'); if (v) for (const k in v) r.style.setProperty('--' + k, v[k]); } catch {}</script>
+<style>/* tela de abertura: CSS aqui mesmo para pintar no primeiro quadro, antes do app.css, das fontes e do Monaco */
+#splash { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: var(--canvas, #0F1A2E); color: var(--canvas-fg, #9FB0CE);
+  font: 13px/1.4 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; transition: opacity .18s ease-out, visibility 0s .18s; }
+:root[data-theme="light"] #splash { background: var(--canvas, #D9E3F5); color: var(--canvas-fg, #3D4F72); }
+#splash::before { content: ""; position: absolute; inset: 0; background: radial-gradient(60% 45% at 50% 38%, color-mix(in srgb, var(--accent, #4C8DFF) 22%, transparent), transparent 70%); }
+#splash.out { opacity: 0; visibility: hidden; }
+#splash .sp { position: relative; display: flex; flex-direction: column; align-items: center; gap: 14px; animation: sp-in .35s cubic-bezier(.2,.9,.3,1.1) both; }
+#splash .sp-logo { width: 64px; height: 64px; filter: drop-shadow(0 10px 28px color-mix(in srgb, var(--accent, #4C8DFF) 55%, transparent)); animation: sp-pulse 1.6s ease-in-out infinite; }
+#splash .sp-name { font-size: 20px; font-weight: 600; letter-spacing: .01em; color: var(--fg, #E1E4EA); }
+:root[data-theme="light"] #splash .sp-name { color: var(--fg, #1C1F26); }
+#splash .sp-bar { position: relative; width: 168px; height: 3px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, currentColor 18%, transparent); }
+#splash .sp-bar::after { content: ""; position: absolute; top: 0; bottom: 0; width: 40%; border-radius: 3px; background: linear-gradient(90deg, transparent, var(--accent-2, #6CA2FF), transparent); animation: sp-run 1s ease-in-out infinite; }
+#splash .sp-step { min-height: 1.4em; font-size: 12px; opacity: .8; }
+@keyframes sp-in { from { opacity: 0; transform: translateY(6px) scale(.97); } }
+@keyframes sp-pulse { 50% { transform: scale(1.045); } }
+@keyframes sp-run { from { left: -40%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { #splash *, #splash *::after { animation: none !important; } }
+</style>
 </head>
 <body>
+<div id="splash" role="status" aria-live="polite"><div class="sp">
+  <svg class="sp-logo" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="spbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2E8BFF"/><stop offset="1" stop-color="#0B56D9"/></linearGradient></defs><path d="M16 1C4.2 1 1 4.2 1 16s3.2 15 15 15 15-3.2 15-15S27.8 1 16 1z" fill="url(#spbg)"/><circle cx="11.2" cy="11.6" r="2.3" fill="#fff"/><circle cx="11.2" cy="18.8" r="2.3" fill="#fff"/><path d="M12.4 19.6Q12.4 22.4 9.8 23.8" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/><path d="M17.6 8.6C22.6 12 22.6 20 17.6 23.4" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round"/></svg>
+  <div class="sp-name">BlueScreen</div>
+  <div class="sp-bar"></div>
+  <div class="sp-step" id="spStep">Carregando o editor…</div>
+</div></div>
+<script>/* a janela nativa nasce escondida e aparece quando esta tela já está pintada (sem clarão); o app chama
+   BS_SPLASH.step(texto) durante a abertura e BS_SPLASH.done() quando está pronto (ou some sozinha em 10 s) */
+(function () {
+  const el = document.getElementById('splash'), st = document.getElementById('spStep');
+  let off = false;
+  const done = () => { if (off) return; off = true; el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  window.BS_SPLASH = { step: (t) => { if (!off) st.textContent = t; }, done };
+  requestAnimationFrame(() => requestAnimationFrame(() => { try { if (window.ipc) window.ipc.postMessage('{"type":"shown"}'); } catch {} }));
+  setTimeout(done, 10000);
+})();</script>
 <div id="busy"></div>
 <div id="app">
   <header id="top">
@@ -133,6 +167,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="sync.js"></script>
 <script src="viewer.js"></script>
 <script src="bigview.js"></script>
+<script src="sdk.js"></script>
 <script src="lsp.js"></script>
 <script src="build.js"></script>
 <script src="terminal.js"></script>

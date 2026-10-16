@@ -11,6 +11,7 @@ mod install;
 mod lint;
 mod plugins;
 mod rpc;
+mod sdk;
 mod server;
 mod terminal;
 mod watch;
@@ -61,6 +62,8 @@ async fn take_over(port: u16, want_window: bool) -> Result<bool, String> {
 fn main() {
     #[cfg(windows)]
     unsafe { windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS); }
+    // SDKs baixados pela IDE (sdk.rs) no PATH do processo, antes de qualquer thread
+    sdk::apply_env_at_startup();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
     let env_port = |k: &str, d: u16| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);

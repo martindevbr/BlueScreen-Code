@@ -24,7 +24,7 @@ pub mod detect;
 mod runner;
 use detect::{System, Task, TaskStep};
 use runner as maven;
-pub use runner::jdks;
+pub use runner::{jdks, mavens};
 use runner::{Jdk, Maven, Step};
 
 /// Repositório Maven oferecido por um plugin.

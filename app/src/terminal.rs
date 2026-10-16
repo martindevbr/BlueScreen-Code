@@ -175,6 +175,7 @@ async fn session(mut ws: WebSocket, shell: Shell, cwd: PathBuf, cols: u16, rows:
     for a in &shell.args { cmd.arg(a.replace("{cwd}", &cwd_s)); }
     cmd.cwd(&cwd);
     for (k, v) in [("TERM", "xterm-256color"), ("COLORTERM", "truecolor"), ("TERM_PROGRAM", "BlueScreen")] { cmd.env(k, v); }
+    for (k, v) in crate::sdk::env() { cmd.env(k, v); }
     for (k, v) in &shell.env { cmd.env(k, v); }
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,

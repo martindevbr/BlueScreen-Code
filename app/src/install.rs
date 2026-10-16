@@ -67,6 +67,12 @@ pub fn describe(id: &str) -> (Option<String>, Option<String>) {
     }
 }
 
+/// sem gerenciador para instalar (npm, pip, go, dotnet...): o SDK que a IDE pode baixar para resolver
+pub fn needs_sdk(id: &str) -> Option<&'static str> {
+    if pick(id).is_some() { return None; }
+    recipes(id).iter().find_map(|r| if let Recipe::Cmd(p, ..) = r { crate::sdk::for_program(p) } else { None })
+}
+
 /// pasta onde as ferramentas baixadas ficam
 pub fn tools_dir() -> PathBuf { user_dir().join("tools") }
 /// programa baixado pela IDE: procura <prog>.exe/.cmd/.bat até 4 níveis dentro de tools/<id>
@@ -99,8 +105,8 @@ pub struct Job {
 }
 static JOBS: LazyLock<Mutex<HashMap<String, Job>>> = LazyLock::new(Default::default);
 
-fn upd(id: &str, f: impl FnOnce(&mut Job)) { if let Some(j) = JOBS.lock().get_mut(id) { f(j); } }
-fn line(id: &str, s: &str) {
+pub(crate) fn upd(id: &str, f: impl FnOnce(&mut Job)) { if let Some(j) = JOBS.lock().get_mut(id) { f(j); } }
+pub(crate) fn line(id: &str, s: &str) {
     let s = s.trim_end();
     if s.is_empty() { return; }
     upd(id, |j| { j.log.push(s.to_string()); if j.log.len() > 300 { j.log.remove(0); } if j.progress.is_none() { j.step = s.chars().take(160).collect(); } });
@@ -108,14 +114,23 @@ fn line(id: &str, s: &str) {
 
 pub fn status(id: &str) -> Value { JOBS.lock().get(id).map(|j| json!(j)).unwrap_or(Value::Null) }
 
+/// marca um trabalho como começado; Some = já estava rodando (devolve o andamento dele)
+pub(crate) fn begin(id: &str) -> Option<Value> {
+    let mut jobs = JOBS.lock();
+    if jobs.get(id).is_some_and(|j| j.state == "running") { return Some(json!(jobs[id])); }
+    jobs.insert(id.into(), Job { state: "running".into(), step: "Preparando…".into(), ..Default::default() });
+    None
+}
+/// fecha o trabalho como instalado ou com o erro
+pub(crate) fn finish(id: &str, err: Option<String>) {
+    if let Some(e) = &err { log(&format!("[install {id}] {e}")); }
+    upd(id, |j| { j.state = if err.is_some() { "error" } else { "done" }.into(); j.step = if err.is_some() { "Falhou".into() } else { "Instalado".into() }; j.progress = None; j.error = err; });
+}
+
 /// começa a instalar (se já está instalando, só devolve o andamento)
 pub fn start(id: &str) -> Result<Value, String> {
     let Some(recipe) = pick(id) else { return Err(describe(id).1.unwrap_or_else(|| "a IDE ainda não sabe instalar esta ferramenta sozinha".into())) };
-    {
-        let mut jobs = JOBS.lock();
-        if jobs.get(id).is_some_and(|j| j.state == "running") { return Ok(status_of(&jobs[id])); }
-        jobs.insert(id.into(), Job { state: "running".into(), step: "Preparando…".into(), ..Default::default() });
-    }
+    if let Some(running) = begin(id) { return Ok(running); }
     let id2 = id.to_string();
     tokio::spawn(async move {
         let r = match recipe { Recipe::Cmd(p, a, _) => run_cmd(&id2, p, a).await, Recipe::Github(repo, pat) => github(&id2, repo, pat).await, Recipe::Url(url) => from_url(&id2, url).await };
@@ -123,21 +138,19 @@ pub fn start(id: &str) -> Result<Value, String> {
         let tools = tokio::task::spawn_blocking(|| crate::rpc::tools(true)).await.ok();
         let ok = tools.as_ref().is_some_and(|t| t.iter().any(|t| t.id == id2 && t.installed));
         let err = match r { Err(e) => Some(e), Ok(()) if !ok => Some("a instalação terminou, mas o programa não foi encontrado; veja o log".into()), Ok(()) => None };
-        if let Some(e) = &err { log(&format!("[install {id2}] {e}")); }
-        upd(&id2, |j| { j.state = if err.is_some() { "error" } else { "done" }.into(); j.step = if err.is_some() { "Falhou".into() } else { "Instalado".into() }; j.progress = None; j.error = err; });
+        finish(&id2, err);
     });
     Ok(status(id))
 }
-fn status_of(j: &Job) -> Value { json!(j) }
 
-fn hidden(c: &mut tokio::process::Command) { #[cfg(windows)] c.creation_flags(0x0800_0000); let _ = c; }
+pub(crate) fn hidden(c: &mut tokio::process::Command) { #[cfg(windows)] c.creation_flags(0x0800_0000); let _ = c; }
 
-async fn run_cmd(id: &str, prog: &str, args: &[&str]) -> Result<(), String> {
+pub(crate) async fn run_cmd(id: &str, prog: &str, args: &[&str]) -> Result<(), String> {
     let exe = which(prog).ok_or_else(|| format!("{prog} não encontrado"))?;
     upd(id, |j| j.step = format!("Rodando {prog} {}…", args.join(" ")));
     line(id, &format!("> {prog} {}", args.join(" ")));
     let mut c = tokio::process::Command::new(&exe);
-    c.args(args).current_dir(dirs::home_dir().unwrap_or_else(std::env::temp_dir)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
+    c.args(args).envs(crate::sdk::env()).current_dir(dirs::home_dir().unwrap_or_else(std::env::temp_dir)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .env("PIP_DISABLE_PIP_VERSION_CHECK", "1").env("PYTHONIOENCODING", "utf-8").env("npm_config_fund", "false").env("npm_config_audit", "false").kill_on_drop(true);
     hidden(&mut c);
     let mut child = c.spawn().map_err(|e| format!("não deu para rodar {prog}: {e}"))?;
@@ -168,38 +181,67 @@ async fn from_url(id: &str, url: &str) -> Result<(), String> {
     download(id, &http, url, url.rsplit('/').next().unwrap_or("pacote"), 0).await
 }
 
-/// baixa o pacote (zip ou tar.gz) e extrai em tools/<id>
+/// baixa o pacote e extrai em tools/<id>
 async fn download(id: &str, http: &reqwest::Client, url: &str, name: &str, size: u64) -> Result<(), String> {
-    let base = tools_dir();
+    fetch(id, http, url, name, size, None, &tools_dir().join(id), false).await
+}
+
+/// soma publicada pela fonte (o download é conferido enquanto chega)
+pub(crate) enum Sum { Sha256(String), Sha512(String) }
+enum Hasher { None, S256(sha2::Sha256), S512(sha2::Sha512) }
+
+/// baixa url (zip ou tar.gz) com progresso no trabalho `job`, confere a soma e extrai em `dest`, trocando a pasta de
+/// uma vez (uma versão antiga continua funcionando se algo falhar). flatten: o pacote tem uma pasta só por fora
+/// (node-v24-win-x64/, jdk-25+7/, go/...) e o conteúdo dela é que vai para dest.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn fetch(job: &str, http: &reqwest::Client, url: &str, name: &str, size: u64, sum: Option<Sum>, dest: &Path, flatten: bool) -> Result<(), String> {
+    use sha2::Digest;
+    let base = dest.parent().ok_or("pasta de destino inválida")?.to_path_buf();
+    let leaf = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     tokio::fs::create_dir_all(&base).await.map_err(|e| e.to_string())?;
-    let zip = base.join(format!("{id}.download"));
+    let zip = base.join(format!("{leaf}.download"));
     // download em blocos, com progresso
     let resp = http.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("download: {e}"))?;
     let total = resp.content_length().unwrap_or(size).max(1);
     let mut f = tokio::fs::File::create(&zip).await.map_err(|e| e.to_string())?;
+    let mut h = match &sum { Some(Sum::Sha256(_)) => Hasher::S256(sha2::Sha256::new()), Some(Sum::Sha512(_)) => Hasher::S512(sha2::Sha512::new()), None => Hasher::None };
     let (mut got, mut stream) = (0u64, resp.bytes_stream());
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("download: {e}"))?;
         f.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        match &mut h { Hasher::S256(x) => x.update(&chunk), Hasher::S512(x) => x.update(&chunk), Hasher::None => {} }
         got += chunk.len() as u64;
         let p = got as f64 / total as f64;
-        upd(id, |j| { j.progress = Some(p.min(1.0)); j.step = format!("Baixando {name}… {:.1} de {:.1} MB", got as f64 / 1048576.0, total as f64 / 1048576.0); });
+        upd(job, |j| { j.progress = Some(p.min(1.0)); j.step = format!("Baixando {name}… {:.1} de {:.1} MB", got as f64 / 1048576.0, total as f64 / 1048576.0); });
     }
     f.flush().await.map_err(|e| e.to_string())?;
     drop(f);
-    // extrai ao lado e troca a pasta de uma vez (uma versão antiga continua funcionando se algo falhar)
-    upd(id, |j| { j.progress = None; j.step = "Extraindo…".into(); });
-    let (dest, tmp) = (base.join(id), base.join(format!("{id}.new")));
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let (want, have) = match (sum, h) { (Some(Sum::Sha256(w)), Hasher::S256(x)) => (w, hex(&x.finalize())), (Some(Sum::Sha512(w)), Hasher::S512(x)) => (w, hex(&x.finalize())), _ => (String::new(), String::new()) };
+    if !want.is_empty() {
+        if !want.trim().eq_ignore_ascii_case(&have) { let _ = tokio::fs::remove_file(&zip).await; return Err(format!("o arquivo baixado não confere com a soma publicada (esperado {}, veio {have})", want.trim())); }
+        line(job, "Soma conferida");
+    }
+    upd(job, |j| { j.progress = None; j.step = "Extraindo…".into(); });
+    let tmp = base.join(format!("{leaf}.new"));
     let _ = tokio::fs::remove_dir_all(&tmp).await;
     tokio::fs::create_dir_all(&tmp).await.map_err(|e| e.to_string())?;
+    // o tar do Windows (System32) extrai zip e tar.gz
     let mut c = tokio::process::Command::new("tar");
     c.arg("-xf").arg(&zip).arg("-C").arg(&tmp).stdout(Stdio::null()).stderr(Stdio::piped());
     hidden(&mut c);
     let out = c.output().await.map_err(|e| format!("tar: {e}"))?;
     let _ = tokio::fs::remove_file(&zip).await;
-    if !out.status.success() { return Err(format!("não deu para extrair: {}", String::from_utf8_lossy(&out.stderr).trim())); }
-    let _ = tokio::fs::remove_dir_all(&dest).await;
-    tokio::fs::rename(&tmp, &dest).await.map_err(|e| format!("não deu para trocar a pasta (o servidor antigo está aberto?): {e}"))?;
-    line(id, &format!("Instalado em {}", dest.display()));
+    if !out.status.success() { let _ = tokio::fs::remove_dir_all(&tmp).await; return Err(format!("não deu para extrair: {}", String::from_utf8_lossy(&out.stderr).trim())); }
+    let mut src = tmp.clone();
+    if flatten {
+        let ents: Vec<_> = std::fs::read_dir(&tmp).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+        if let [one] = ents.as_slice() && one.is_dir() { src = one.clone(); }
+    }
+    let _ = tokio::fs::remove_dir_all(dest).await;
+    let moved = tokio::fs::rename(&src, dest).await;
+    if src != tmp { let _ = tokio::fs::remove_dir_all(&tmp).await; }
+    moved.map_err(|e| format!("não deu para trocar a pasta (algum programa dela está aberto?): {e}"))?;
+    line(job, &format!("Instalado em {}", dest.display()));
     Ok(())
 }

@@ -66,7 +66,7 @@ function renderBuild() {
   const group = (sy) => {
     const ts = i.tasks.filter(t => t.system === sy.id && match(t)); if (!ts.length) return '';
     const fold = BC.fold.has(sy.id) && !q;
-    return `<div class="bsys ${fold ? 'fold' : ''} ${sy.available ? '' : 'missing'}" data-sys="${esc(sy.id)}" title="${esc(sy.file || '')}"><svg class="i arr" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="nm">${esc(sy.name)}</span><span class="fl">${esc(sy.file || '')}</span>${sy.available ? '' : `<span class="tag warn" title="${esc(sy.note || sy.tool + ' não encontrado no PATH')}">sem ${esc(sy.tool || 'ferramenta')}</span>`}<span class="cnt">${ts.length}</span></div>${fold ? '' : ts.map(task).join('')}`;
+    return `<div class="bsys ${fold ? 'fold' : ''} ${sy.available ? '' : 'missing'}" data-sys="${esc(sy.id)}" title="${esc(sy.file || '')}"><svg class="i arr" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg><span class="nm">${esc(sy.name)}</span><span class="fl">${esc(sy.file || '')}</span>${sy.available ? '' : bs.sdk && bs.sdk.forProgram(sy.tool) ? `<span class="tag warn link" data-sdk="${esc(bs.sdk.forProgram(sy.tool))}" title="${esc((sy.note || sy.tool + ' não encontrado no PATH') + '. Clique para baixar pela IDE.')}">sem ${esc(sy.tool)} · baixar</span>` : `<span class="tag warn" title="${esc(sy.note || sy.tool + ' não encontrado no PATH')}">sem ${esc(sy.tool || 'ferramenta')}</span>`}<span class="cnt">${ts.length}</span></div>${fold ? '' : ts.map(task).join('')}`;
   };
   const systems = i.systems || [];
   const canFile = S.active && S.active.project === S.project.path;
@@ -80,8 +80,8 @@ function renderBuild() {
     ${i.aggregator ? `<div class="bcmd"><span>mvn</span><input id="bcCmd" placeholder="-f ${esc(i.aggregator)} clean install" spellcheck="false" value="${esc(p.cmd || '')}"><button class="icon-btn" id="bcCmdGo" title="Rodar (Enter)">${PLAY}</button></div>` : ''}` : ''}
     ${i.aggregator ? `<div class="bsec">Ambiente</div>
     <div class="bcfg">
-      <label>Maven<select id="bcMvn">${i.mavens.map(m => `<option value="${esc(m.home)}" ${m.home === mvnSel ? 'selected' : ''}>${esc(m.version)} · ${esc(m.home)}</option>`).join('') || '<option>nenhum encontrado</option>'}</select></label>
-      <label>JDK<select id="bcJdk">${i.jdks.map(j => `<option value="${esc(j.home)}" ${j.home === jdkSel ? 'selected' : ''}>${j.major || '?'} · ${esc(j.name)}</option>`).join('') || '<option>nenhum encontrado</option>'}</select></label>
+      <label>Maven<span class="bcfg-l"><select id="bcMvn">${i.mavens.map(m => `<option value="${esc(m.home)}" ${m.home === mvnSel ? 'selected' : ''}>${esc(m.version)} · ${esc(m.home)}</option>`).join('') || '<option>nenhum encontrado</option>'}</select><button class="chip" data-sdk="maven" title="Baixar outra versão do Maven">Baixar…</button></span></label>
+      <label>JDK<span class="bcfg-l"><select id="bcJdk">${i.jdks.map(j => `<option value="${esc(j.home)}" ${j.home === jdkSel ? 'selected' : ''}>${j.major || '?'} · ${esc(j.name)}</option>`).join('') || '<option>nenhum encontrado</option>'}</select><button class="chip" data-sdk="jdk" title="Baixar um JDK (Temurin, Microsoft, Corretto, Zulu, GraalVM...)">Baixar…</button></span></label>
       <label>Repositório<select id="bcRepo">${repos.map(r => `<option value="${esc(r.id)}" ${r.id === repoSel ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}<option value="user" ${repoSel === 'user' ? 'selected' : ''}>settings.xml do usuário</option></select></label>
       <label class="chk"><input type="checkbox" id="bcOff" ${p.offline ? 'checked' : ''}>Offline (-o): só o que já está no ~/.m2</label>
     </div>` : ''}
@@ -96,6 +96,7 @@ function renderBuild() {
   $('#bcRepo')?.addEventListener('change', (e) => bcSet('repo', e.target.value));
   $('#bcOff')?.addEventListener('change', (e) => bcSet('offline', e.target.checked));
   body.querySelectorAll('[data-run]').forEach(el => el.onclick = () => bcOpenLocal(el.dataset.run));
+  body.querySelectorAll('[data-sdk]').forEach(el => el.onclick = (e) => { e.stopPropagation(); bs.sdk && bs.sdk.open(el.dataset.sdk); });
   bs.hooks.run('build:render', body, i); // plugins acrescentam seções e avisos
 }
 function bcSelected() {
@@ -287,6 +288,7 @@ bs.actions.add([
   { label: 'Executar o arquivo aberto', k: 'Ctrl+Shift+F10', run: () => bcRunFile(), icon: PLAY },
   { label: 'Janela Build', k: 'Alt+6', run: () => openTool('build'), icon: HAMMER },
 ]);
+bs.hooks.on('sdk:installed', () => { if (BC.info) bcLoadInfo(true); });
 bs.hooks.on('project:select', () => { BC.info = null; BC.infoFor = null; BC.runs = []; BC.last = null; });
 bs.build = {
   info: () => (BC.info && S.project && BC.infoFor === S.project.path ? BC.info : null),
@@ -295,6 +297,7 @@ bs.build = {
   showLog: bcShowLog,
   current: () => BC.run,
   render: () => { if (S.tool === 'build') renderBuild(); },
+  reload: () => { if (BC.info) bcLoadInfo(true); },
   icon: HAMMER,
 };
 })(window.BS);

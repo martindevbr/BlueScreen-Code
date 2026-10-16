@@ -34,7 +34,7 @@ pub fn mavens() -> Vec<Maven> {
     let mut cands: Vec<PathBuf> = vec![];
     for k in ["MAVEN_HOME", "M2_HOME"] { if let Ok(v) = std::env::var(k) { if !v.is_empty() { cands.push(PathBuf::from(v)); } } }
     let re = Regex::new(r"(?i)^apache-maven-\d").unwrap();
-    for base in [home.join("Tools"), home.join("tools"), PathBuf::from("C:\\"), PathBuf::from("C:\\Program Files"), PathBuf::from("C:\\tools"), home.clone()] {
+    for base in [crate::sdk::root("maven"), home.join("Tools"), home.join("tools"), PathBuf::from("C:\\"), PathBuf::from("C:\\Program Files"), PathBuf::from("C:\\tools"), home.clone()] {
         cands.extend(glob_dirs(&base, &re));
     }
     let ver_re = Regex::new(r"(?i)apache-maven-([\d.]+)").unwrap();
@@ -185,7 +185,7 @@ fn flush(r: &RunRef) { let mut r = r.lock(); if !r.tail.is_empty() { let t = std
 
 async fn exec(r: &RunRef, cmd: &str, args: &[String], cwd: &Path, env: &[(String, String)]) -> i32 {
     let mut c = tokio::process::Command::new(cmd);
-    c.args(args).current_dir(cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    c.args(args).envs(crate::sdk::env()).current_dir(cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
     for (k, v) in env { c.env(k, v); }
     #[cfg(windows)]
     c.creation_flags(0x0800_0000);

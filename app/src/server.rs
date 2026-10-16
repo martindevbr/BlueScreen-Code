@@ -320,6 +320,33 @@ fn core_routes() -> HashMap<String, RouteFn> {
         if r.is_post() { return ok(crate::install::start(&id).map_err(|e| fail(e, 400))?); }
         ok(crate::install::status(&id))
     }));
+    // SDKs e runtimes baixados pela IDE (JDK, Node.js, Python, Go, .NET...; ver sdk.rs)
+    add("sdk/list", route_fn(|r| async move {
+        r.local_only()?;
+        ok(blocking(crate::sdk::list).await?)
+    }));
+    add("sdk/versions", route_fn(|r| async move {
+        r.local_only()?;
+        let kind = r.q_or("kind", "").to_string();
+        let v = crate::sdk::versions(&kind, r.q_or("fresh", "") == "1").await.map_err(|e| fail(e, 502))?;
+        ok(json!({ "pkgs": v }))
+    }));
+    // POST começa a baixar; GET devolve o andamento (o mesmo formato das instalações de servidores de linguagem)
+    add("sdk/install", route_fn(|r| async move {
+        r.local_only()?;
+        if r.is_post() { return ok(crate::sdk::install(r.q_or("kind", ""), r.q_or("id", "")).map_err(|e| fail(e, 400))?); }
+        ok(crate::install::status(r.q_or("job", "")))
+    }));
+    add("sdk/remove", route_fn(|r| async move {
+        r.local_only()?;
+        crate::sdk::remove(r.q_or("kind", ""), r.q_or("path", "")).await.map_err(|e| fail(e, 400))?;
+        ok(json!({ "ok": true }))
+    }));
+    add("sdk/default", route_fn(|r| async move {
+        r.local_only()?;
+        crate::sdk::set_default(r.q_or("kind", ""), r.q_or("path", "")).map_err(|e| fail(e, 400))?;
+        ok(json!({ "ok": true }))
+    }));
     // preferências da interface (aparência, predefinições) em ~/.bluescreen/settings.json
     add("settings", route_fn(|r| async move {
         let file = user_dir().join("settings.json");

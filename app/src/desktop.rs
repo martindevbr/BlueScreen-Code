@@ -11,7 +11,7 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::{Fullscreen, Icon, Window, WindowBuilder};
 use wry::{NewWindowResponse, WebContext, WebViewBuilder};
 
-enum Ev { Activate, Ipc(String), Title(String) }
+enum Ev { Activate, Ipc(String), Title(String), Show }
 
 fn state_file() -> PathBuf { user_dir().join("window.json") }
 
@@ -65,7 +65,9 @@ pub fn run(url: String, devtools: bool) -> ! {
     let mut welcome = saved["welcome"].as_bool().unwrap_or(false);
     let (w, h) = if welcome { WELCOME } else { (saved["w"].as_f64().unwrap_or(1500.0).max(640.0), saved["h"].as_f64().unwrap_or(920.0).max(420.0)) };
     let mut wb = WindowBuilder::new().with_title("BlueScreen").with_inner_size(LogicalSize::new(w, h)).with_min_inner_size(LogicalSize::new(640.0, 420.0))
-        .with_maximized(!welcome && saved["max"].as_bool().unwrap_or(false)).with_visible(!welcome)
+        // nasce escondida: aparece quando a página já pintou a tela de abertura (mensagem "shown"), sem o clarão
+        // da janela vazia enquanto o WebView2 sobe
+        .with_maximized(!welcome && saved["max"].as_bool().unwrap_or(false)).with_visible(false)
         // sem a barra de título do Windows: a barra de cima do BlueScreen faz esse papel (arrastar, botões, bordas)
         .with_decorations(false);
     if let (false, Some(x), Some(y)) = (welcome, saved["x"].as_i64(), saved["y"].as_i64()) { wb = wb.with_position(PhysicalPosition::new(x as i32, y as i32)); }
@@ -77,7 +79,9 @@ pub fn run(url: String, devtools: bool) -> ! {
         wb = wb.with_undecorated_shadow(true);
     }
     let window = wb.build(&event_loop).expect("janela");
-    if welcome { center(&window, WELCOME.0, WELCOME.1); window.set_visible(true); }
+    if welcome { center(&window, WELCOME.0, WELCOME.1); }
+    // se a página demorar (WebView2 lento na primeira vez), a janela aparece assim mesmo
+    { let p = proxy.clone(); std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(1500)); let _ = p.send_event(Ev::Show); }); }
     let dark = saved["dark"].as_bool().unwrap_or(true);
     paint_titlebar(&window, dark, colorref(saved["caption"].as_str().unwrap_or(if dark { "#0F1A2E" } else { "#D9E3F5" })));
 
@@ -132,10 +136,12 @@ pub fn run(url: String, devtools: bool) -> ! {
                 // sobe por cima das outras janelas mesmo se o Windows negar o foco
                 window.set_always_on_top(true); window.set_always_on_top(false); window.set_focus();
             }
+            Event::UserEvent(Ev::Show) => if !window.is_visible() { window.set_visible(true); window.set_focus(); },
             Event::UserEvent(Ev::Title(t)) => window.set_title(&t),
             Event::UserEvent(Ev::Ipc(msg)) => {
                 let m: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
                 match m["type"].as_str() {
+                    Some("shown") => if !window.is_visible() { window.set_visible(true); window.set_focus(); },
                     Some("theme") => {
                         dark = m["dark"].as_bool().unwrap_or(true);
                         if let Some(c) = m["caption"].as_str() { caption = c.to_string(); }

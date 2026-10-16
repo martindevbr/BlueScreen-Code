@@ -38,6 +38,9 @@ pub struct Tool {
     #[serde(skip_serializing_if = "Option::is_none")] pub auto: Option<String>,
     /// o que falta para a IDE conseguir instalar (ex.: "precisa de Node.js (npm) instalado")
     #[serde(skip_serializing_if = "Option::is_none")] pub needs: Option<String>,
+    /// SDK que a IDE pode baixar para resolver o que falta (node, python, jdk...; ver sdk.rs) e a versão mínima
+    #[serde(skip_serializing_if = "Option::is_none")] pub sdk: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub sdk_min: Option<u32>,
 }
 
 struct Def { id: &'static str, kind: &'static str, name: &'static str, langs: &'static [&'static str], progs: &'static [&'static str], args: &'static [&'static str], install: &'static str, tcp: bool }
@@ -149,10 +152,12 @@ fn jdtls_java_min(home: &Path) -> u32 {
 /// o Java mais novo que sirva ao jdtls: os JDKs conhecidos (JAVA_HOME, Program Files, ~/.jdks), depois o java do PATH
 fn java_for_jdtls(min: u32) -> Option<PathBuf> {
     let exe = if cfg!(windows) { "java.exe" } else { "java" };
-    let mut jdks = crate::build::jdks(); jdks.sort_by(|a, b| b.major.cmp(&a.major));
+    let mut jdks = crate::build::jdks(); jdks.sort_by_key(|j| std::cmp::Reverse(j.major));
     jdks.into_iter().filter(|j| j.major >= min).map(|j| Path::new(&j.home).join("bin").join(exe)).find(|p| p.is_file())
         .or_else(|| which("java").filter(|p| java_major(p) >= min))
 }
+/// Java mínimo do jdtls: o do instalado ou, sem ele, o que o pacote atual pede
+fn jdtls_min() -> u32 { jdtls_home().as_deref().map(jdtls_java_min).unwrap_or(25) }
 /// (comando, argumentos) do jdtls, ou o que falta (texto vazio = não instalado)
 fn jdtls() -> Result<(PathBuf, Vec<String>), String> {
     let home = jdtls_home();
@@ -178,8 +183,10 @@ pub fn detect() -> Vec<Tool> {
         if d.id == "jdtls" {
             let r = jdtls();
             let (auto, needs) = match &r { Ok(_) => (None, None), Err(e) if !e.is_empty() => (None, Some(e.clone())), Err(_) => crate::install::describe(d.id) };
+            // falta Java: a IDE baixa um JDK novo o bastante (sdk.rs)
+            let (sdk, sdk_min) = match &r { Err(e) if !e.is_empty() => (Some("jdk"), Some(jdtls_min())), _ => (None, None) };
             let (command, args) = r.map(|(j, a)| (j.to_string_lossy().into_owned(), a)).unwrap_or_default();
-            return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: !command.is_empty(), command, args, install: d.install.into(), tcp: false, auto, needs };
+            return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: !command.is_empty(), command, args, install: d.install.into(), tcp: false, auto, needs, sdk, sdk_min };
         }
         // baixada pela IDE (~/.bluescreen/tools/<id>) primeiro, depois o PATH
         let found = d.progs.iter().find_map(|p| crate::install::local(d.id, p).or_else(|| which(p).filter(|w| extra_check(d.id, w))));
@@ -188,6 +195,7 @@ pub fn detect() -> Vec<Tool> {
             id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(),
             command: found.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
             args: d.args.iter().map(|s| s.to_string()).collect(), install: d.install.into(), tcp: d.tcp, installed: found.is_some(), auto, needs,
+            sdk: if found.is_none() { crate::install::needs_sdk(d.id) } else { None }, sdk_min: None,
         }
     }).collect();
     // ~/.bluescreen/tools.json: ferramentas do usuário (mesmo id troca a de fábrica)
@@ -201,7 +209,7 @@ pub fn detect() -> Vec<Tool> {
                 langs: v["langs"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
                 command: prog.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
                 args: v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
-                install: v["install"].as_str().unwrap_or("").into(), tcp: v["tcp"].as_bool().unwrap_or(false), installed: prog.is_some(), auto: None, needs: None,
+                install: v["install"].as_str().unwrap_or("").into(), tcp: v["tcp"].as_bool().unwrap_or(false), installed: prog.is_some(), auto: None, needs: None, sdk: None, sdk_min: None,
             };
             out.retain(|x| x.id != t.id); out.insert(0, t);
         }
@@ -244,7 +252,7 @@ async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
     let data = user_dir().join("lsp-data").join(format!("{}-{:x}", tool.id, root.to_string_lossy().bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64))));
     let args: Vec<String> = tool.args.iter().map(|a| a.replace("{port}", &port.to_string()).replace("{data}", &data.to_string_lossy()).replace("{tools}", &tools_dir().to_string_lossy()).replace("{root}", &root.to_string_lossy())).collect();
     let mut cmd = tokio::process::Command::new(&tool.command);
-    cmd.args(&args).current_dir(&root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    cmd.args(&args).envs(crate::sdk::env()).current_dir(&root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(windows)] cmd.creation_flags(0x0800_0000);
     let mut child = match cmd.spawn() {
         Ok(c) => c,

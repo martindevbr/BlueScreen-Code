@@ -71,7 +71,7 @@ pub fn which(prog: &str) -> Option<PathBuf> {
         let extra = [dirs::data_dir().map(|d| d.join("npm")), dirs::home_dir().map(|h| h.join("go").join("bin")), dirs::home_dir().map(|h| h.join(".dotnet").join("tools")), dirs::home_dir().map(|h| h.join(".cargo").join("bin")), scoop.map(|s| s.join("shims"))];
         // e o PATH atual do Windows (registro): o que você pôs no PATH depois de abrir a IDE
         let reg = REG_PATH.lock().clone().unwrap_or_default();
-        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(extra.into_iter().flatten()).chain(reg).find_map(|d| {
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(crate::sdk::path_dirs()).chain(extra.into_iter().flatten()).chain(reg).find_map(|d| {
             exts.iter().map(|e| d.join(format!("{prog}{e}"))).find(|c| c.is_file() && (cfg!(not(windows)) || c.extension().is_some()))
         })
     };

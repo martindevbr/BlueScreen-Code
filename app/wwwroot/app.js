@@ -114,22 +114,28 @@ const LANG = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jav
 const langOf = (f) => { const n = f.toLowerCase(); if (n.endsWith('dockerfile')) return 'dockerfile'; return LANG[n.split('.').pop()] || 'plaintext'; };
 
 // ===== Boot =====
+const splash = (t) => { if (window.BS_SPLASH) t ? BS_SPLASH.step(t) : BS_SPLASH.done(); };
 async function boot() {
+  splash('Conectando…');
   const sess = await fetch('/api/session').then(r => r.json());
   S.remote = !!sess.remote;
-  if (sess.remote && !sess.authed) { showLogin(); return; }
-  await start();
+  if (sess.remote && !sess.authed) { splash(); showLogin(); return; }
+  try { await start(); } finally { splash(); }
 }
 async function start() {
   const cfg = await api('config');
   if (!S.root) S.root = cfg.root;
   S.net = cfg.network; renderNet(); BS.version = cfg.version;
+  splash('Carregando plugins…');
   await BS.plugins.load(cfg.plugins); // plugins antes de tudo: eles registram painéis, atalhos e cards
   const reopen = store.get('reopenTool', null);
   if (reopen) { store.set('reopenTool', null); if (BS.tools.get(reopen)) S.tool = reopen; }
   renderStrip();
-  await loadProjects();
+  splash('Lendo os projetos…');
+  // a abertura não espera o resumo Git de cada projeto: ele chega depois e atualiza a lista
+  await loadProjects(false);
   const lastProj = store.get('project', null);
+  if (lastProj) splash('Abrindo ' + lastProj.split(/[\\/]/).pop() + '…');
   if (S.project) { /* usuário já escolheu enquanto carregava */ }
   else if (lastProj && S.projects.find(p => p.path === lastProj)) await selectProject(lastProj);
   else if (lastProj && S.outside.has(lastProj)) await openProject(lastProj);
@@ -145,7 +151,7 @@ $('#loginBtn').onclick = async () => {
 $('#loginPin').addEventListener('keydown', e => e.key === 'Enter' && $('#loginBtn').click());
 
 // ===== Projetos =====
-async function loadProjects() {
+async function loadProjects(waitSummaries = true) {
   try { const r = await api('projects', { root: S.root }); S.root = r.root; S.projects = r.projects; store.set('root', S.root); }
   catch (e) { toast(e.message); S.projects = []; }
   // projetos abertos antes de outras pastas (Abrir… / Novo projeto) continuam nos recentes
@@ -156,7 +162,8 @@ async function loadProjects() {
   const queue = [...S.projects, ...S.outside.values()].filter(p => p.vcs);
   renderHome();
   const worker = async () => { while (queue.length) { const p = queue.shift(); try { p.summary = await api('summary', { project: p.path }); } catch { p.summary = null; } if (S.tool === 'project') renderProjectRows(); renderHome(); } };
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  const all = Promise.all([worker(), worker(), worker(), worker()]);
+  if (waitSummaries) await all;
 }
 // Abrir um projeto: mostra a árvore e o resumo. Nada de diff ou commit aberto sozinho;
 // isso só acontece quando o usuário pede (Alterações, Histórico ou menu de contexto).

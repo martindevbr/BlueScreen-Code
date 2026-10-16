@@ -523,10 +523,11 @@ function lsNotify(items, o = {}) {
   el.setAttribute('role', 'alertdialog'); el.setAttribute('aria-modal', 'true');
   el.innerHTML = `<div class="nt-hd"><span class="nt-ic">!</span><b>${esc(o.title || 'Análise de código não instalada')}</b><button class="icon-btn nt-x" title="Fechar">×</button></div>`
     + (o.start ? '' : `<p class="nt-tx">Instale para ter erros, autocompletar e navegação em <b>${esc(list)}</b>.</p>`)
-    + items.map((x, i) => `<div class="nt-row" data-i="${i}"><div class="nt-nm"><b>${esc(x.tool.name)}</b><small>${esc(x.tool.auto ? 'instala com ' + x.tool.auto : x.tool.needs || x.tool.install)}</small></div>`
-      + `${x.tool.auto ? '<button class="chip primary" data-a="go">Instalar</button>' : `<button class="chip" data-a="copy" title="${esc(x.tool.install)}">Copiar comando</button><button class="chip" data-a="recheck" title="Procura de novo (o PATH atual do Windows, sem reiniciar a IDE)">Já instalei</button>`}`
+    + items.map((x, i) => `<div class="nt-row" data-i="${i}"><div class="nt-nm"><b>${esc(x.tool.name)}</b><small>${esc(lsHow(x.tool))}</small></div>`
+      + `${x.tool.auto || lsSdk(x.tool) ? '<button class="chip primary" data-a="go">Instalar</button>' : `<button class="chip" data-a="copy" title="${esc(x.tool.install)}">Copiar comando</button><button class="chip" data-a="recheck" title="Procura de novo (o PATH atual do Windows, sem reiniciar a IDE)">Já instalei</button>`}`
+      + `${lsSdk(x.tool) ? `<a class="nt-alt" data-a="sdk" title="Escolher a versão e o fornecedor">outra versão…</a>` : ''}`
       + `<div class="nt-prog" hidden><div class="nt-bar"><i></i></div><span class="nt-step"></span><a data-a="log">log</a></div><pre class="nt-log" hidden></pre></div>`).join('')
-    + (o.start ? '' : `<div class="nt-ft">${items.filter(x => x.tool.auto).length > 1 ? '<button class="chip primary" data-a="all">Instalar todos</button>' : ''}<span class="spacer"></span><button class="chip" data-a="later">Agora não</button>${o.proj ? '<button class="chip" data-a="never">Não perguntar neste projeto</button>' : ''}</div>`);
+    + (o.start ? '' : `<div class="nt-ft">${items.filter(x => x.tool.auto || lsSdk(x.tool)).length > 1 ? '<button class="chip primary" data-a="all">Instalar todos</button>' : ''}<span class="spacer"></span><button class="chip" data-a="later">Agora não</button>${o.proj ? '<button class="chip" data-a="never">Não perguntar neste projeto</button>' : ''}</div>`);
   host.appendChild(el);
   const close = () => {
     const last = host.querySelectorAll('.bs-notif:not(.out)').length <= 1;
@@ -539,9 +540,10 @@ function lsNotify(items, o = {}) {
   el.querySelector('[data-a="later"]')?.addEventListener('click', close);
   el.querySelector('[data-a="never"]')?.addEventListener('click', () => { store.set('lspAsk:' + o.proj, false); close(); toast('Não vou mais perguntar neste projeto. Dá para instalar pelo item de análise na barra de status.'); });
   const rows = [...el.querySelectorAll('.nt-row')];
-  const run = (i) => lsInstallRow(items[i].tool, rows[i], () => { if (items.every((x, k) => rows[k].dataset.st === 'done' || !x.tool.auto)) setTimeout(close, 3500); });
+  const run = (i) => lsInstallRow(items[i].tool, rows[i], () => { if (items.every((x, k) => rows[k].dataset.st === 'done' || !(x.tool.auto || lsSdk(x.tool)))) setTimeout(close, 3500); }, (t) => { items[i].tool = t; });
   rows.forEach((r, i) => {
     r.querySelector('[data-a="go"]')?.addEventListener('click', () => run(i));
+    r.querySelector('[data-a="sdk"]')?.addEventListener('click', () => bs.sdk.open(lsSdk(items[i].tool)));
     r.querySelector('[data-a="copy"]')?.addEventListener('click', () => { copyText(items[i].tool.install); toast('Comando copiado'); });
     r.querySelector('[data-a="recheck"]')?.addEventListener('click', async () => {
       await lsTools(true);
@@ -554,15 +556,36 @@ function lsNotify(items, o = {}) {
     });
     r.querySelector('[data-a="log"]').onclick = () => { const l = r.querySelector('.nt-log'); l.hidden = !l.hidden; };
   });
-  el.querySelector('[data-a="all"]')?.addEventListener('click', () => rows.forEach((r, i) => { if (items[i].tool.auto && !r.dataset.st) run(i); }));
-  if (o.start && items[0].tool.auto) run(0);
+  el.querySelector('[data-a="all"]')?.addEventListener('click', () => rows.forEach((r, i) => { if ((items[i].tool.auto || lsSdk(items[i].tool)) && !r.dataset.st) run(i); }));
+  if (o.start && (items[0].tool.auto || lsSdk(items[0].tool))) run(0);
 }
-// instala uma ferramenta mostrando o andamento na linha do cartão
-async function lsInstallRow(tool, row, after) {
+// o SDK que a IDE baixa para conseguir instalar a ferramenta (Node.js para o npm, Java 25 para o jdtls...)
+const lsSdk = (tool) => (!tool.installed && tool.sdk && bs.sdk ? tool.sdk : null);
+function lsHow(tool) {
+  if (tool.auto) return 'instala com ' + tool.auto;
+  const k = lsSdk(tool);
+  if (k) return `baixa ${bs.sdk.name(k)}${tool.sdk_min ? ' ' + tool.sdk_min + '+' : ''} e instala` + (tool.needs ? ` (${tool.needs})` : '');
+  return tool.needs || tool.install;
+}
+// instala uma ferramenta mostrando o andamento na linha do cartão; sem o gerenciador (npm, pip, Java...), baixa
+// antes o SDK pela IDE e segue. onTool: a ferramenta como ficou depois do SDK (o cartão guarda para os botões)
+async function lsInstallRow(tool, row, after, onTool) {
   if (row.dataset.st === 'running' || row.dataset.st === 'done') return;
   row.dataset.st = 'running';
   const btn = row.querySelector('[data-a="go"]'), prog = row.querySelector('.nt-prog'), bar = row.querySelector('.nt-bar'), fill = bar.querySelector('i'), step = row.querySelector('.nt-step'), log = row.querySelector('.nt-log');
   if (btn) btn.hidden = true; prog.hidden = false; row.classList.remove('err');
+  const sdk = lsSdk(tool);
+  if (sdk) {
+    const show = (j) => { bar.classList.toggle('indet', j.progress == null); fill.style.width = j.progress == null ? '' : Math.round(j.progress * 100) + '%'; if (j.step) step.textContent = j.step; if (j.log) log.textContent = j.log.join('\n'); };
+    try { await bs.sdk.quick(sdk, { min: tool.sdk_min, onStep: show }); }
+    catch (e) { row.dataset.st = ''; row.classList.add('err'); bar.classList.remove('indet'); step.textContent = e.message; if (e.log) log.textContent = e.log.join('\n'); if (btn) { btn.hidden = false; btn.textContent = 'Tentar de novo'; } after && after(); return; }
+    step.textContent = bs.sdk.name(sdk) + ' instalado. Procurando de novo…';
+    await lsTools(true);
+    const t = LS.tools.find(x => x.id === tool.id) || tool; onTool && onTool(t); tool = t;
+    if (t.installed) return lsInstallDone(t, row, bar, fill, step, after);
+    if (!t.auto) { row.dataset.st = ''; row.classList.add('err'); step.textContent = t.needs || 'o SDK foi instalado, mas ainda falta algo para esta ferramenta'; after && after(); return; }
+    fill.style.width = '0';
+  }
   let j;
   try { j = await api('rpc/install', { tool: tool.id }, { method: 'POST' }); } catch (e) { j = { state: 'error', error: e.message, log: [] }; }
   while (j && j.state === 'running') {
@@ -573,16 +596,17 @@ async function lsInstallRow(tool, row, after) {
   }
   log.textContent = (j && j.log || []).join('\n');
   bar.classList.remove('indet');
-  if (j && j.state === 'done') {
-    row.dataset.st = 'done'; fill.style.width = '100%'; step.textContent = 'Instalado. Ligando a análise…';
-    await lsTools(true);
-    S.tabs.filter(t => t.mode === 'editor').forEach(openDoc); lsStatus();
-    step.textContent = 'Instalado · análise ligada';
-    toast(`${tool.name} instalado: análise de ${tool.langs.map(l => LS_MAIN[l] || l).join(', ')} ligada`, 'ok');
-  } else {
-    row.dataset.st = ''; row.classList.add('err');
-    step.textContent = (j && j.error) || 'Falhou'; if (btn) { btn.hidden = false; btn.textContent = 'Tentar de novo'; }
-  }
+  if (j && j.state === 'done') return lsInstallDone(tool, row, bar, fill, step, after);
+  row.dataset.st = ''; row.classList.add('err');
+  step.textContent = (j && j.error) || 'Falhou'; if (btn) { btn.hidden = false; btn.textContent = 'Tentar de novo'; }
+  after && after();
+}
+
+async function lsInstallDone(tool, row, bar, fill, step, after) {
+  row.dataset.st = 'done'; bar.classList.remove('indet'); fill.style.width = '100%'; step.textContent = 'Instalado. Ligando a análise…';
+  await lsRefresh();
+  step.textContent = 'Instalado · análise ligada';
+  toast(`${tool.name} instalado: análise de ${tool.langs.map(l => LS_MAIN[l] || l).join(', ')} ligada`, 'ok');
   after && after();
 }
 
@@ -668,5 +692,7 @@ bs.actions.add([
   { label: 'Servidores de linguagem: procurar de novo', run: async () => { await lsTools(true); toast(LS.tools.filter(x => x.kind === 'lsp' && x.installed).length + ' servidores de linguagem'); } },
 ]);
 window.addEventListener('beforeunload', () => LS.clients.forEach(c => c.close()));
-bs.lsp = { tools: lsTools, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient, workspaceSymbols, install, checkProject: lsCheckProject };
+// procura de novo e liga a análise nas abas abertas (depois de instalar um servidor ou um SDK)
+async function lsRefresh() { await lsTools(true); S.tabs.filter(t => t.mode === 'editor').forEach(openDoc); lsStatus(); }
+bs.lsp = { tools: lsTools, refresh: lsRefresh, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient, workspaceSymbols, install, checkProject: lsCheckProject };
 })(window.BS);
