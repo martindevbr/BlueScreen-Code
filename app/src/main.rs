@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bigfile;
+mod deps;
 mod build;
 mod desktop;
 mod install;
@@ -14,6 +15,7 @@ mod rpc;
 mod sdk;
 mod server;
 mod terminal;
+mod update;
 mod watch;
 mod workspace;
 pub(crate) use bluescreen_sdk::{util, vcs};
@@ -35,12 +37,13 @@ fn fatal(msg: &str) -> ! {
 
 /// Porta ocupada por outro BlueScreen: se ele tem janela, só traz para a frente; senão pede para encerrar
 /// (versões antigas, em Node, não têm /api/activate) e, se não sair, finaliza o processo pelo PID.
-async fn take_over(port: u16, want_window: bool) -> Result<bool, String> {
+/// `replace`: aberto pelo atualizador (BLUESCREEN_REPLACE): a instância antiga sai mesmo tendo janela.
+async fn take_over(port: u16, want_window: bool, replace: bool) -> Result<bool, String> {
     let base = format!("http://127.0.0.1:{port}");
     let http = reqwest::Client::builder().timeout(Duration::from_secs(3)).build().map_err(|e| e.to_string())?;
     let cfg: serde_json::Value = match http.get(format!("{base}/api/config")).send().await { Ok(r) => r.json().await.unwrap_or_default(), Err(_) => Default::default() };
     if cfg.get("root").is_none() || cfg.get("network").is_none() { return Err(format!("A porta {port} está em uso por outro programa. Use BLUESCREEN_PORT para escolher outra.")); }
-    if want_window && cfg["desktop"].as_bool() == Some(true) {
+    if want_window && !replace && cfg["desktop"].as_bool() == Some(true) {
         // quem o usuário acabou de abrir pode passar o direito de ir para a frente à instância que já está aberta
         #[cfg(windows)]
         if let Some(pid) = cfg["pid"].as_u64() { unsafe { windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid as u32); } }
@@ -64,6 +67,9 @@ fn main() {
     unsafe { windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS); }
     // SDKs baixados pela IDE (sdk.rs) no PATH do processo, antes de qualquer thread
     sdk::apply_env_at_startup();
+    // reinício pedido pelo atualizador: vale só para esta instância (os terminais e plugins não herdam)
+    let replace = std::env::var_os("BLUESCREEN_REPLACE").is_some();
+    unsafe { std::env::remove_var("BLUESCREEN_REPLACE"); }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
     let env_port = |k: &str, d: u16| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
@@ -80,7 +86,7 @@ fn main() {
             Ok(l) => l,
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 log(format!("Porta {port} ocupada. Verificando se é outro BlueScreen…"));
-                match take_over(port, !headless && !web).await {
+                match take_over(port, !headless && !web, replace).await {
                     Ok(false) => { log("O BlueScreen já está aberto: trouxe a janela para a frente."); std::process::exit(0) }
                     Ok(true) => tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap_or_else(|e| fatal(&format!("Porta {port}: {e}"))),
                     Err(m) => fatal(&m),
@@ -90,6 +96,8 @@ fn main() {
         }
     });
     let _ = server::create(root.clone(), port, lan_port);
+    // sobras de uma atualização (exe/dll antigos renomeados porque estavam em uso)
+    std::thread::spawn(update::cleanup);
     let addr = format!("http://127.0.0.1:{port}");
     println!();
     log(format!("BlueScreen {} (Rust)  ▸  {addr}", server::VERSION));

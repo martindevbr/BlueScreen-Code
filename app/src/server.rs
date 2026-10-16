@@ -361,6 +361,10 @@ fn core_routes() -> HashMap<String, RouteFn> {
     }));
     // build nativo da IDE
     for (name, f) in crate::build::routes() { add(name, f); }
+    // dependências do projeto que ainda não foram baixadas (aviso no canto da tela)
+    for (name, f) in crate::deps::routes() { add(name, f); }
+    // atualização pelo repositório git de origem
+    for (name, f) in crate::update::routes() { add(name, f); }
     m
 }
 

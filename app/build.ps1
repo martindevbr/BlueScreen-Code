@@ -26,6 +26,24 @@ function Invoke-Cargo([string[]]$CargoArgs) {
   finally { if ($hasPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
 }
 
+# WebView2Loader.dll: com o Rust MSVC o loader entra estático no exe; com o Rust GNU (x86_64-pc-windows-gnu) o exe
+# importa a DLL e não abre sem ela ao lado ("WebView2Loader.dll não foi encontrado"). O webview2-com-sys deixa a DLL
+# de cada arquitetura em target\release\build\webview2-com-sys-*\out\<arq>; copia a da arquitetura do exe.
+function Copy-WebView2Loader([string]$exe, [string]$dest) {
+  $bytes = [IO.File]::ReadAllBytes((Resolve-Path $exe))
+  if ([Text.Encoding]::ASCII.GetString($bytes) -notmatch '(?i)WebView2Loader\.dll') { return }
+  # arquitetura do exe pelo cabeçalho PE (campo Machine)
+  $pe = [BitConverter]::ToInt32($bytes, 0x3C); $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+  $arch = @{ 0x8664 = 'x64'; 0x14C = 'x86'; 0xAA64 = 'arm64' }[[int]$machine]
+  if (-not $arch) { Write-Warning "Arquitetura do exe desconhecida (0x$('{0:X}' -f $machine)): copie o WebView2Loader.dll à mão."; return }
+  $dll = Get-ChildItem 'target\release\build' -Directory -Filter 'webview2-com-sys-*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Join-Path $_.FullName "out\$arch\WebView2Loader.dll" } | Where-Object { Test-Path $_ } |
+    Sort-Object { (Get-Item $_).LastWriteTime } -Descending | Select-Object -First 1
+  if (-not $dll) { Write-Error "O exe precisa do WebView2Loader.dll ($arch), mas ele não está em target\release\build."; exit 1 }
+  Copy-Item $dll $dest
+  Write-Host "WebView2Loader.dll ($arch) -> $dest (build com o Rust GNU)"
+}
+
 if ($Plugin) {
   if (Test-Path "plugins\$Plugin\Cargo.toml") { if (Invoke-Cargo @('build', '--release', '-p', "bluescreen-$Plugin")) { exit 1 } }
   Copy-Plugin $Plugin (Join-Path $Out "plugins\$Plugin")
@@ -37,6 +55,7 @@ $dist = Join-Path $Out 'BlueScreen'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item 'target\release\bluescreen.exe' (Join-Path $dist 'BlueScreen.exe')
+Copy-WebView2Loader 'target\release\bluescreen.exe' $dist
 Copy-Item -Recurse 'wwwroot' (Join-Path $dist 'wwwroot')
 Get-ChildItem 'plugins' -Directory | ForEach-Object { Copy-Plugin $_.Name (Join-Path $dist "plugins\$($_.Name)") }
 $size = (Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB

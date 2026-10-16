@@ -590,11 +590,11 @@ function renderStrip() {
 }
 function setTool(t) {
   const def = BS.tools.get(t); if (!def) return;
-  if (def.toggle) { def.toggle(); return; }
+  if (def.toggle) { if (!BS.dock || !BS.dock.claim(t)) def.toggle(); return; }
   if (S.tool === t && !$('#app').classList.contains('no-tool')) { $('#app').classList.add('no-tool'); btnState(); return; }
   $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool();
 }
-function openTool(t) { const def = BS.tools.get(t); if (!def) return; if (def.toggle) { def.toggle(true); return; } $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool(); }
+function openTool(t) { const def = BS.tools.get(t); if (!def) return; if (def.toggle) { BS.dock && BS.dock.claim(t); def.toggle(true); return; } $('#app').classList.remove('no-tool'); S.tool = t; btnState(); renderTool(); }
 function btnState() { document.querySelectorAll('#strip [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === S.tool && !$('#app').classList.contains('no-tool'))); }
 function renderTool() {
   const t = BS.tools.get(S.tool) || BS.tools.get('project'); S.tool = t.id;
@@ -748,10 +748,11 @@ function bindTree(el) {
   el.onclick = (e) => {
     const row = rowFrom(e); if (!row) return; const p = row.dataset.p;
     treeSelect(p); el.focus({ preventScroll: true });
-    if (e.target.closest('.arrow') && row.dataset.dir) treeToggle(p);
+    // pasta: todo clique abre/fecha, por mais rápido que venha; "Abrir arquivo com um clique" vale só para arquivos
+    if (row.dataset.dir) treeToggle(p);
     else if (S.singleClick) treeActivate(p);
   };
-  el.ondblclick = (e) => { const row = rowFrom(e); if (!row || e.target.closest('.arrow')) return; if (S.singleClick && !row.dataset.dir) return; treeActivate(row.dataset.p); };
+  el.ondblclick = (e) => { const row = rowFrom(e); if (!row || row.dataset.dir || S.singleClick) return; treeActivate(row.dataset.p); };
   el.oncontextmenu = (e) => {
     const row = rowFrom(e); if (!row) return; const p = row.dataset.p; treeSelect(p);
     if (!p) return projectMenu(e, S.project);
@@ -1620,7 +1621,7 @@ function normCombo(s) {
 }
 const BS = window.BS = {
   version: null, S, state: S, api, $, esc, toast, store, I, TI, treeIcon, fmtDate, ago, daysAgo, statHtml, copyText, reveal, absPath, showMenu, closeMenu,
-  openFile, openTool, setTool, renderTool, renderStrip, renderTree, renderDashboard, refreshProject, refreshAll, selectProject, revealAt, openOutside, openSearch, present, save, runLint, lintAll, quickProject,
+  openFile, openTool, setTool, renderTool, renderStrip, renderTree, renderDashboard, refreshProject, refreshAll, selectProject, revealAt, openOutside, openSearch, present, save, saveAll, runLint, lintAll, quickProject,
   get editor() { return editor; }, get diffEditor() { return diffEditor; }, get monaco() { return monaco; }, get viewer() { return viewer; },
   // painéis da barra da esquerda: { id, title, icon, key: 'Alt+5', order, render(), bottom?, toggle?() }
   tools: {
@@ -1650,7 +1651,7 @@ const BS = window.BS = {
   // resumo do projeto: card({ id, order, wide, html(), bind(el) }) e action({ label, icon, go, title })
   dashboard: { cards: [], actions: [], card(c) { BS.dashboard.cards.push(c); }, action(a) { BS.dashboard.actions.push(a); } },
   hints: [],
-  // painel na área do editor (abaixo do código, acima de Problemas), como o console de build
+  // painel na área do editor, abaixo do código: entra no dock como uma aba (ver dock.js), como o console de build
   ui: { panel(html) { $('#problems').insertAdjacentHTML('beforebegin', html); return $('#problems').previousElementSibling; } },
   plugins: {
     list: [], dirs: [], defs: new Map(),
@@ -1833,14 +1834,6 @@ function showKeys() {
 }
 $('#keysBack').onclick = (e) => { if (e.target.id === 'keysBack') $('#keysBack').hidden = true; };
 $('#btnKeys').onclick = showKeys;
-// altura do painel Problemas: arrastar a borda de cima
-$('#editor').style.setProperty('--ph', store.get('probH', 200) + 'px');
-$('#probResize').addEventListener('mousedown', (e) => {
-  e.preventDefault(); const y0 = e.clientY, h0 = $('#problems').offsetHeight; document.body.classList.add('resizing-v');
-  const move = (ev) => $('#editor').style.setProperty('--ph', Math.max(90, Math.min(innerHeight - 200, h0 + (y0 - ev.clientY))) + 'px');
-  const up = () => { document.body.classList.remove('resizing-v'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); store.set('probH', $('#problems').offsetHeight); };
-  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
-});
 
 // ===== Atalhos =====
 // Tabela única de teclas (BS.keys): o núcleo registra as suas e os plugins registram as deles (ou substituem).

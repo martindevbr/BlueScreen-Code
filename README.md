@@ -41,7 +41,9 @@ Ele não reimplementa cada linguagem. Para análise, refatoração e depuração
 
 Precisa de Windows 10 ou 11, 64 bits, com o [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/), que já vem no Windows 11.
 
-Baixe a última versão na página de releases do repositório, extraia e rode `BlueScreen.exe`. Não há instalador nem configuração: a pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
+Baixe a última versão na página de releases do repositório, extraia e rode `BlueScreen.exe`. A pasta de projetos padrão é a pasta acima do programa, e dá para trocar na tela de boas-vindas.
+
+Do código-fonte: clone o repositório e dê dois cliques em `Instalar BlueScreen.cmd`, na raiz. O instalador confere os requisitos (Rust, linker C++ e WebView2), compila, instala só para o seu usuário (sem administrador), cria os atalhos e registra o BlueScreen em Configurações › Apps, com desinstalador. Instalado assim, a IDE procura atualizações no repositório ao abrir: mudanças só na interface entram com um `git pull` e a página recarrega; mudanças no núcleo são compiladas e a IDE reinicia na versão nova.
 
 ```
 BlueScreen.exe C:\meus\projetos    # outra pasta de projetos

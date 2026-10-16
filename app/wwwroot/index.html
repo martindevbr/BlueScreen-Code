@@ -86,11 +86,16 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
     <div id="mon"><div id="welcome">
       <div class="dash" id="dash" hidden></div>
     </div></div>
+    <section id="dock" hidden>
+      <div id="dockResize" title="Arraste para ajustar a altura (duplo clique volta ao padrão)"></div>
+      <div id="dockBar"><div id="dockTabs" role="tablist" aria-label="Painéis"></div><span id="dockInk" aria-hidden="true"></span></div>
+      <div id="dockBody">
     <div id="problems" hidden>
-      <div id="probResize"></div>
-      <div class="head"><span>Problemas</span><span class="cnts" id="probCnts"></span><span class="sub" id="probSub" style="font-weight:400;color:var(--muted)"></span><span class="spacer"></span><button class="icon-btn" id="btnProbClose" title="Fechar"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+      <div class="head"><span class="ttl">Problemas</span><span class="cnts" id="probCnts"></span><span class="sub" id="probSub" style="font-weight:400;color:var(--muted)"></span><span class="spacer"></span><button class="icon-btn" id="btnProbClose" title="Fechar"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
       <div class="list" id="probList"></div>
     </div>
+      </div>
+    </section>
   </main>
 
   <footer id="status">
@@ -163,6 +168,7 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="vendor/xterm/addon-unicode11.js"></script>
 <script src="vendor/monaco/vs/loader.js"></script>
 <script src="app.js"></script>
+<script src="dock.js"></script>
 <script src="preview.js"></script>
 <script src="sync.js"></script>
 <script src="viewer.js"></script>
@@ -172,6 +178,8 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="build.js"></script>
 <script src="terminal.js"></script>
 <script src="debug.js"></script>
+<script src="deps.js"></script>
+<script src="update.js"></script>
 <script src="theme.js"></script>
 </body>
 </html>
