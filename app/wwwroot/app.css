@@ -714,3 +714,35 @@ html:not(.desktop) .wel-top { padding-right: 8px; }
 .bv-hit { position: absolute; left: 0; right: 0; height: 22px; display: flex; align-items: center; gap: 10px; padding: 0 12px; font: 12px var(--mono); cursor: pointer; white-space: pre; overflow: hidden; }
 .bv-hit:hover { background: var(--hover); } .bv-hit.on { background: rgba(76,141,255,.16); }
 .bv-hit .ln { color: var(--accent-2); min-width: 7ch; text-align: right; flex: none; } .bv-hit .tx { overflow: hidden; text-overflow: ellipsis; color: var(--fg-2); }
+
+/* ===== aviso em modal (análise de código não instalada, instalação com progresso) ===== */
+#bsNotifs { z-index: 105; flex-direction: column; align-items: center; gap: 12px; overflow: auto; }
+#bsNotifs.out { opacity: 0; transition: opacity .2s; }
+.bs-notif { width: 520px; max-width: 100%; max-height: none; overflow: visible; flex: none; padding: 20px 22px 18px; font-size: 13px; color: var(--fg); }
+.bs-notif.warn { border-top: 3px solid var(--warn); }
+.bs-notif.out { opacity: 0; transform: scale(.98); transition: opacity .2s, transform .2s; }
+.nt-hd { display: flex; align-items: center; gap: 10px; }
+.nt-hd b { flex: 1; font-size: 15px; font-weight: 600; }
+.nt-ic { width: 26px; height: 26px; border-radius: 50%; background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent); font: 700 14px/26px var(--sans, inherit); text-align: center; flex: none; }
+.nt-x { width: 26px !important; height: 26px !important; font-size: 17px; }
+.nt-tx { margin: 10px 0 12px 36px; color: var(--fg-2); line-height: 1.5; }
+.nt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 8px 0 0 36px; padding: 8px 10px; background: var(--hover); border: 1px solid var(--line); border-radius: 8px; }
+.nt-nm { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.nt-nm small { color: var(--muted); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-prog { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-2); }
+.nt-prog[hidden], .nt-log[hidden] { display: none; }
+.nt-bar { width: 110px; height: 5px; flex: none; border-radius: 3px; background: var(--line-2); overflow: hidden; position: relative; }
+.nt-bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent); border-radius: 3px; transition: width .25s; }
+.nt-bar.indet i { width: 35% !important; animation: nt-indet 1.1s ease-in-out infinite; }
+@keyframes nt-indet { from { left: -35%; } to { left: 100%; } }
+.nt-step { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nt-prog a { color: var(--accent-2); cursor: pointer; flex: none; }
+.nt-row.err .nt-step { color: var(--del); white-space: normal; }
+.nt-row[data-st="done"] .nt-bar i { background: var(--add); }
+.nt-log { flex-basis: 100%; max-height: 140px; overflow: auto; margin: 4px 0 0; padding: 6px 8px; font: 11px/1.4 var(--mono); background: var(--bg); border-radius: 4px; color: var(--fg-2); white-space: pre-wrap; }
+.nt-ft { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 16px 0 0 36px; }
+/* tipo do símbolo na busca geral */
+.se-kind { width: 16px; height: 16px; flex: none; border-radius: 4px; font: 700 10px/16px var(--mono); text-align: center; background: rgba(76,141,255,.16); color: var(--accent-2); }
+.se-kind.k-fn { background: rgba(86,168,245,.16); color: #56A8F5; } .se-kind.k-type { background: rgba(199,125,187,.18); color: #C77DBB; }
+.se-kind.k-var, .se-kind.k-const { background: rgba(227,166,58,.16); color: var(--warn); } .se-kind.k-mod { background: var(--hover); color: var(--fg-2); }
+.nt-row [hidden] { display: none !important; }

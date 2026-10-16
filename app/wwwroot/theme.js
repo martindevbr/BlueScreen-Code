@@ -82,7 +82,8 @@ function monacoTheme(t) {
     base: t.mode === 'light' ? 'vs' : 'vs-dark', inherit: true,
     rules: [it('', s.plain), it('comment', s.comment, 'italic'), it('keyword', s.keyword), it('string', s.string), it('string.escape', s.number), it('number', s.number), it('regexp', s.string),
       it('type', s.type), it('type.identifier', s.type), it('identifier', s.function), it('variable', s.function), it('variable.predefined', s.keyword), it('constant', s.number), it('predefined', s.keyword),
-      it('delimiter', s.delimiter), it('operator', s.delimiter), it('tag', s.tag), it('metatag', s.annotation), it('annotation', s.annotation), it('attribute.name', s.attr), it('attribute.value', s.string)],
+      it('delimiter', s.delimiter), it('operator', s.delimiter), it('tag', s.tag), it('metatag', s.annotation), it('annotation', s.annotation), it('attribute.name', s.attr), it('attribute.value', s.string),
+      ...(typeof semRules === 'function' ? semRules({ fn: s.function, type: s.type, field: s.attr || s.type, konst: s.number, macro: s.annotation, lifetime: s.number, kw: s.keyword }) : [])],
     colors: {
       'editor.background': u.bg, 'editor.foreground': s.plain, 'editorGutter.background': u.bg, 'minimap.background': u.bg,
       'editorLineNumber.foreground': hexM(u.muted, .7), 'editorLineNumber.activeForeground': u['fg-2'], 'editorCursor.foreground': u.fg,

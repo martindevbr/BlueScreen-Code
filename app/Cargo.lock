@@ -205,45 +205,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bluescreen-checkmarx"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "axum",
- "bluescreen-ic",
- "bluescreen-sdk",
- "bytes",
- "chrono",
- "dirs",
- "futures-util",
- "parking_lot",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
-name = "bluescreen-ic"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "axum",
- "bluescreen-sdk",
- "bytes",
- "dirs",
- "parking_lot",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
 name = "bluescreen-sdk"
 version = "2.0.0"
 dependencies = [

@@ -34,6 +34,10 @@ pub struct Tool {
     /// DAP por TCP: o processo abre {port} e a ponte conecta nele
     pub tcp: bool,
     pub installed: bool,
+    /// como a IDE instala sozinha (sem console), se der neste PC
+    #[serde(skip_serializing_if = "Option::is_none")] pub auto: Option<String>,
+    /// o que falta para a IDE conseguir instalar (ex.: "precisa de Node.js (npm) instalado")
+    #[serde(skip_serializing_if = "Option::is_none")] pub needs: Option<String>,
 }
 
 struct Def { id: &'static str, kind: &'static str, name: &'static str, langs: &'static [&'static str], progs: &'static [&'static str], args: &'static [&'static str], install: &'static str, tcp: bool }
@@ -76,7 +80,7 @@ const DEFS: &[Def] = &[
     dap("netcoredbg", "netcoredbg (.NET)", &["csharp"], &["netcoredbg"], &["--interpreter=vscode"], "scoop install netcoredbg", false),
 ];
 
-fn tools_dir() -> PathBuf { user_dir().join("tools") }
+fn tools_dir() -> PathBuf { crate::install::tools_dir() }
 
 /// debugpy não é um programa: o que precisa existir é o módulo no Python encontrado
 fn extra_check(id: &str, prog: &Path) -> bool {
@@ -87,17 +91,27 @@ fn extra_check(id: &str, prog: &Path) -> bool {
             #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
             c.status().map(|s| s.success()).unwrap_or(false)
         }
+        // atalhos do rustup em ~/.cargo/bin (rust-analyzer...) existem mesmo sem o componente instalado; aí saem na
+        // hora com "Unknown binary": só conta como instalado se responder ao --version
+        _ if prog.parent().is_some_and(|d| d.ends_with(".cargo/bin") || d.ends_with(".cargo\\bin")) => {
+            let mut c = std::process::Command::new(prog);
+            c.arg("--version").stdout(Stdio::null()).stderr(Stdio::null());
+            #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+            c.status().map(|s| s.success()).unwrap_or(false)
+        }
         _ => true,
     }
 }
 
 pub fn detect() -> Vec<Tool> {
     let mut out: Vec<Tool> = DEFS.iter().map(|d| {
-        let found = d.progs.iter().find_map(|p| which(p)).filter(|p| extra_check(d.id, p));
+        // baixada pela IDE (~/.bluescreen/tools/<id>) primeiro, depois o PATH
+        let found = d.progs.iter().find_map(|p| crate::install::local(d.id, p).or_else(|| which(p).filter(|w| extra_check(d.id, w))));
+        let (auto, needs) = if found.is_some() { (None, None) } else { crate::install::describe(d.id) };
         Tool {
             id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(),
             command: found.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-            args: d.args.iter().map(|s| s.to_string()).collect(), install: d.install.into(), tcp: d.tcp, installed: found.is_some(),
+            args: d.args.iter().map(|s| s.to_string()).collect(), install: d.install.into(), tcp: d.tcp, installed: found.is_some(), auto, needs,
         }
     }).collect();
     // ~/.bluescreen/tools.json: ferramentas do usuário (mesmo id troca a de fábrica)
@@ -111,7 +125,7 @@ pub fn detect() -> Vec<Tool> {
                 langs: v["langs"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
                 command: prog.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
                 args: v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
-                install: v["install"].as_str().unwrap_or("").into(), tcp: v["tcp"].as_bool().unwrap_or(false), installed: prog.is_some(),
+                install: v["install"].as_str().unwrap_or("").into(), tcp: v["tcp"].as_bool().unwrap_or(false), installed: prog.is_some(), auto: None, needs: None,
             };
             out.retain(|x| x.id != t.id); out.insert(0, t);
         }

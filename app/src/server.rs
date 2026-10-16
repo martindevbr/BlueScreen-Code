@@ -313,6 +313,13 @@ fn core_routes() -> HashMap<String, RouteFn> {
         let fresh = r.q_or("fresh", "") == "1";
         ok(json!({ "tools": blocking(move || crate::rpc::tools(fresh)).await?.as_ref() }))
     }));
+    // instalar um servidor de linguagem pela IDE: POST começa, GET devolve o andamento (ver install.rs)
+    add("rpc/install", route_fn(|r| async move {
+        r.local_only()?;
+        let id = r.q_or("tool", "").to_string();
+        if r.is_post() { return ok(crate::install::start(&id).map_err(|e| fail(e, 400))?); }
+        ok(crate::install::status(&id))
+    }));
     // preferências da interface (aparência, predefinições) em ~/.bluescreen/settings.json
     add("settings", route_fn(|r| async move {
         let file = user_dir().join("settings.json");

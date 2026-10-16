@@ -65,13 +65,18 @@ pub fn which(prog: &str) -> Option<PathBuf> {
             let pe = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
             std::iter::once(String::new()).chain(pe.split(';').map(|e| e.to_lowercase())).collect()
         } else { vec![String::new()] };
-        std::env::var_os("PATH").and_then(|path| std::env::split_paths(&path).find_map(|d| {
+        // PATH do processo e, depois, as pastas onde os gerenciadores põem programas globais (npm -g, go install,
+        // dotnet tool, cargo): instalado agora há pouco, o PATH desta janela ainda não sabe delas
+        let extra = [dirs::data_dir().map(|d| d.join("npm")), dirs::home_dir().map(|h| h.join("go").join("bin")), dirs::home_dir().map(|h| h.join(".dotnet").join("tools")), dirs::home_dir().map(|h| h.join(".cargo").join("bin"))];
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().chain(extra.into_iter().flatten()).find_map(|d| {
             exts.iter().map(|e| d.join(format!("{prog}{e}"))).find(|c| c.is_file() && (cfg!(not(windows)) || c.extension().is_some()))
-        }))
+        })
     };
     WHICH.lock().insert(prog.into(), found.clone());
     found
 }
+/// esquece o que já foi procurado (depois de instalar algo)
+pub fn forget_which() { WHICH.lock().clear(); }
 fn first_tool(cands: &[&str]) -> (String, bool) {
     for c in cands { if which(c).is_some() { return (c.to_string(), true); } }
     (cands[0].to_string(), false)

@@ -7,6 +7,7 @@
 mod bigfile;
 mod build;
 mod desktop;
+mod install;
 mod lint;
 mod plugins;
 mod rpc;

@@ -4,8 +4,10 @@ version = "2.0.0"
 edition = "2024"
 
 [workspace]
-# cada pasta em plugins/ com Cargo.toml é um plugin com servidor próprio (o núcleo não depende de nenhum)
-members = [".", "sdk", "plugins/*"]
+# Plugins com servidor próprio (pastas em plugins/ com Cargo.toml) entram no workspace só na hora do build.ps1:
+# um "plugins/*" fixo aqui, com a pasta sem nenhum crate, faz o cargo recusar o manifesto inteiro (e com ele o
+# cargo check, o rust-analyzer e qualquer ferramenta de Rust).
+members = [".", "sdk"]
 
 [dependencies]
 bluescreen-sdk = { path = "sdk" }

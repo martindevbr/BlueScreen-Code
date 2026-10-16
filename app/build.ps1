@@ -15,23 +15,24 @@ function Copy-Plugin([string]$id, [string]$dest) {
   Write-Host "plugin  $id  -> $dest"
 }
 
+# plugins com servidor próprio (plugins\<id>\Cargo.toml) entram no workspace só durante o cargo build: o Cargo.toml
+# fica sem "plugins/*" (vazio, o curinga faz o cargo recusar o manifesto). Cargo.toml e Cargo.lock voltam como estavam.
+function Invoke-Cargo([string[]]$CargoArgs) {
+  $hasPlugins = [bool](Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
+  $toml = Join-Path $PSScriptRoot 'Cargo.toml'; $lock = Join-Path $PSScriptRoot 'Cargo.lock'
+  $tomlText = [IO.File]::ReadAllText($toml); $lockText = [IO.File]::ReadAllText($lock)
+  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[\s*"\.",\s*"sdk"\s*\]', 'members = [".", "sdk", "plugins/*"]')) }
+  try { cargo @CargoArgs | Out-Host; return $LASTEXITCODE }
+  finally { if ($hasPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
+}
+
 if ($Plugin) {
-  if (Test-Path "plugins\$Plugin\Cargo.toml") { cargo build --release -p "bluescreen-$Plugin"; if ($LASTEXITCODE) { exit 1 } }
+  if (Test-Path "plugins\$Plugin\Cargo.toml") { if (Invoke-Cargo @('build', '--release', '-p', "bluescreen-$Plugin")) { exit 1 } }
   Copy-Plugin $Plugin (Join-Path $Out "plugins\$Plugin")
   exit 0
 }
 
-# sem plugin com servidor próprio em plugins\, o "plugins/*" do workspace não acha nada e o cargo recusa o
-# manifesto: compila sem esse item e devolve Cargo.toml e Cargo.lock como estavam
-$noPlugins = -not (Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
-$toml = Join-Path $PSScriptRoot 'Cargo.toml'; $lock = Join-Path $PSScriptRoot 'Cargo.lock'
-if ($noPlugins) {
-  $tomlText = [IO.File]::ReadAllText($toml); $lockText = [IO.File]::ReadAllText($lock)
-  [IO.File]::WriteAllText($toml, ($tomlText -replace ',\s*"plugins/\*"', ''))
-}
-try { cargo build --release --workspace; $code = $LASTEXITCODE }
-finally { if ($noPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
-if ($code) { exit 1 }
+if (Invoke-Cargo @('build', '--release', '--workspace')) { exit 1 }
 $dist = Join-Path $Out 'BlueScreen'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null

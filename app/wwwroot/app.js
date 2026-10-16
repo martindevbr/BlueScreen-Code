@@ -57,6 +57,19 @@ function syncUnsaved() {
   document.title = (any ? '● ' : '') + 'BlueScreen' + (S.project ? ' · ' + S.project.name : '');
 }
 
+// cores dos tokens semânticos (vindos do servidor de linguagem, com prefixo "s-"; ver lsp.js). O que não tem regra aqui
+// fica com a cor da sintaxe. c: { fn, type, field, konst, macro, lifetime, kw }
+function semRules(c) {
+  const r = (token, fg, style) => fg ? { token, foreground: String(fg).replace('#', ''), ...(style ? { fontStyle: style } : {}) } : null;
+  return [
+    r('s-function', c.fn), r('s-method', c.fn), r('s-macro', c.macro), r('s-decorator', c.macro), r('s-attribute', c.macro),
+    r('s-type', c.type), r('s-class', c.type), r('s-struct', c.type), r('s-enum', c.type), r('s-interface', c.type), r('s-typeAlias', c.type), r('s-builtinType', c.kw), r('s-typeParameter', c.type, 'italic'),
+    r('s-property', c.field), r('s-enumMember', c.konst, 'italic'), r('s-variable.static', c.konst, 'italic'), r('s-variable.constant', c.konst, 'italic'), r('s-const', c.konst, 'italic'), r('s-static', c.konst, 'italic'),
+    r('s-lifetime', c.lifetime, 'italic'), r('s-selfKeyword', c.kw), r('s-selfTypeKeyword', c.kw), r('s-keyword', c.kw),
+    // variável mutável sublinhada (como o rust-analyzer e o IntelliJ)
+    { token: 's-variable.mutable', fontStyle: 'underline' }, { token: 's-parameter.mutable', fontStyle: 'underline' },
+  ].filter(Boolean);
+}
 // ===== Monaco =====
 // Monaco vem junto do aplicativo (sem CDN): abre offline e mais rápido
 const VS = location.origin + '/vendor/monaco/vs';
@@ -69,6 +82,7 @@ require(['vs/editor/editor.main'], () => {
     { token: 'string', foreground: '6AAB73' }, { token: 'number', foreground: '2AACB8' }, { token: 'type', foreground: 'BCBEC4' }, { token: 'type.identifier', foreground: 'C77DBB' },
     { token: 'identifier', foreground: 'BCBEC4' }, { token: 'delimiter', foreground: 'BCBEC4' }, { token: 'tag', foreground: 'D5B778' }, { token: 'attribute.name', foreground: 'BCBEC4' }, { token: 'attribute.value', foreground: '6AAB73' },
     { token: 'annotation', foreground: 'B3AE60' }, { token: 'metatag', foreground: 'B3AE60' }, { token: 'variable', foreground: 'C77DBB' },
+    ...semRules({ fn: '#56A8F5', type: '#C77DBB', field: '#C77DBB', konst: '#C77DBB', macro: '#B3AE60', lifetime: '#20999D', kw: '#CF8E6D' }),
   ], colors: {
     'editor.background': '#191B21', 'editor.foreground': '#BCBEC4', 'editorLineNumber.foreground': '#4B5059', 'editorLineNumber.activeForeground': '#A1A3AB',
     'editor.lineHighlightBackground': '#20232B', 'editor.selectionBackground': '#24467F', 'editorCursor.foreground': '#CED0D6', 'editorGutter.background': '#191B21',
@@ -79,12 +93,13 @@ require(['vs/editor/editor.main'], () => {
   monaco.editor.defineTheme('bs-light', { base: 'vs', inherit: true, rules: [
     { token: 'comment', foreground: '8C8C8C', fontStyle: 'italic' }, { token: 'keyword', foreground: '0033B3' }, { token: 'string', foreground: '067D17' }, { token: 'number', foreground: '1750EB' },
     { token: 'type.identifier', foreground: '871094' }, { token: 'tag', foreground: '0033B3' }, { token: 'attribute.value', foreground: '067D17' },
+    ...semRules({ fn: '#00627A', type: '#000000', field: '#871094', konst: '#871094', macro: '#9E880D', lifetime: '#20999D', kw: '#0033B3' }),
   ], colors: { 'editor.background': '#FFFFFF', 'editor.lineHighlightBackground': '#F5F8FE', 'editor.selectionBackground': '#A6D2FF', 'editorLineNumber.foreground': '#AEB3C2', 'editorGutter.background': '#FFFFFF', 'diffEditor.insertedTextBackground': '#BEE6BE80', 'diffEditor.removedTextBackground': '#FFD5CC80' } });
   try { const ts = monaco.languages.typescript; const co = { allowJs: true, checkJs: false, allowNonTsExtensions: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.NodeJs, experimentalDecorators: true, noEmit: true, jsx: ts.JsxEmit.Preserve }; ts.typescriptDefaults.setCompilerOptions(co); ts.javascriptDefaults.setCompilerOptions(co); ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false }); } catch {}
   applyTheme();
   boot();
 });
-const editorOpts = () => ({ fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace", fontSize: S.fontSize || 13, fontLigatures: true, lineHeight: Math.round((S.fontSize || 13) * 1.7), minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'all', smoothScrolling: true, cursorBlinking: 'smooth', padding: { top: 8 }, wordWrap: S.wrap ? 'on' : 'off', automaticLayout: true, bracketPairColorization: { enabled: true }, guides: { bracketPairs: true, indentation: true }, scrollbar: { verticalScrollbarSize: 10 }, roundedSelection: false, stickyScroll: { enabled: true }, showFoldingControls: 'mouseover', cursorSmoothCaretAnimation: 'on', lineNumbersMinChars: 4, renderWhitespace: 'trailing', theme: themeName() });
+const editorOpts = () => ({ fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace", fontSize: S.fontSize || 13, fontLigatures: true, lineHeight: Math.round((S.fontSize || 13) * 1.7), minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'all', smoothScrolling: true, cursorBlinking: 'smooth', padding: { top: 8 }, wordWrap: S.wrap ? 'on' : 'off', automaticLayout: true, bracketPairColorization: { enabled: true }, guides: { bracketPairs: true, indentation: true }, scrollbar: { verticalScrollbarSize: 10 }, roundedSelection: false, stickyScroll: { enabled: true }, showFoldingControls: 'mouseover', cursorSmoothCaretAnimation: 'on', lineNumbersMinChars: 4, renderWhitespace: 'trailing', 'semanticHighlighting.enabled': true, inlayHints: { enabled: 'on', fontSize: Math.max(10, (S.fontSize || 13) - 2), padding: true }, theme: themeName() });
 const themeName = () => window.BS_MONACO_THEME || (document.documentElement.dataset.theme === 'light' ? 'bs-light' : 'bs-dark');
 // tema: Monaco + barra de título da janela nativa (cor do fundo azul)
 function applyTheme() {
@@ -527,6 +542,13 @@ async function refreshProject() {
     S.project.vcs ? api('log', { project: S.project.path }).catch(() => []) : [],
     S.project.vcs ? api('changes', { project: S.project.path, mode: other }).catch(() => ({ files: [] })) : { files: [] },
   ]);
+  // o Git/SVN pode ter sido criado (git init, checkout) ou apagado depois que a pasta entrou nos recentes: o resumo
+  // de agora manda. Mudou: guarda e busca de novo as alterações e o histórico com o tipo certo
+  if (sum && (sum.vcs || null) !== (S.project.vcs || null)) {
+    S.project.vcs = sum.vcs || null;
+    if (S.project.outside) rememberProject(S.project);
+    return refreshProject();
+  }
   S.summary = sum; S.project.summary = sum; S.changes = ch.files; S.log = lg;
   S.workFiles = S.changeMode === 'working' ? ch.files : oth.files;
   S.lastFiles = S.changeMode === 'working' ? oth.files : (S.rev ? oth.files : ch.files);
@@ -1313,10 +1335,10 @@ function seBuild() {
     else {
       const c = seFind('classes', q, 60), f = seFind('files', q, 60), a = seFindActions(q, 20);
       const seen = new Set(c.slice(0, 8).map(x => x.f.p)); const f2 = f.filter(x => !seen.has(x.f.p));
-      sec('Classes', c.slice(0, 8), 'classes', c.length); sec('Arquivos', f2.slice(0, 8), 'files', f2.length); sec('Ações', a.slice(0, 5), 'actions', a.length);
+      sec('Classes', c.slice(0, 8), 'classes', c.length); sec('Símbolos', seSyms(q).slice(0, 8), 'classes', seSyms(q).length); sec('Arquivos', f2.slice(0, 8), 'files', f2.length); sec('Ações', a.slice(0, 5), 'actions', a.length);
       if (S.project) items.push({ type: 'gotext', text: q });
     }
-  } else if (t === 'classes') items = seFind('classes', q, 200);
+  } else if (t === 'classes') { items = seFind('classes', q, 200); const sy = seSyms(q); if (sy.length) { if (items.length) items.unshift({ type: 'sec', title: 'Classes' }); items.push({ type: 'sec', title: 'Símbolos (servidor de linguagem)' }, ...sy); } }
   else if (t === 'files') { items = seFind('files', q, 200); if (!q.trim() && items.length) items.unshift({ type: 'sec', title: 'Arquivos recentes' }); }
   else if (t === 'actions') items = seFindActions(q, 100);
   else if (t === 'text') {
@@ -1337,6 +1359,8 @@ function seRow(x, i) {
   if (x.type === 'sec') return `<div class="se-sec"><span>${esc(x.title)}</span>${x.more ? `<a data-tab="${x.tab}">mais ${x.more}</a>` : ''}</div>`;
   if (x.type === 'note') return `<div class="se-note">${x.spin ? '<span class="spin"></span> ' : ''}${esc(x.text)}</div>`;
   if (x.type === 'gotext') return `<div class="se-row${on}" data-i="${i}">${SEARCH_ICO}<span class="nm">Buscar <b>${esc(x.text)}</b> no texto dos arquivos</span><span class="kb" style="margin-left:auto">Ctrl+Shift+F</span></div>`;
+  if (x.type === 'sym') { const s = x.s, k = SE_KIND[s.kind] || ['•', 'sym'];
+    return `<div class="se-row${on}" data-i="${i}" title="${esc(s.p)}:${s.line}"><span class="se-kind k-${k[1]}">${k[0]}</span><span class="nm">${esc(s.name)}</span>${s.container ? `<span class="kb">${esc(s.container)}</span>` : ''}<span class="loc">${esc(s.p)}:${s.line}</span></div>`; }
   if (x.type === 'action') return `<div class="se-row${on}" data-i="${i}">${x.a.icon || ''}<span class="nm">${seHl(x.a.label, x.m.idx)}</span>${x.a.k ? `<span class="kb">${esc(x.a.k)}</span>` : ''}</div>`;
   if (x.type === 'hit') { const h = x.h; const t = h.text; const a = h.off, b = h.off + h.len;
     return `<div class="se-row hit${on}" data-i="${i}"><span class="code">${h.cut ? '…' : ''}${esc(t.slice(0, a).trimStart())}<b class="hl">${esc(t.slice(a, b))}</b>${esc(t.slice(b))}</span><span class="loc" title="${esc(h.p)}">${esc(h.p.split('/').pop())}:${h.line}</span></div>`; }
@@ -1381,8 +1405,23 @@ async function seGo(i) {
   seClose();
   if (x.type === 'action') return x.a.run();
   if (x.type === 'hit') { await openFile(x.h.p, 'editor', x.h.line); seSelectRange(x.h.line, x.h.col, x.h.len); return; }
+  if (x.type === 'sym') { await openFile(x.s.p, 'editor', x.s.line); seSelectRange(x.s.line, x.s.col, x.s.name.length); return; }
   await openFile(x.f.p, 'editor', x.line || undefined);
   if (x.line && x.col) seSelectRange(x.line, x.col, 0);
+}
+// símbolos do projeto vindos dos servidores de linguagem (funções, structs, traits, métodos...), além do índice próprio
+const SE_KIND = { 2: ['M', 'mod'], 3: ['N', 'mod'], 5: ['C', 'type'], 6: ['m', 'fn'], 7: ['p', 'var'], 8: ['f', 'var'], 9: ['c', 'fn'], 10: ['E', 'type'], 11: ['I', 'type'], 12: ['ƒ', 'fn'], 13: ['v', 'var'], 14: ['K', 'const'], 22: ['e', 'const'], 23: ['S', 'type'], 26: ['T', 'type'] };
+const seSyms = (q) => SE.sym && SE.symQ === q && SE.symFor === (S.project && S.project.path) ? SE.sym.map(s => ({ type: 'sym', s })) : [];
+let seSymT = null;
+function seSymSearch() {
+  clearTimeout(seSymT);
+  const q = SE.q.trim(); if (!q || SE.tab === 'files' || SE.tab === 'actions' || !BS.lsp || !BS.lsp.workspaceSymbols) return;
+  seSymT = setTimeout(async () => {
+    const proj = S.project && S.project.path, r = await BS.lsp.workspaceSymbols(q);
+    if (!r || SE.q.trim() !== q) return;
+    SE.sym = r; SE.symQ = SE.q; SE.symFor = proj;
+    if (!$('#se').hidden) { seBuild(); seRender(true); }
+  }, 120);
 }
 function seSelectRange(line, col, len) {
   if (!editor || !S.active || S.active.mode !== 'editor') return;
@@ -1399,7 +1438,7 @@ async function openSearch(tab) {
     box = $('#se');
     $('#seBack').onclick = seClose;
     const inp = $('#seIn');
-    inp.oninput = () => { SE.q = inp.value; SE.sel = 0; if (SE.tab === 'text') seTextSearch(); else { seBuild(); seRender(); } };
+    inp.oninput = () => { SE.q = inp.value; SE.sel = 0; if (SE.tab === 'text') seTextSearch(); else { seBuild(); seRender(); seSymSearch(); } };
     inp.onkeydown = (e) => {
       const move = (d) => { const n = SE.items.length; let i = SE.sel; for (let k = 0; k < n; k++) { i = (i + d + n) % n; if (seSelectable(SE.items[i])) break; } SE.sel = i; seRender(true); };
       if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }

@@ -12,7 +12,7 @@
    Expõe bs.lsp: tools(), clientFor(tab), restart(). */
 (function (bs) {
 
-const LS = { tools: null, clients: new Map(), docs: new Map(), registered: new Set(), progress: new Map(), seq: 0 };
+const LS = { tools: null, clients: new Map(), docs: new Map(), registered: new Set(), progress: new Map(), seq: 0, failed: new Map(), ev: {}, semReg: new Set(), asked: new Set() };
 const LSP_ID = { shell: 'shellscript' }; // ids do Monaco que o LSP chama diferente
 const ext = (lang) => LSP_ID[lang] || lang;
 
@@ -28,6 +28,7 @@ const editorTabFor = (abs) => S.tabs.find(t => t.mode === 'editor' && keyOf(absO
 // ----- ferramentas instaladas -----
 async function lsTools(fresh) {
   if (LS.tools && !fresh) return LS.tools;
+  if (fresh) LS.failed.clear();
   try { LS.tools = (await api('rpc/tools', { fresh: fresh ? '1' : null })).tools || []; } catch { LS.tools = []; }
   for (const t of LS.tools) if (t.kind === 'lsp' && t.installed) t.langs.forEach(registerProviders);
   return LS.tools;
@@ -55,13 +56,22 @@ class RpcClient {
   close() { try { this.ws.close(); } catch {} }
 }
 class LspClient extends RpcClient {
-  request(method, params, ms = 30000) {
+  // token: cancelamento do Monaco (você continuou digitando, o pedido ficou velho): avisa o servidor ($/cancelRequest)
+  // para ele largar o trabalho em vez de calcular uma resposta que ninguém vai usar
+  request(method, params, ms = 30000, token) {
+    if (token && token.isCancellationRequested) return Promise.reject(new Error('Canceled'));
     const id = ++this.id; this.send({ jsonrpc: '2.0', id, method, params });
-    return new Promise((ok, fail) => { const t = setTimeout(() => { this.pending.delete(id); fail(new Error(method + ': sem resposta')); }, ms); this.pending.set(id, { ok: (v) => { clearTimeout(t); ok(v); }, fail: (e) => { clearTimeout(t); fail(e); } }); });
+    return new Promise((ok, fail) => {
+      let sub = null;
+      const end = () => { clearTimeout(t); sub && sub.dispose(); };
+      const t = setTimeout(() => { this.pending.delete(id); end(); fail(new Error(method + ': sem resposta')); }, ms);
+      this.pending.set(id, { ok: (v) => { end(); ok(v); }, fail: (e) => { end(); fail(e); } });
+      if (token) sub = token.onCancellationRequested(() => { if (!this.pending.delete(id)) return; this.notify('$/cancelRequest', { id }); end(); fail(new Error('Canceled')); });
+    });
   }
   notify(method, params) { this.send({ jsonrpc: '2.0', method, params }); }
   receive(m) {
-    if (m.id != null && !m.method) { const p = this.pending.get(m.id); if (!p) return; this.pending.delete(m.id); m.error ? p.fail(new Error(m.error.message)) : p.ok(m.result); return; }
+    if (m.id != null && !m.method) { const p = this.pending.get(m.id); if (!p) return; this.pending.delete(m.id); m.error ? p.fail(Object.assign(new Error(m.error.message), { code: m.error.code })) : p.ok(m.result); return; }
     if (m.id != null && m.method) { Promise.resolve().then(() => this.serverRequest(m.method, m.params)).then((result) => this.send({ jsonrpc: '2.0', id: m.id, result: result ?? null }), (e) => this.send({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: e.message } })); return; }
     this.serverNotify(m.method, m.params);
   }
@@ -73,6 +83,10 @@ class LspClient extends RpcClient {
       case 'window/showMessageRequest': toast(p.message); return null;
       case 'window/showDocument': if (p.uri) goTo(p.uri, p.selection); return { success: true };
       case 'client/registerCapability': case 'client/unregisterCapability': case 'window/workDoneProgress/create': return null;
+      // o servidor terminou de analisar o projeto (ou mudou algo): pede para o editor pedir de novo
+      case 'workspace/inlayHint/refresh': LS.ev.hints && LS.ev.hints.fire(); return null;
+      case 'workspace/semanticTokens/refresh': LS.ev.tokens && LS.ev.tokens.fire(); return null;
+      case 'workspace/codeLens/refresh': case 'workspace/diagnostic/refresh': case 'workspace/foldingRange/refresh': return null;
       default: throw new Error('não suportado: ' + method);
     }
   }
@@ -80,15 +94,25 @@ class LspClient extends RpcClient {
     if (method === 'textDocument/publishDiagnostics') return diagnostics(this, p);
     if (method === 'window/showMessage' && p.type <= 2) return toast(this.tool.name + ': ' + p.message, p.type === 1 ? 'err' : undefined);
     if (method === '$/progress' && p.value) {
-      if (p.value.kind === 'end') LS.progress.delete(this.tool.id + p.token); else LS.progress.set(this.tool.id + p.token, p.value.title || p.value.message || '');
+      if (p.value.kind === 'end') {
+        LS.progress.delete(this.tool.id + p.token);
+        // terminou uma etapa (carregar o projeto, indexar): dicas e cores pedidas antes podem ter vindo vazias
+        if (![...LS.progress.keys()].some(k => k.startsWith(this.tool.id))) { LS.ev.hints && LS.ev.hints.fire(); LS.ev.tokens && LS.ev.tokens.fire(); }
+      } else LS.progress.set(this.tool.id + p.token, p.value.title || p.value.message || '');
       lsStatus();
     }
   }
 }
 
+// tipos e modificadores de token semântico do protocolo (o servidor manda os dele na legenda)
+const SEM_TYPES = ['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'event', 'function', 'method', 'macro', 'keyword', 'modifier', 'comment', 'string', 'number', 'regexp', 'operator', 'decorator'];
+const SEM_MODS = ['declaration', 'definition', 'readonly', 'static', 'deprecated', 'abstract', 'async', 'modification', 'documentation', 'defaultLibrary'];
+
 // um servidor por (ferramenta, projeto); sobe no primeiro arquivo
 async function clientFor(tool, root) {
   const key = tool.id + '|' + keyOf(root);
+  // já falhou ao iniciar neste projeto: não tenta de novo a cada aba (só ao reiniciar ou procurar de novo)
+  if (LS.failed.has(key)) throw LS.failed.get(key);
   let c = LS.clients.get(key);
   if (c) return c.ready;
   c = new LspClient(tool, root); LS.clients.set(key, c);
@@ -101,9 +125,13 @@ async function clientFor(tool, root) {
       capabilities: {
         general: { positionEncodings: ['utf-16'] },
         window: { workDoneProgress: true, showMessage: {}, showDocument: { support: true } },
-        workspace: { applyEdit: true, configuration: true, workspaceFolders: true, workspaceEdit: { documentChanges: true, resourceOperations: ['create', 'rename', 'delete'] }, didChangeWatchedFiles: { dynamicRegistration: false }, didChangeConfiguration: { dynamicRegistration: false }, executeCommand: {}, symbol: {} },
+        workspace: { applyEdit: true, configuration: true, workspaceFolders: true, workspaceEdit: { documentChanges: true, resourceOperations: ['create', 'rename', 'delete'] }, didChangeWatchedFiles: { dynamicRegistration: false }, didChangeConfiguration: { dynamicRegistration: false }, executeCommand: {}, symbol: { symbolKind: { valueSet: Array.from({ length: 26 }, (_, i) => i + 1) } }, inlayHint: { refreshSupport: true }, semanticTokens: { refreshSupport: true } },
         textDocument: {
+          // didChange incremental: ao digitar vai só o trecho que mudou, não o arquivo inteiro
           synchronization: { didSave: true, willSave: false, dynamicRegistration: false },
+          inlayHint: { resolveSupport: { properties: [] } },
+          semanticTokens: { requests: { full: { delta: true }, range: false }, formats: ['relative'], tokenTypes: SEM_TYPES, tokenModifiers: SEM_MODS, multilineTokenSupport: false, overlappingTokenSupport: false, augmentsSyntaxTokens: true },
+          foldingRange: { lineFoldingOnly: true, foldingRangeKind: { valueSet: ['comment', 'imports', 'region'] } }, selectionRange: {}, documentLink: { tooltipSupport: true },
           hover: { contentFormat: ['markdown', 'plaintext'] },
           completion: { contextSupport: true, completionItem: { snippetSupport: true, documentationFormat: ['markdown', 'plaintext'], deprecatedSupport: true, resolveSupport: { properties: ['documentation', 'detail', 'additionalTextEdits'] }, labelDetailsSupport: true } },
           signatureHelp: { signatureInformation: { documentationFormat: ['markdown', 'plaintext'], parameterInformation: { labelOffsetSupport: true } } },
@@ -116,6 +144,7 @@ async function clientFor(tool, root) {
       },
     }, 120000);
     c.caps = init.capabilities || {};
+    lateProviders(c);
     c.notify('initialized', {});
     // vários servidores (pyright, por exemplo) só terminam de iniciar depois de receber a configuração
     c.notify('workspace/didChangeConfiguration', { settings: {} });
@@ -124,7 +153,11 @@ async function clientFor(tool, root) {
     return c;
   })();
   c.onclose = () => { LS.clients.delete(key); for (const [id, d] of LS.docs) if (d.client === c) LS.docs.delete(id); lsStatus(); };
-  c.ready.catch((e) => { LS.clients.delete(key); toast(tool.name + ': ' + e.message, 'err'); lsStatus(); });
+  c.ready.catch((e) => {
+    LS.clients.delete(key); LS.failed.set(key, e);
+    toast(`${tool.name} não iniciou (${e.message}). Clique no item dele na barra de status para reiniciar ou instalar.`, 'err');
+    lsStatus();
+  });
   return c.ready;
 }
 
@@ -148,16 +181,25 @@ async function openDoc(tab) {
   let c; try { c = await clientFor(tool, tab.project); } catch { return; }
   if (tab.model.isDisposed() || LS.docs.has(tab.model.id)) return;
   const uri = pathToUri(absOf(tab));
-  const d = { client: c, uri, version: 1, tab, timer: null };
+  // como o servidor quer as mudanças: 0 nenhuma, 1 o texto inteiro, 2 só os trechos (incremental)
+  const sync = c.caps.textDocumentSync, kind = typeof sync === 'number' ? sync : sync && sync.change != null ? sync.change : 1;
+  const d = { client: c, uri, version: 1, tab, timer: null, kind, changes: [], full: false };
   LS.docs.set(tab.model.id, d);
   c.notify('textDocument/didOpen', { textDocument: { uri, languageId: ext(tab.lang), version: 1, text: tab.model.getValue() } });
-  d.sub = tab.model.onDidChangeContent(() => { clearTimeout(d.timer); d.timer = setTimeout(() => flush(d), 200); });
+  d.sub = tab.model.onDidChangeContent((e) => {
+    // as mudanças de um evento vêm de baixo para cima no arquivo: aplicadas em ordem, uma não desloca a outra
+    if (d.kind === 2 && !e.isFlush) for (const ch of e.changes) d.changes.push({ range: RL(ch.range), rangeLength: ch.rangeLength, text: ch.text });
+    else d.full = true;
+    clearTimeout(d.timer); d.timer = setTimeout(() => flush(d), 150);
+  });
   lsStatus();
 }
 function flush(d) {
   if (!d.timer) return; clearTimeout(d.timer); d.timer = null;
-  if (d.tab.model.isDisposed()) return;
-  d.client.notify('textDocument/didChange', { textDocument: { uri: d.uri, version: ++d.version }, contentChanges: [{ text: d.tab.model.getValue() }] });
+  if (d.tab.model.isDisposed() || d.kind === 0) return;
+  const contentChanges = d.kind === 2 && !d.full ? d.changes : [{ text: d.tab.model.getValue() }];
+  d.changes = []; d.full = false;
+  if (contentChanges.length) d.client.notify('textDocument/didChange', { textDocument: { uri: d.uri, version: ++d.version }, contentChanges });
 }
 function closeDoc(tab) {
   const d = tab.model && LS.docs.get(tab.model.id); if (!d) return;
@@ -209,13 +251,20 @@ const SK = () => { const K = monaco.languages.SymbolKind; return [K.File, K.File
 function registerProviders(lang) {
   if (LS.registered.has(lang) || !window.monaco) return; LS.registered.add(lang);
   const L = monaco.languages;
-  const ask = async (model, method, params, cap) => { const d = docOf(model); if (!d || (cap && !d.client.caps[cap])) return undefined; try { return await d.client.request(method, { textDocument: { uri: d.uri }, ...params }); } catch { return undefined; } };
-  L.registerHoverProvider(lang, { provideHover: async (model, pos) => { const r = await ask(model, 'textDocument/hover', { position: P(pos) }, 'hoverProvider'); return r && r.contents ? { contents: md(r.contents), range: r.range ? R(r.range) : undefined } : null; } });
+  // -32801 (o conteúdo mudou) e -32802 (o servidor cancelou, ocupado analisando): o protocolo pede para tentar de novo
+  const ask = async (model, method, params, cap, token) => {
+    for (let n = 0; ; n++) {
+      const d = docOf(model); if (!d || (cap && !d.client.caps[cap])) return undefined;
+      try { return await d.client.request(method, { textDocument: { uri: d.uri }, ...params }, 30000, token); }
+      catch (e) { if (n >= 4 || (e.code !== -32801 && e.code !== -32802) || (token && token.isCancellationRequested)) return undefined; await new Promise(r => setTimeout(r, 300 * (n + 1))); }
+    }
+  };
+  L.registerHoverProvider(lang, { provideHover: async (model, pos, token) => { const r = await ask(model, 'textDocument/hover', { position: P(pos) }, 'hoverProvider', token); return r && r.contents ? { contents: md(r.contents), range: r.range ? R(r.range) : undefined } : null; } });
   for (const [prov, method, cap] of [['registerDefinitionProvider', 'textDocument/definition', 'definitionProvider'], ['registerDeclarationProvider', 'textDocument/declaration', 'declarationProvider'], ['registerTypeDefinitionProvider', 'textDocument/typeDefinition', 'typeDefinitionProvider'], ['registerImplementationProvider', 'textDocument/implementation', 'implementationProvider']]) {
-    L[prov](lang, { [prov.replace('register', 'provide').replace('Provider', '')]: async (model, pos) => locations(await ask(model, method, { position: P(pos) }, cap)) });
+    L[prov](lang, { [prov.replace('register', 'provide').replace('Provider', '')]: async (model, pos, token) => locations(await ask(model, method, { position: P(pos) }, cap, token)) });
   }
   L.registerReferenceProvider(lang, { provideReferences: async (model, pos, ctx) => locations(await ask(model, 'textDocument/references', { position: P(pos), context: { includeDeclaration: ctx.includeDeclaration } }, 'referencesProvider')) });
-  L.registerDocumentHighlightProvider(lang, { provideDocumentHighlights: async (model, pos) => ((await ask(model, 'textDocument/documentHighlight', { position: P(pos) }, 'documentHighlightProvider')) || []).map(h => ({ range: R(h.range), kind: (h.kind || 1) - 1 })) });
+  L.registerDocumentHighlightProvider(lang, { provideDocumentHighlights: async (model, pos, token) => ((await ask(model, 'textDocument/documentHighlight', { position: P(pos) }, 'documentHighlightProvider', token)) || []).map(h => ({ range: R(h.range), kind: (h.kind || 1) - 1 })) });
   L.registerDocumentSymbolProvider(lang, { provideDocumentSymbols: async (model) => {
     const r = await ask(model, 'textDocument/documentSymbol', {}, 'documentSymbolProvider'); if (!r) return [];
     const sk = SK(); const conv = (s) => s.location ? { name: s.name, detail: '', kind: sk[s.kind] ?? sk[13], tags: [], range: R(s.location.range), selectionRange: R(s.location.range) } : { name: s.name, detail: s.detail || '', kind: sk[s.kind] ?? sk[13], tags: [], range: R(s.range), selectionRange: R(s.selectionRange), children: (s.children || []).map(conv) };
@@ -223,8 +272,8 @@ function registerProviders(lang) {
   } });
   L.registerCompletionItemProvider(lang, {
     triggerCharacters: ['.', ':', '<', '"', "'", '/', '@', '>', '#', '$', '-'],
-    provideCompletionItems: async (model, pos, ctx) => {
-      const r = await ask(model, 'textDocument/completion', { position: P(pos), context: ctx.triggerCharacter ? { triggerKind: 2, triggerCharacter: ctx.triggerCharacter } : { triggerKind: 1 } }, 'completionProvider');
+    provideCompletionItems: async (model, pos, ctx, token) => {
+      const r = await ask(model, 'textDocument/completion', { position: P(pos), context: ctx.triggerCharacter ? { triggerKind: 2, triggerCharacter: ctx.triggerCharacter } : { triggerKind: 1 } }, 'completionProvider', token);
       if (!r) return { suggestions: [] };
       const items = Array.isArray(r) ? r : r.items || []; const w = model.getWordUntilPosition(pos);
       const def = new monaco.Range(pos.lineNumber, w.startColumn, pos.lineNumber, w.endColumn); const k = CIK();
@@ -243,11 +292,29 @@ function registerProviders(lang) {
   });
   L.registerSignatureHelpProvider(lang, {
     signatureHelpTriggerCharacters: ['(', ','], signatureHelpRetriggerCharacters: [')'],
-    provideSignatureHelp: async (model, pos) => {
-      const r = await ask(model, 'textDocument/signatureHelp', { position: P(pos) }, 'signatureHelpProvider'); if (!r || !r.signatures || !r.signatures.length) return null;
+    provideSignatureHelp: async (model, pos, token) => {
+      const r = await ask(model, 'textDocument/signatureHelp', { position: P(pos) }, 'signatureHelpProvider', token); if (!r || !r.signatures || !r.signatures.length) return null;
       return { value: { activeSignature: r.activeSignature || 0, activeParameter: r.activeParameter || 0, signatures: r.signatures.map(s => ({ label: s.label, documentation: docText(s.documentation), parameters: (s.parameters || []).map(p => ({ label: p.label, documentation: docText(p.documentation) })), activeParameter: s.activeParameter })) }, dispose() {} };
     },
   });
+  // dicas no meio do código (tipos inferidos, nomes dos parâmetros, encadeamentos): o forte do rust-analyzer
+  LS.ev.hints = LS.ev.hints || new monaco.Emitter();
+  L.registerInlayHintsProvider(lang, {
+    onDidChangeInlayHints: LS.ev.hints.event,
+    provideInlayHints: async (model, range, token) => {
+      const r = await ask(model, 'textDocument/inlayHint', { range: RL(range) }, 'inlayHintProvider', token);
+      const tip = (t) => t == null ? undefined : typeof t === 'string' ? t : { value: t.value };
+      return { hints: (r || []).map(h => ({ position: { lineNumber: h.position.line + 1, column: h.position.character + 1 }, label: typeof h.label === 'string' ? h.label : h.label.map(x => ({ label: x.value, tooltip: tip(x.tooltip) })), kind: h.kind, paddingLeft: h.paddingLeft, paddingRight: h.paddingRight, tooltip: tip(h.tooltip) })), dispose() {} };
+    },
+  });
+  // dobras do servidor (regiões, imports, comentários) e expandir/encolher seleção pela estrutura do código (Shift+Alt+→/←)
+  // sem resposta = null (lista vazia desligaria as dobras por indentação do próprio Monaco)
+  L.registerFoldingRangeProvider(lang, { provideFoldingRanges: async (model, ctx, token) => { const r = await ask(model, 'textDocument/foldingRange', {}, 'foldingRangeProvider', token); return r ? r.filter(f => f.endLine > f.startLine).map(f => ({ start: f.startLine + 1, end: f.endLine + 1, kind: f.kind ? new L.FoldingRangeKind(f.kind) : undefined })) : null; } });
+  L.registerSelectionRangeProvider(lang, { provideSelectionRanges: async (model, positions, token) => {
+    const r = await ask(model, 'textDocument/selectionRange', { positions: positions.map(P) }, 'selectionRangeProvider', token);
+    return r ? r.map(s => { const out = []; for (let x = s; x; x = x.parent) out.push({ range: R(x.range) }); return out; }) : undefined;
+  } });
+  L.registerLinkProvider(lang, { provideLinks: async (model, token) => ({ links: ((await ask(model, 'textDocument/documentLink', {}, 'documentLinkProvider', token)) || []).filter(l => l.target).map(l => ({ range: R(l.range), url: l.target, tooltip: l.tooltip })) }) });
   L.registerDocumentFormattingEditProvider(lang, { provideDocumentFormattingEdits: async (model, opt) => ((await ask(model, 'textDocument/formatting', { options: { tabSize: opt.tabSize, insertSpaces: opt.insertSpaces } }, 'documentFormattingProvider')) || []).map(e => ({ range: R(e.range), text: e.newText })) });
   L.registerDocumentRangeFormattingEditProvider(lang, { provideDocumentRangeFormattingEdits: async (model, range, opt) => ((await ask(model, 'textDocument/rangeFormatting', { range: RL(range), options: { tabSize: opt.tabSize, insertSpaces: opt.insertSpaces } }, 'documentRangeFormattingProvider')) || []).map(e => ({ range: R(e.range), text: e.newText })) });
   L.registerRenameProvider(lang, {
@@ -281,6 +348,35 @@ function registerProviders(lang) {
     },
   }, { providedCodeActionKinds: ['quickfix', 'refactor', 'refactor.extract', 'refactor.inline', 'refactor.rewrite', 'source', 'source.organizeImports'] });
 }
+// provedores que dependem do que o servidor declarou ao iniciar
+function lateProviders(c) {
+  const st = c.caps.semanticTokensProvider;
+  if (!st || !st.legend || !(st.full || st.range)) return;
+  LS.ev.tokens = LS.ev.tokens || new monaco.Emitter();
+  // cores pelo significado (função, tipo, macro, parâmetro, variável mutável...). A legenda vai com prefixo "s-" para
+  // as regras do tema não se confundirem com os tokens da coloração por sintaxe; o que o tema não colore fica como estava
+  const legend = { tokenTypes: st.legend.tokenTypes.map(x => 's-' + x), tokenModifiers: st.legend.tokenModifiers };
+  const delta = !!(st.full && st.full.delta);
+  for (const lang of c.tool.langs) {
+    if (LS.semReg.has(lang)) continue; LS.semReg.add(lang);
+    monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+      getLegend: () => legend, onDidChange: LS.ev.tokens.event,
+      provideDocumentSemanticTokens: async (model, lastId, token) => {
+        const d = docOf(model); if (!d || d.client !== c) return null;
+        try {
+          // com delta, só vêm as diferenças desde a última resposta
+          const r = delta && lastId ? await c.request('textDocument/semanticTokens/full/delta', { textDocument: { uri: d.uri }, previousResultId: lastId }, 30000, token)
+            : await c.request('textDocument/semanticTokens/full', { textDocument: { uri: d.uri } }, 30000, token);
+          if (!r) return null;
+          if (r.edits) return { resultId: r.resultId, edits: r.edits.map(e => ({ start: e.start, deleteCount: e.deleteCount, data: e.data ? new Uint32Array(e.data) : undefined })) };
+          return { resultId: r.resultId, data: new Uint32Array(r.data || []) };
+        } catch { return null; }
+      },
+      releaseDocumentSemanticTokens() {},
+    });
+  }
+}
+
 // ação escolhida: resolve (se o servidor pedir), aplica a edição e roda o comando
 async function runCodeAction(d, a) {
   try {
@@ -351,12 +447,16 @@ function lsStatus() {
   const c = LS.clients.get(tool.id + '|' + keyOf(t.project));
   const busy = [...LS.progress.keys()].some(k => k.startsWith(tool.id));
   const errs = t.model ? monaco.editor.getModelMarkers({ resource: t.model.uri }).filter(m => m.owner.startsWith('lsp:') && m.severity === monaco.MarkerSeverity.Error).length : 0;
-  const state = !c ? 'parado' : !c.alive ? 'iniciando' : busy ? 'analisando' : 'pronto';
-  stEl.innerHTML = `<span class="lsp-dot ${state === 'pronto' ? (errs ? 'err' : 'ok') : 'busy'}"></span>${esc(tool.name.replace(/ \(.*\)$/, ''))}`;
-  stEl.title = `${tool.name}: ${state}${busy ? ' (' + [...LS.progress.values()].filter(Boolean).join(', ') + ')' : ''}${errs ? `\n${errs} erro(s) neste arquivo` : ''}\nClique para opções`;
+  const failed = LS.failed.get(tool.id + '|' + keyOf(t.project));
+  const state = failed ? 'não iniciou' : !c ? 'parado' : !c.alive ? 'iniciando' : busy ? 'analisando' : 'pronto';
+  stEl.innerHTML = `<span class="lsp-dot ${failed ? 'off' : state === 'pronto' ? (errs ? 'err' : 'ok') : 'busy'}"></span>${esc(tool.name.replace(/ \(.*\)$/, ''))}`;
+  stEl.title = `${tool.name}: ${state}${failed ? ' (' + failed.message + ')' : ''}${busy ? ' (' + [...LS.progress.values()].filter(Boolean).join(', ') + ')' : ''}${errs ? `\n${errs} erro(s) neste arquivo` : ''}\nClique para opções`;
 }
 function lsMenu(e) {
   const t = S.active; if (!t) return; const lang = t.lang; const tool = serverFor(lang);
+  // sem servidor: vai direto para o aviso de instalação, em vez de um menu no canto
+  const absent = knownFor(lang).filter(x => !x.installed);
+  if (!tool && absent.length) return lsNotify(absent.map(x => ({ tool: x, langs: [lang] })), { title: 'Análise de ' + (LS_MAIN[lang] || lang) + ' não instalada' });
   const items = [];
   if (tool) {
     items.push({ label: 'Reiniciar ' + tool.name, icon: I.refresh, action: () => restart(tool, t.project) });
@@ -369,14 +469,144 @@ function lsMenu(e) {
   items.push('-', { label: 'Procurar servidores de novo', icon: I.refresh, action: async () => { await lsTools(true); const n = LS.tools.filter(x => x.installed).length; toast(`${n} ferramentas encontradas`); S.tabs.filter(x => x.mode === 'editor').forEach(openDoc); lsStatus(); } });
   showMenu(e, items, 'Análise de ' + lang);
 }
-function install(tool) {
-  if (!bs.terminal) { copyText(tool.install); return; }
-  const cmd = tool.install.split('  (')[0];
-  if (/^(npm|pip|go|rustup|dotnet|gem|winget|scoop) /.test(cmd)) { bs.terminal.run(cmd); toast('Depois de instalar, use "Procurar servidores de novo"'); }
-  else { copyText(tool.install); toast(tool.install); }
+// instalar pela barra de status: mesmo cartão de instalação do aviso do projeto
+function install(tool) { lsNotify([{ tool, langs: tool.langs }], { title: 'Instalar ' + tool.name, start: true }); }
+
+// ----- aviso: o projeto usa linguagens sem analisador instalado -----
+// Ao abrir o projeto, olha as extensões dos arquivos (o índice que a busca já monta) e os arquivos de projeto
+// (Cargo.toml, go.mod...). Para cada linguagem principal sem servidor de linguagem, mostra um aviso com o que ele faz
+// e um botão que instala ali mesmo (rpc/install no núcleo: download com progresso ou o gerenciador da linguagem,
+// sem console). Terminado, a análise liga sozinha nas abas abertas.
+const LS_MAIN = { typescript: 'TypeScript', javascript: 'JavaScript', rust: 'Rust', go: 'Go', python: 'Python', c: 'C', cpp: 'C++', java: 'Java', csharp: 'C#', kotlin: 'Kotlin', php: 'PHP', ruby: 'Ruby', lua: 'Lua', dart: 'Dart', zig: 'Zig' };
+const LS_MARKERS = { 'tsconfig.json': 'typescript', 'jsconfig.json': 'javascript', 'cargo.toml': 'rust', 'go.mod': 'go', 'pyproject.toml': 'python', 'requirements.txt': 'python', 'setup.py': 'python', 'pom.xml': 'java', 'build.gradle': 'java', 'build.gradle.kts': 'kotlin', 'composer.json': 'php', 'gemfile': 'ruby', 'build.zig': 'zig', 'pubspec.yaml': 'dart', 'cmakelists.txt': 'cpp' };
+async function lsCheckProject() {
+  const proj = S.project && S.project.path; if (!proj) return;
+  if (LS.asked.has(proj) || store.get('lspAsk:' + proj, true) === false) return;
+  const [idx] = await Promise.all([typeof seIndex === 'function' ? seIndex() : [], lsTools()]);
+  if (!S.project || S.project.path !== proj || !Array.isArray(idx)) return;
+  const count = {};
+  for (const f of idx) {
+    const name = f.p.split('/').pop().toLowerCase();
+    if (LS_MARKERS[name] && !f.p.includes('/')) count[LS_MARKERS[name]] = (count[LS_MARKERS[name]] || 0) + 100;
+    const l = langOf(f.p); if (LS_MAIN[l]) count[l] = (count[l] || 0) + 1;
+  }
+  // C e C++ usam o mesmo servidor (clangd)
+  if (count.c && count.cpp) { count.cpp += count.c; delete count.c; }
+  const missing = [];
+  for (const [lang, n] of Object.entries(count)) {
+    if (n < 3 || serverFor(lang)) continue; // poucos arquivos (um script solto) não justificam o aviso
+    const known = knownFor(lang); if (!known.length) continue;
+    const tool = known.find(t => t.auto) || known[0];
+    const same = missing.find(m => m.tool.id === tool.id);
+    if (same) same.langs.push(lang); else missing.push({ tool, langs: [lang] });
+  }
+  LS.asked.add(proj);
+  if (missing.length) lsNotify(missing, { proj });
+}
+// aviso em modal no meio da tela (fica até você escolher); items: [{ tool, langs }]
+// Esc ou clique fora fecham, menos enquanto algo instala (o andamento só aparece aqui)
+function lsNotify(items, o = {}) {
+  let host = document.getElementById('bsNotifs');
+  if (!host) {
+    host = document.createElement('div'); host.id = 'bsNotifs'; host.className = 'scrim'; document.body.appendChild(host);
+    const busy = () => !!host.querySelector('.nt-row[data-st="running"]');
+    const dismiss = () => { if (!busy()) host.querySelectorAll('.bs-notif').forEach(n => n._close && n._close()); };
+    host.addEventListener('mousedown', (e) => { if (e.target === host) dismiss(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && host.isConnected && host.children.length) { e.stopPropagation(); dismiss(); } }, true);
+  }
+  host.classList.remove('out');
+  const key = items.map(x => x.tool.id).join(',');
+  host.querySelector(`[data-key="${key}"]`)?.remove();
+  const names = [...new Set(items.flatMap(x => x.langs.map(l => LS_MAIN[l] || l)))];
+  const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' e ' + names[names.length - 1] : names[0];
+  const el = document.createElement('div'); el.className = 'dlg-box bs-notif warn'; el.dataset.key = key;
+  el.setAttribute('role', 'alertdialog'); el.setAttribute('aria-modal', 'true');
+  el.innerHTML = `<div class="nt-hd"><span class="nt-ic">!</span><b>${esc(o.title || 'Análise de código não instalada')}</b><button class="icon-btn nt-x" title="Fechar">×</button></div>`
+    + (o.start ? '' : `<p class="nt-tx">Instale para ter erros, autocompletar e navegação em <b>${esc(list)}</b>.</p>`)
+    + items.map((x, i) => `<div class="nt-row" data-i="${i}"><div class="nt-nm"><b>${esc(x.tool.name)}</b><small>${esc(x.tool.auto ? 'instala com ' + x.tool.auto : x.tool.needs || x.tool.install)}</small></div>`
+      + `${x.tool.auto ? '<button class="chip primary" data-a="go">Instalar</button>' : `<button class="chip" data-a="copy" title="${esc(x.tool.install)}">Copiar comando</button>`}`
+      + `<div class="nt-prog" hidden><div class="nt-bar"><i></i></div><span class="nt-step"></span><a data-a="log">log</a></div><pre class="nt-log" hidden></pre></div>`).join('')
+    + (o.start ? '' : `<div class="nt-ft">${items.filter(x => x.tool.auto).length > 1 ? '<button class="chip primary" data-a="all">Instalar todos</button>' : ''}<span class="spacer"></span><button class="chip" data-a="later">Agora não</button>${o.proj ? '<button class="chip" data-a="never">Não perguntar neste projeto</button>' : ''}</div>`);
+  host.appendChild(el);
+  const close = () => {
+    const last = host.querySelectorAll('.bs-notif:not(.out)').length <= 1;
+    el.classList.add('out'); if (last) host.classList.add('out');
+    setTimeout(() => { el.remove(); if (!host.children.length) host.remove(); }, 200);
+  };
+  el._close = close;
+  (el.querySelector('[data-a="go"]') || el.querySelector('.nt-x')).focus();
+  el.querySelector('.nt-x').onclick = close;
+  el.querySelector('[data-a="later"]')?.addEventListener('click', close);
+  el.querySelector('[data-a="never"]')?.addEventListener('click', () => { store.set('lspAsk:' + o.proj, false); close(); toast('Não vou mais perguntar neste projeto. Dá para instalar pelo item de análise na barra de status.'); });
+  const rows = [...el.querySelectorAll('.nt-row')];
+  const run = (i) => lsInstallRow(items[i].tool, rows[i], () => { if (items.every((x, k) => rows[k].dataset.st === 'done' || !x.tool.auto)) setTimeout(close, 3500); });
+  rows.forEach((r, i) => {
+    r.querySelector('[data-a="go"]')?.addEventListener('click', () => run(i));
+    r.querySelector('[data-a="copy"]')?.addEventListener('click', () => { copyText(items[i].tool.install); toast('Comando copiado'); });
+    r.querySelector('[data-a="log"]').onclick = () => { const l = r.querySelector('.nt-log'); l.hidden = !l.hidden; };
+  });
+  el.querySelector('[data-a="all"]')?.addEventListener('click', () => rows.forEach((r, i) => { if (items[i].tool.auto && !r.dataset.st) run(i); }));
+  if (o.start && items[0].tool.auto) run(0);
+}
+// instala uma ferramenta mostrando o andamento na linha do cartão
+async function lsInstallRow(tool, row, after) {
+  if (row.dataset.st === 'running' || row.dataset.st === 'done') return;
+  row.dataset.st = 'running';
+  const btn = row.querySelector('[data-a="go"]'), prog = row.querySelector('.nt-prog'), bar = row.querySelector('.nt-bar'), fill = bar.querySelector('i'), step = row.querySelector('.nt-step'), log = row.querySelector('.nt-log');
+  if (btn) btn.hidden = true; prog.hidden = false; row.classList.remove('err');
+  let j;
+  try { j = await api('rpc/install', { tool: tool.id }, { method: 'POST' }); } catch (e) { j = { state: 'error', error: e.message, log: [] }; }
+  while (j && j.state === 'running') {
+    bar.classList.toggle('indet', j.progress == null); fill.style.width = j.progress == null ? '' : Math.round(j.progress * 100) + '%';
+    step.textContent = j.step || ''; log.textContent = (j.log || []).join('\n');
+    await new Promise(r => setTimeout(r, 400));
+    try { j = await api('rpc/install', { tool: tool.id }); } catch (e) { j = { state: 'error', error: e.message, log: [] }; }
+  }
+  log.textContent = (j && j.log || []).join('\n');
+  bar.classList.remove('indet');
+  if (j && j.state === 'done') {
+    row.dataset.st = 'done'; fill.style.width = '100%'; step.textContent = 'Instalado. Ligando a análise…';
+    await lsTools(true);
+    S.tabs.filter(t => t.mode === 'editor').forEach(openDoc); lsStatus();
+    step.textContent = 'Instalado · análise ligada';
+    toast(`${tool.name} instalado: análise de ${tool.langs.map(l => LS_MAIN[l] || l).join(', ')} ligada`, 'ok');
+  } else {
+    row.dataset.st = ''; row.classList.add('err');
+    step.textContent = (j && j.error) || 'Falhou'; if (btn) { btn.hidden = false; btn.textContent = 'Tentar de novo'; }
+  }
+  after && after();
+}
+
+// ----- símbolos do projeto inteiro (busca geral: Shift Shift / Ctrl+N) -----
+// pergunta a todos os servidores ligados neste projeto; uma busca nova cancela a anterior
+let symAbort = null;
+async function workspaceSymbols(q) {
+  if (symAbort) symAbort.cancel();
+  const proj = S.project && S.project.path; if (!proj || !q.trim() || !window.monaco) return [];
+  const src = new monaco.CancellationTokenSource(); symAbort = src;
+  const clients = [...LS.clients.values()].filter(c => c.alive && c.caps && c.caps.workspaceSymbolProvider && keyOf(c.root) === keyOf(proj));
+  const res = await Promise.all(clients.map(c => c.request('workspace/symbol', { query: q }, 8000, src.token).catch(() => null)));
+  if (src.token.isCancellationRequested) return null;
+  const out = [];
+  for (const list of res) for (const s of list || []) {
+    const loc = s.location; if (!loc || !loc.uri || !loc.range) continue;
+    const rel = relOf(uriToPath(loc.uri), proj); if (rel == null) continue; // dependências (std, crates) ficam de fora
+    out.push({ name: s.name, kind: s.kind, container: s.containerName || '', p: rel, line: loc.range.start.line + 1, col: loc.range.start.character + 1 });
+    if (out.length >= 200) break;
+  }
+  return out;
+}
+
+// arquivos mudados fora do editor (git checkout, Cargo.toml, gerado pelo build): o servidor relê sem reiniciar
+function watchedFiles(proj, r) {
+  const clients = [...LS.clients.values()].filter(c => c.alive && keyOf(c.root) === keyOf(proj)); if (!clients.length) return;
+  const type = { add: 1, change: 2, remove: 3 };
+  const changes = (r.files || []).slice(0, 2000).map(f => ({ uri: pathToUri(proj.replace(/[\\/]+$/, '') + '\\' + f.p.replace(/\//g, '\\')), type: type[f.k] || 2 }));
+  if (changes.length) clients.forEach(c => c.notify('workspace/didChangeWatchedFiles', { changes }));
 }
 async function restart(tool, root) {
   const key = tool.id + '|' + keyOf(root); const c = LS.clients.get(key);
+  LS.failed.delete(key);
   if (c) { try { await c.request('shutdown', null, 3000); c.notify('exit', null); } catch {} c.close(); LS.clients.delete(key); }
   for (const [id, d] of [...LS.docs]) if (d.client === c) { d.sub && d.sub.dispose(); LS.docs.delete(id); }
   S.tabs.filter(x => x.mode === 'editor' && x.project === root).forEach(openDoc);
@@ -402,7 +632,8 @@ bs.hooks.on('tab:open', (t) => openDoc(t));
 bs.hooks.on('tab:activate', (t) => { openDoc(t); lsStatus(); });
 bs.hooks.on('tab:close', (t) => closeDoc(t));
 bs.hooks.on('tab:save', (t) => { const d = t.model && LS.docs.get(t.model.id); if (d) { flush(d); d.client.notify('textDocument/didSave', { textDocument: { uri: d.uri }, text: t.model.getValue() }); } });
-bs.hooks.on('project:select', () => lsStatus());
+bs.hooks.on('project:select', (p) => { lsStatus(); if (p) setTimeout(lsCheckProject, 1500); });
+bs.hooks.on('files:changed', watchedFiles);
 const boot = setInterval(() => {
   if (!window.monaco) return; clearInterval(boot);
   monaco.editor.registerCommand('bs.lsp.codeAction', (_, d, a) => runCodeAction(d, a));
@@ -428,5 +659,5 @@ bs.actions.add([
   { label: 'Servidores de linguagem: procurar de novo', run: async () => { await lsTools(true); toast(LS.tools.filter(x => x.kind === 'lsp' && x.installed).length + ' servidores de linguagem'); } },
 ]);
 window.addEventListener('beforeunload', () => LS.clients.forEach(c => c.close()));
-bs.lsp = { tools: lsTools, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient };
+bs.lsp = { tools: lsTools, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient, workspaceSymbols, install, checkProject: lsCheckProject };
 })(window.BS);
