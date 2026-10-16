@@ -172,7 +172,7 @@ fn core_routes() -> HashMap<String, RouteFn> {
     }));
     add("summary", route_fn(|r| async move { ok(vcs::summary(&project(&r)?).await) }));
     add("changes", route_fn(|r| async move { ok(vcs::changes(&project(&r)?, r.q_or("mode", "working"), r.q("rev")).await) }));
-    add("log", route_fn(|r| async move { ok(vcs::history(&project(&r)?).await) }));
+    add("log", route_fn(|r| async move { ok(vcs::history_n(&project(&r)?, r.q_or("n", "30").parse().unwrap_or(30)).await) }));
     add("diff", route_fn(|r| async move { ok(vcs::diff(&project(&r)?, r.q_or("file", ""), r.q_or("mode", "working"), r.q("rev")).await) }));
     add("tree", route_fn(|r| async move {
         let (p, abs, _) = in_project(&r, "dir")?;

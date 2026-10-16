@@ -776,3 +776,36 @@ html:not(.desktop) .wel-top { padding-right: 8px; }
 .nt-alt { flex-basis: 100%; font-size: 11.5px; color: var(--accent-2); cursor: pointer; }
 .bcfg-l { display: flex; gap: 6px; } .bcfg-l select { flex: 1; } .bcfg-l .chip { height: 26px; padding: 0 8px; font-size: 11.5px; }
 @media (max-width: 720px) { .sdk-wrap { flex-direction: column; } .sdk-nav { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 8px; } }
+
+/* ===== Alterações: commit a commit, arquivo a arquivo ===== */
+.cnav { display: flex; align-items: stretch; gap: 2px; padding: 4px 4px; border-bottom: 1px solid var(--line); }
+.cnav .icon-btn { height: auto; width: 24px; flex: none; }
+.cnav .icon-btn:disabled { opacity: .35; pointer-events: none; }
+.cpick { flex: 1; min-width: 0; text-align: left; padding: 4px 8px; border-radius: var(--r-sm); color: var(--fg); }
+.cpick:hover, .cpick.on { background: var(--hover); }
+.cpick .subj { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cpick .m { color: var(--muted); font-size: 11px; display: flex; gap: 8px; margin-top: 2px; white-space: nowrap; overflow: hidden; }
+.cpick .m code { font-family: var(--mono); color: var(--accent-2); }
+.cpick .m .pos { margin-left: auto; flex: none; }
+.clist { max-height: 280px; overflow: auto; border-bottom: 1px solid var(--line); background: var(--bg); }
+.clist .commit { padding: 5px 12px; }
+.row.more { color: var(--accent-2); justify-content: center; }
+.ctools { display: flex; align-items: center; gap: 4px; padding: 2px 6px 4px 10px; }
+.ctools input { flex: 1; min-width: 0; height: 24px; padding: 0 8px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--fg); font-size: 12px; }
+.ctools input:focus { outline: none; border-color: var(--accent); }
+.ctools .icon-btn { width: 24px; height: 24px; flex: none; }
+.ctools .prog { width: 44px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; flex: none; }
+.ctools .prog i { display: block; height: 100%; background: var(--add); }
+.ctools .pn { color: var(--muted); font-size: 11px; flex: none; min-width: 34px; }
+.section.dir { cursor: pointer; padding-top: 6px; }
+.section.dir:hover { color: var(--fg-2); }
+.section.dir .i { width: 12px; height: 12px; flex: none; }
+.section.dir .dn { overflow: hidden; text-overflow: ellipsis; }
+.row.chg .ck { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; opacity: 0; color: var(--muted); }
+.row.chg .ck .i { width: 12px; height: 12px; }
+.row.chg:hover .ck { opacity: .7; }
+.row.chg .ck:hover { opacity: 1; background: var(--hover); color: var(--fg); }
+.row.chg.seen .ck { opacity: 1; color: var(--add); }
+.row.chg.seen .name { opacity: .55; }
+#diffFile { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
+#diffFile[hidden] { display: none; }

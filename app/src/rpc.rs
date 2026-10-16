@@ -56,7 +56,7 @@ const DEFS: &[Def] = &[
     // o jdtls não é aberto pelo jdtls.bat (que precisa de Python e usa o java do JAVA_HOME, muitas vezes 8 ou 17):
     // a IDE acha a pasta dele e um Java 21+ e roda o launcher direto (ver jdtls())
     lsp("jdtls", "Eclipse JDT LS (Java)", &["java"], &["jdtls"], &[], "scoop install jdtls"),
-    lsp("tsserver", "TypeScript Language Server", &["typescript", "javascript"], &["typescript-language-server"], &["--stdio"], "npm i -g typescript typescript-language-server"),
+    lsp("tsserver", "TypeScript Language Server", &["typescript", "javascript"], &["typescript-language-server", "tsc"], &["--stdio"], "npm i -g typescript typescript-language-server"),
     lsp("basedpyright", "basedpyright (Python)", &["python"], &["basedpyright-langserver"], &["--stdio"], "pip install basedpyright"),
     lsp("pyright", "Pyright (Python)", &["python"], &["pyright-langserver"], &["--stdio"], "npm i -g pyright"),
     lsp("pylsp", "Python LSP Server", &["python"], &["pylsp"], &[], "pip install python-lsp-server"),
@@ -243,6 +243,25 @@ pub async fn ws(req: Request<Body>, remote: bool, q: HashMap<String, String>) ->
     }
 }
 
+/// TypeScript 7 (o compilador nativo, em Go) não traz mais o lib/tsserver.js de que o typescript-language-server
+/// precisa ("Could not find a valid TypeScript installation"): com ele, o próprio tsc é o servidor (tsc --lsp --stdio).
+/// O TypeScript do projeto (node_modules) manda; sem ele, vale o global. None = seguir com o typescript-language-server.
+fn ts_native(root: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let major = |pkg: &Path| read_json(&pkg.join("package.json"))["version"].as_str().and_then(|v| v.split('.').next()?.parse::<u32>().ok()).unwrap_or(0);
+    let bin = |dir: &Path| ["tsc.cmd", "tsc.exe", "tsc"].iter().map(|b| dir.join(b)).find(|p| p.is_file());
+    let args = vec!["--lsp".to_string(), "--stdio".to_string()];
+    if let Some(nm) = root.ancestors().map(|d| d.join("node_modules")).find(|d| d.join("typescript").is_dir()) {
+        let pkg = nm.join("typescript");
+        if pkg.join("lib").join("tsserver.js").is_file() { return None; }
+        if major(&pkg) >= 7 { if let Some(b) = bin(&nm.join(".bin")) { return Some((b, args)); } }
+    }
+    // global do npm: %APPDATA%\npm\tsc.cmd + %APPDATA%\npm\node_modules\typescript (no Linux/macOS: bin/ e lib/node_modules)
+    let tsc = which("tsc")?;
+    let dir = tsc.parent()?;
+    let pkg = [dir.join("node_modules").join("typescript"), dir.parent()?.join("lib").join("node_modules").join("typescript")].into_iter().find(|p| p.is_dir())?;
+    (!pkg.join("lib").join("tsserver.js").is_file() && major(&pkg) >= 7).then_some((tsc, args))
+}
+
 fn free_port() -> u16 { std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).unwrap_or(0) }
 
 async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
@@ -251,7 +270,19 @@ async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
     // pasta de trabalho do jdtls por projeto (ele guarda o índice lá)
     let data = user_dir().join("lsp-data").join(format!("{}-{:x}", tool.id, root.to_string_lossy().bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64))));
     let args: Vec<String> = tool.args.iter().map(|a| a.replace("{port}", &port.to_string()).replace("{data}", &data.to_string_lossy()).replace("{tools}", &tools_dir().to_string_lossy()).replace("{root}", &root.to_string_lossy())).collect();
-    let mut cmd = tokio::process::Command::new(&tool.command);
+    let (command, args) = match tool.id.as_str() {
+        "tsserver" => match ts_native(&root) {
+            Some((p, a)) => (p.to_string_lossy().into_owned(), a),
+            // só o tsc foi achado, mas é um TypeScript antigo (sem LSP próprio): falta o typescript-language-server
+            None if Path::new(&tool.command).file_stem().is_some_and(|s| s.eq_ignore_ascii_case("tsc")) => {
+                let _ = ws.send(text(json!({ "bs": "error", "message": format!("o TypeScript instalado não tem servidor de linguagem próprio (só o 7 em diante); instale o typescript-language-server: {}", tool.install) }))).await;
+                return;
+            }
+            None => (tool.command.clone(), args),
+        },
+        _ => (tool.command.clone(), args),
+    };
+    let mut cmd = tokio::process::Command::new(&command);
     cmd.args(&args).envs(crate::sdk::env()).current_dir(&root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(windows)] cmd.creation_flags(0x0800_0000);
     let mut child = match cmd.spawn() {

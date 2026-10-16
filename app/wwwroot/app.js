@@ -178,7 +178,7 @@ async function selectProject(p) {
   welcomeMode(false);
   S.project = S.projects.find(x => x.path === p) || S.outside.get(p) || { path: p, name: p.split(/[\\/]/).pop(), vcs: (await api('summary', { project: p }).catch(() => ({}))).vcs || null };
   store.set('project', p);
-  S.rev = null; S.tree = {}; S.walk = {}; S.treeSel = null; S.showProjects = false;
+  S.rev = null; S.logN = 0; S.chgFilter = ''; S.chgPick = false; S.tree = {}; S.walk = {}; S.treeSel = null; S.showProjects = false;
   S.changeMode = 'working'; store.set('changeMode', 'working'); S.changes = []; S.workFiles = []; S.lastFiles = []; S.log = []; S.summary = null;
   const rec = store.get('recents', []).filter(x => x !== p); rec.unshift(p); store.set('recents', rec.slice(0, 12));
   rememberProject(S.project);
@@ -271,7 +271,7 @@ function closeProject() {
   if (!S.project) return;
   S.tabs.filter(t => !t.dirty).forEach(closeTab); // não salvas ficam abertas, para não perder trabalho
   S.project = null; store.set('project', null);
-  S.summary = null; S.changes = []; S.workFiles = []; S.lastFiles = []; S.log = []; S.tree = {}; S.walk = {}; S.showProjects = false;
+  S.summary = null; S.changes = []; S.workFiles = []; S.lastFiles = []; S.log = []; S.logN = 0; S.tree = {}; S.walk = {}; S.showProjects = false;
   if (S.tool === 'changes' || S.tool === 'history') S.tool = 'project';
   $('#projName').textContent = 'Nenhum projeto'; $('#projBranch').innerHTML = ''; $('#stVcs').textContent = '';
   const b = $('#badge-changes'); if (b) b.hidden = true;
@@ -393,7 +393,7 @@ function tabMenu(e, t) {
 }
 function commitMenu(e, c) {
   showMenu(e, BS.hooks.apply('menu:commit', [
-    { label: 'Ver arquivos do commit', icon: I.commit, action: async () => { S.rev = c.id; S.changeMode = 'last'; store.set('changeMode', 'last'); await refreshProject(); openTool('changes'); } },
+    { label: 'Ver arquivos do commit', icon: I.commit, action: () => goCommit(S.log.findIndex(l => l.id === c.id)) },
     '-',
     { label: 'Copiar hash', icon: I.copy, action: () => copyText(c.hash) },
     { label: 'Copiar mensagem', icon: I.copy, action: () => copyText(c.subject) },
@@ -552,7 +552,7 @@ async function refreshProject() {
   const [sum, ch, lg, oth] = await Promise.all([
     api('summary', { project: S.project.path }).catch(() => null),
     S.project.vcs ? api('changes', { project: S.project.path, mode: S.changeMode, rev: S.rev }).catch(() => ({ files: [] })) : { files: [] },
-    S.project.vcs ? api('log', { project: S.project.path }).catch(() => []) : [],
+    S.project.vcs ? api('log', { project: S.project.path, n: S.logN || 30 }).catch(() => []) : [],
     S.project.vcs ? api('changes', { project: S.project.path, mode: other }).catch(() => ({ files: [] })) : { files: [] },
   ]);
   // o Git/SVN pode ter sido criado (git init, checkout) ou apagado depois que a pasta entrou nos recentes: o resumo
@@ -845,27 +845,122 @@ function treeIcon(it) {
   return tsvg(doc + `<text x="8" y="12.6" text-anchor="middle" font-size="${l.length > 1 ? 5.4 : 6.6}" font-weight="800" fill="${c}" font-family="Inter,Segoe UI,sans-serif">${esc(l)}</text>`);
 }
 
+// ----- Alterações: navegar commit a commit e revisar arquivo a arquivo -----
+// O commit mostrado é S.log[i] (S.rev vazio = o último). Commits grandes: os arquivos vão de um em um (Alt+← / Alt+→),
+// cada diff aberto fica marcado como visto, as pastas recolhem e um filtro corta a lista. Vale para Git e SVN.
+const commitIx = () => S.rev ? S.log.findIndex(l => l.id === S.rev) : 0;
+async function moreLog(n = 50) {
+  const more = await api('log', { project: S.project.path, n: S.log.length + n }).catch(() => null);
+  if (!more || more.length <= S.log.length) return false;
+  S.log = more; S.logN = more.length; return true;
+}
+async function goCommit(ix) {
+  if (!S.project || !S.project.vcs) return;
+  if (ix < 0) return toast('Este já é o commit mais recente');
+  if (ix >= S.log.length && !(await moreLog())) return toast('Não há commits mais antigos');
+  const c = S.log[ix]; if (!c) return;
+  const reviewing = S.active && S.active.preview && S.active.mode === 'diff';
+  // os diffs de commit são só leitura: as abas de prévia do commit anterior saem para não acumular
+  S.tabs.filter(t => t.preview && t.mode === 'diff' && t.changeMode === 'last' && !t.dirty).forEach(closeTab);
+  S.rev = ix === 0 ? null : c.id; S.changeMode = 'last'; store.set('changeMode', 'last'); S.chgPick = false;
+  await refreshProject();
+  if (S.tool !== 'changes' || $('#app').classList.contains('no-tool')) openTool('changes');
+  if (reviewing) stepFile(1); // estava revisando: já abre o primeiro arquivo do commit novo
+}
+// arquivos na mesma ordem da lista (pasta, depois nome), já com o filtro
+function chgGroups() {
+  const f = (S.chgFilter || '').toLowerCase(); const g = {};
+  S.changes.filter(c => !f || c.path.toLowerCase().includes(f)).forEach(c => { const i = c.path.lastIndexOf('/'); const d = i < 0 ? '' : c.path.slice(0, i); (g[d] = g[d] || []).push(c); });
+  return Object.keys(g).sort().map(d => [d, g[d]]);
+}
+const chgList = () => chgGroups().flatMap(([, l]) => l);
+// a aba ativa é um diff da lista que está na tela (mesmo modo e mesmo commit)?
+const tabInList = (t = S.active) => !!t && t.mode === 'diff' && t.changeMode === S.changeMode && (t.rev || null) === (S.rev || null);
+// vistos por commit (guarda os 60 mais recentes)
+const SEEN = store.get('chgSeen', {});
+const seenKey = (rev = S.rev) => S.project.path + '|' + (rev || S.log[0]?.id || 'HEAD');
+const seenOf = (rev) => new Set(SEEN[seenKey(rev)] || []);
+function markSeen(path, rev, on = true) {
+  const k = seenKey(rev); const s = new Set(SEEN[k] || []); if (on === s.has(path)) return;
+  on ? s.add(path) : s.delete(path); delete SEEN[k]; if (s.size) SEEN[k] = [...s];
+  const ks = Object.keys(SEEN); ks.slice(0, Math.max(0, ks.length - 60)).forEach(x => delete SEEN[x]);
+  store.set('chgSeen', SEEN);
+}
+// abre o arquivo seguinte/anterior; a aba de prévia de antes é trocada (não empilha 200 abas num commit grande)
+async function stepFile(dir, unseen) {
+  if (!S.project || !S.project.vcs) return;
+  const list = chgList(); if (!list.length) return toast('Nenhum arquivo nesta lista');
+  const prev = S.active; const cur = tabInList(prev) ? list.findIndex(c => c.path === prev.path) : -1;
+  let next;
+  if (unseen) { const seen = seenOf(); next = list.slice(cur + 1).concat(list.slice(0, cur + 1)).find(c => !seen.has(c.path)); if (!next) return toast('Todos os arquivos já foram vistos'); }
+  else if (cur < 0) next = dir > 0 ? list[0] : list[list.length - 1];
+  else next = list[cur + dir];
+  if (!next) return toast(dir > 0 ? (S.changeMode === 'last' ? 'Último arquivo do commit. Alt+PageDown: commit anterior' : 'Último arquivo') : 'Primeiro arquivo');
+  await openFile(next.path, 'diff', undefined, true);
+  if (prev && prev !== S.active && prev.preview && prev.mode === 'diff' && !prev.dirty && S.tabs.includes(prev)) closeTab(prev);
+  $('#toolBody .row.chg.sel')?.scrollIntoView({ block: 'nearest' });
+}
 function renderChanges() {
   const body = $('#toolBody');
   if (!S.project) { body.innerHTML = '<div class="empty">Escolha um projeto.</div>'; return; }
   if (!S.project.vcs) { body.innerHTML = '<div class="empty">Esta pasta não tem Git nem SVN.</div>'; return; }
-  const last = S.summary && S.summary.last;
-  $('#toolActions').innerHTML = `<div class="seg"><button data-m="working" class="${S.changeMode === 'working' ? 'on' : ''}">Local</button><button data-m="last" class="${S.changeMode === 'last' ? 'on' : ''}">Commit</button></div><button class="icon-btn" id="btnLintAll" title="Lint em todos os arquivos alterados">${I.lint}</button>`;
-  $('#toolActions').querySelectorAll('button[data-m]').forEach(b => b.onclick = async () => { S.changeMode = b.dataset.m; store.set('changeMode', S.changeMode); if (S.changeMode === 'working') S.rev = null; await refreshProject(); });
-  $('#btnLintAll').onclick = () => lintAll();
-  const head = S.changeMode === 'last' ? (() => { const c = S.rev ? S.log.find(l => l.id === S.rev) : last; return c ? `<div class="commit" style="cursor:default"><div class="subj" title="${esc(c.subject)}">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span></div></div>` : ''; })() : '';
-  const groups = {}; S.changes.forEach(c => { const i = c.path.lastIndexOf('/'); const d = i < 0 ? '' : c.path.slice(0, i); (groups[d] = groups[d] || []).push(c); });
-  const rows = Object.keys(groups).sort().map(d => `${d ? `<div class="section" style="padding-top:6px">${esc(d)}</div>` : ''}${groups[d].map(c => `<div class="row chg ${S.active && S.active.path === c.path ? 'sel' : ''} ${unsavedPaths().has(c.path) ? 'unsaved' : ''}" data-p="${esc(c.path)}"><span class="st ${esc(c.code)}">${esc(c.code)}</span><span class="name c-${esc(c.code.replace('?', '\\?'))}">${esc(c.path.split('/').pop())}</span><span class="meta">${statHtml(c)}</span></div>`).join('')}`).join('');
-  const tot = S.changes.reduce((a, c) => ({ add: a.add + (c.add || 0), del: a.del + (c.del || 0) }), { add: 0, del: 0 });
-  body.innerHTML = head + `<div class="section">${S.changeMode === 'working' ? 'Não commitado' : 'Arquivos do commit'} <span class="meta">${statHtml(tot)} ${S.changes.length}</span></div>` + (rows || '<div class="empty">Nada por aqui. Tudo limpo.</div>');
-  body.querySelectorAll('.row.chg').forEach(r => { r.onclick = () => openFile(r.dataset.p, 'diff'); r.oncontextmenu = (e) => fileMenu(e, r.dataset.p, false); });
+  const isLast = S.changeMode === 'last';
+  $('#toolActions').innerHTML = `<div class="seg"><button data-m="working" class="${!isLast ? 'on' : ''}">Local</button><button data-m="last" class="${isLast ? 'on' : ''}">Commit</button></div>`;
+  $('#toolActions').querySelectorAll('button[data-m]').forEach(b => b.onclick = async () => { S.changeMode = b.dataset.m; store.set('changeMode', S.changeMode); if (S.changeMode === 'working') S.rev = null; S.chgPick = false; await refreshProject(); });
+  const ix = commitIx(); const c = isLast ? (ix >= 0 ? S.log[ix] : null) || (!S.rev && S.summary && S.summary.last) : null;
+  const chev = (d) => `<svg class="i" viewBox="0 0 24 24"><path d="${d}"/></svg>`;
+  const more = S.log.length >= (S.logN || 30);
+  // navegador de commits: ‹ mais novo | commit atual (clique: escolher outro) | mais antigo ›
+  const head = !isLast ? '' : `<div class="cnav">
+      <button class="icon-btn" id="cNewer" title="Commit mais novo (Alt+PageUp)" ${ix <= 0 ? 'disabled' : ''}>${chev('M15 6l-6 6 6 6')}</button>
+      <button class="cpick ${S.chgPick ? 'on' : ''}" id="cPick" title="Escolher o commit">${c ? `<div class="subj">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span>${ix >= 0 ? `<span class="pos">${ix + 1}/${S.log.length}${more ? '+' : ''}</span>` : ''}</div>` : '<div class="subj">Sem commits</div>'}</button>
+      <button class="icon-btn" id="cOlder" title="Commit mais antigo (Alt+PageDown)" ${ix >= S.log.length - 1 && !more ? 'disabled' : ''}>${chev('M9 6l6 6-6 6')}</button>
+    </div>${S.chgPick ? `<div class="clist">${S.log.map((l, i) => `<div class="commit ${i === ix ? 'sel' : ''}" data-i="${i}"><div class="subj" title="${esc(l.subject)}">${esc(l.subject)}</div><div class="m"><code>${esc(l.hash)}</code><span>${esc(l.author)}</span><span>${esc(l.when)}</span></div></div>`).join('')}${more ? '<div class="row more" id="cMore"><span class="name">Carregar mais antigos…</span></div>' : ''}</div>` : ''}`;
+  const groups = chgGroups(); const shown = groups.reduce((n, [, l]) => n + l.length, 0);
+  const seen = isLast ? seenOf() : new Set(); const nSeen = isLast ? S.changes.filter(x => seen.has(x.path)).length : 0;
+  const fold = S.chgFold || (S.chgFold = new Set());
+  const rows = groups.map(([d, list]) => {
+    const closed = fold.has(d) && !S.chgFilter;
+    return `${d ? `<div class="section dir ${closed ? 'closed' : ''}" data-d="${esc(d)}" title="${esc(d)}">${chev(closed ? 'M9 6l6 6-6 6' : 'M6 9l6 6 6-6')}<span class="dn">${esc(d)}</span><span class="meta">${list.length}</span></div>` : ''}${closed ? '' : list.map(x => `<div class="row chg ${tabInList() && S.active.path === x.path ? 'sel' : ''} ${unsavedPaths().has(x.path) ? 'unsaved' : ''} ${seen.has(x.path) ? 'seen' : ''}" data-p="${esc(x.path)}" title="${esc(x.path)}"><span class="st ${esc(x.code)}">${esc(x.code)}</span><span class="name c-${esc(x.code.replace('?', '\\?'))}">${esc(x.path.split('/').pop())}</span><span class="meta">${statHtml(x)}${isLast ? `<span class="ck" title="${seen.has(x.path) ? 'Visto (clique para desmarcar)' : 'Marcar como visto'}">${I.lint}</span>` : ''}</span></div>`).join('')}`;
+  }).join('');
+  const tot = S.changes.reduce((a, x) => ({ add: a.add + (x.add || 0), del: a.del + (x.del || 0) }), { add: 0, del: 0 });
+  const many = S.changes.length > 12;
+  const tools = S.changes.length ? `<div class="ctools">
+      ${many || S.chgFilter ? `<input id="chgFilter" placeholder="Filtrar arquivos…" value="${esc(S.chgFilter || '')}" spellcheck="false">` : '<span style="flex:1"></span>'}
+      ${isLast ? `<span class="prog" title="Arquivos vistos neste commit"><i style="width:${Math.round(nSeen * 100 / S.changes.length)}%"></i></span><span class="pn" title="Arquivos vistos neste commit">${nSeen}/${S.changes.length}</span>` : ''}
+      <button class="icon-btn" id="chgPrev" title="Arquivo anterior (Alt+←)">${chev('M15 6l-6 6 6 6')}</button>
+      <button class="icon-btn" id="chgNext" title="${isLast ? 'Próximo arquivo não visto' : 'Próximo arquivo'} (Alt+→)">${chev('M9 6l6 6-6 6')}</button>
+      ${groups.length > 1 ? `<button class="icon-btn" id="chgFold" title="${fold.size ? 'Expandir pastas' : 'Recolher pastas'}">${fold.size ? chev('M7 9l5-5 5 5M7 15l5 5 5-5') : TI.collapse}</button>` : ''}
+    </div>` : '';
+  body.innerHTML = head + `<div class="section">${isLast ? 'Arquivos do commit' : 'Não commitado'} <span class="meta">${statHtml(tot)} ${S.chgFilter ? shown + ' de ' : ''}${S.changes.length}</span></div>` + tools + (rows || `<div class="empty">${S.chgFilter ? 'Nenhum arquivo com esse nome.' : 'Nada por aqui. Tudo limpo.'}</div>`);
+  if (isLast) {
+    $('#cNewer').onclick = () => goCommit(commitIx() - 1);
+    $('#cOlder').onclick = () => goCommit(commitIx() + 1);
+    $('#cPick').onclick = () => { S.chgPick = !S.chgPick; renderChanges(); if (S.chgPick) $('#toolBody .clist .commit.sel')?.scrollIntoView({ block: 'center' }); };
+    $('#cPick').oncontextmenu = (e) => c && c.id && commitMenu(e, c);
+    body.querySelectorAll('.clist .commit').forEach(el => { el.onclick = () => goCommit(+el.dataset.i); el.oncontextmenu = (e) => commitMenu(e, S.log[+el.dataset.i]); });
+    const m = $('#cMore'); if (m) m.onclick = async () => { if (await moreLog()) renderChanges(); else { toast('Não há commits mais antigos'); m.remove(); } };
+  }
+  const fi = $('#chgFilter');
+  if (fi) {
+    fi.oninput = () => { const pos = fi.selectionStart; S.chgFilter = fi.value; renderChanges(); const n = $('#chgFilter'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+    fi.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); stepFile(1); } if (e.key === 'Escape' && fi.value) { e.stopPropagation(); S.chgFilter = ''; renderChanges(); } };
+  }
+  if ($('#chgPrev')) { $('#chgPrev').onclick = () => stepFile(-1); $('#chgNext').onclick = () => stepFile(1, isLast); }
+  if ($('#chgFold')) $('#chgFold').onclick = () => { if (fold.size) fold.clear(); else groups.forEach(([d]) => d && fold.add(d)); renderChanges(); };
+  body.querySelectorAll('.section.dir').forEach(el => el.onclick = () => { const d = el.dataset.d; fold.has(d) ? fold.delete(d) : fold.add(d); renderChanges(); });
+  body.querySelectorAll('.row.chg').forEach(r => {
+    r.onclick = (e) => { if (e.target.closest('.ck')) { e.stopPropagation(); markSeen(r.dataset.p, S.rev, !r.classList.contains('seen')); renderChanges(); return; } openFile(r.dataset.p, 'diff', undefined, true); };
+    r.oncontextmenu = (e) => fileMenu(e, r.dataset.p, false);
+  });
 }
 function renderHistory() {
   const body = $('#toolBody');
   if (!S.project || !S.project.vcs) { body.innerHTML = '<div class="empty">Sem histórico.</div>'; return; }
-  body.innerHTML = S.log.map(c => `<div class="commit ${S.rev === c.id || (!S.rev && S.changeMode === 'last' && S.log[0] === c) ? 'sel' : ''}" data-id="${esc(c.id)}"><div class="subj" title="${esc(c.subject)}">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span></div></div>`).join('') || '<div class="empty">Sem commits.</div>';
+  body.innerHTML = (S.log.map(c => `<div class="commit ${S.rev === c.id || (!S.rev && S.changeMode === 'last' && S.log[0] === c) ? 'sel' : ''}" data-id="${esc(c.id)}"><div class="subj" title="${esc(c.subject)}">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span></div></div>`).join('') + (S.log.length >= (S.logN || 30) ? '<div class="row more" id="histMore"><span class="name">Carregar mais antigos…</span></div>' : '')) || '<div class="empty">Sem commits.</div>';
+  const hm = $('#histMore'); if (hm) hm.onclick = async () => { if (await moreLog()) renderHistory(); else { toast('Não há commits mais antigos'); hm.remove(); } };
   body.querySelectorAll('.commit').forEach(el => {
-    el.onclick = async () => { S.rev = el.dataset.id; S.changeMode = 'last'; store.set('changeMode', 'last'); await refreshProject(); openTool('changes'); };
+    el.onclick = () => goCommit(S.log.findIndex(c => c.id === el.dataset.id));
     el.oncontextmenu = (e) => commitMenu(e, S.log.find(c => c.id === el.dataset.id));
   });
 }
@@ -887,14 +982,15 @@ function ensureEditors() {
     const d = document.createElement('div'); d.id = 'dd'; mon.appendChild(d);
     diffEditor = monaco.editor.createDiffEditor(d, { ...editorOpts(), renderSideBySide: !S.inline, originalEditable: false, renderIndicators: true, ignoreTrimWhitespace: false, diffWordWrap: S.wrap ? 'on' : 'off', renderOverviewRuler: false, renderGutterMenu: false, useInlineViewWhenSpaceIsLimited: false });
     diffEditor.getModifiedEditor().onDidChangeCursorPosition(e => $('#stPos').textContent = `${e.position.lineNumber}:${e.position.column}`);
-    diffEditor.getModifiedEditor().onDidChangeModelContent(() => markDirty(diffEditor.getModifiedEditor().getModel()));
+    diffEditor.getModifiedEditor().onDidChangeModelContent(() => { const m = diffEditor.getModifiedEditor().getModel(); if (m && m._tab) m._tab.preview = false; markDirty(m); });
     diffEditor.getModifiedEditor().addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, save);
     diffEditor.getModifiedEditor().addAction({ id: 'bs.edit', label: 'Abrir como editor', contextMenuGroupId: 'navigation', contextMenuOrder: 0, run: () => S.active && openFile(S.active.path, 'editor') });
     diffEditor.getModifiedEditor().addAction({ id: 'bs.inline', label: 'Lado a lado / em linha', contextMenuGroupId: 'navigation', contextMenuOrder: 1, run: () => $('#btnInline').click() });
     diffEditor.getModifiedEditor().addAction({ id: 'bs.present2', label: 'Apresentar', contextMenuGroupId: 'navigation', contextMenuOrder: 2, run: () => present(true) });
     diffEditor.onDidUpdateDiff(() => updateDiffInfo());
-    $('#diffInfo').innerHTML = '<span id="diffStat"></span><button class="icon-btn" id="diffPrev" title="Alteração anterior (Alt+↑)"><svg class="i" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button><button class="icon-btn" id="diffNext" title="Próxima alteração (Alt+↓)"><svg class="i" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>';
+    $('#diffInfo').innerHTML = '<span id="diffStat"></span><button class="icon-btn" id="diffPrev" title="Alteração anterior (Alt+↑)"><svg class="i" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button><button class="icon-btn" id="diffNext" title="Próxima alteração (Alt+↓)"><svg class="i" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button><span id="diffFile"><button class="icon-btn" id="fileePrev" title="Arquivo anterior (Alt+←)"><svg class="i" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><span id="diffFileN"></span><button class="icon-btn" id="fileeNext" title="Próximo arquivo (Alt+→)"><svg class="i" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></span>';
     $('#diffPrev').onclick = () => goDiff('previous'); $('#diffNext').onclick = () => goDiff('next');
+    $('#fileePrev').onclick = () => stepFile(-1); $('#fileeNext').onclick = () => stepFile(1);
     BS.hooks.run('editor:ready', editor, diffEditor); // plugins acrescentam comandos e ações aos dois editores
   }
 }
@@ -911,9 +1007,12 @@ function updateDiffInfo() {
   el.hidden = false; const ch = diffEditor.getLineChanges() || [];
   let add = 0, del = 0; ch.forEach(c => { if (c.modifiedEndLineNumber) add += c.modifiedEndLineNumber - c.modifiedStartLineNumber + 1; if (c.originalEndLineNumber) del += c.originalEndLineNumber - c.originalStartLineNumber + 1; });
   $('#diffStat').innerHTML = `${statHtml({ add, del })} <span>${ch.length} ${ch.length === 1 ? 'alteração' : 'alterações'}</span>`;
+  const list = tabInList() ? chgList() : []; const fi = list.findIndex(c => c.path === S.active.path);
+  $('#diffFile').hidden = fi < 0; if (fi >= 0) $('#diffFileN').textContent = `arquivo ${fi + 1}/${list.length}`;
 }
 function tabKey(path, mode) { return path + '::' + (mode === 'diff' ? S.changeMode + ':' + (S.rev || '') : 'editor'); }
-async function openFile(path, mode, line) {
+// preview: aberta pela lista de Alterações; ao andar para o próximo arquivo, ela é trocada em vez de empilhar
+async function openFile(path, mode, line, preview) {
   ensureEditors();
   // imagens, PDF, áudio, vídeo, fontes e binários conhecidos abrem no visualizador (viewer.js)
   const vk = mode !== 'diff' && BS.fileViewer && BS.fileViewer.kind(path);
@@ -940,8 +1039,10 @@ async function openFile(path, mode, line) {
       }
       tab.saved = tab.model.getValue(); tab.model._tab = tab;
     } catch (e) { toast(e.message); return; }
+    tab.preview = !!preview;
     S.tabs.push(tab); BS.hooks.run('tab:open', tab);
-  }
+  } else if (!preview) tab.preview = false; // aberta de propósito por outro caminho: fica
+  if (tab.mode === 'diff' && tab.changeMode === 'last') markSeen(path, tab.rev);
   activate(tab); seRemember(path);
   if (line) revealAt(tab.mode === 'diff' ? diffEditor.getModifiedEditor() : editor, line);
 }
@@ -1704,7 +1805,7 @@ function renderDashboard() {
   dash.querySelectorAll('[data-open]').forEach(el => el.onclick = () => openFile(el.dataset.open, 'editor'));
   $('#dashRefresh').onclick = () => refreshAll();
   dash.querySelectorAll('.prail .row.chg').forEach(r => r.onclick = async () => { const m = r.classList.contains('last') ? 'last' : 'working'; if (S.changeMode !== m || S.rev) { S.changeMode = m; S.rev = null; store.set('changeMode', m); await refreshProject(); } openFile(r.dataset.p, 'diff'); });
-  dash.querySelectorAll('.prail .row[data-rev]').forEach(r => r.onclick = async () => { S.rev = r.dataset.rev; S.changeMode = 'last'; store.set('changeMode', 'last'); await refreshProject(); openTool('changes'); });
+  dash.querySelectorAll('.prail .row[data-rev]').forEach(r => r.onclick = () => goCommit(S.log.findIndex(c => c.id === r.dataset.rev)));
   for (const c of cards) if (c.bind) { const el = dash.querySelector(`[data-card="${c.id}"]`); try { if (el) c.bind(el); } catch (e) { console.error(e); } }
   BS.hooks.run('dashboard:render', dash);
 }
@@ -1716,7 +1817,7 @@ function showKeys() {
   const groups = [
     ['Navegar', [['Buscar em tudo', 'Shift Shift'], ['Classes', 'Ctrl+N'], ['Arquivos', 'Ctrl+P'], ['Texto em todos os arquivos', 'Ctrl+Shift+F'], ['Ações', 'Ctrl+Shift+A'], ['Trocar projeto', 'Alt+P'], ['Selecionar arquivo aberto na árvore', 'Alt+F1']]],
     ['Janelas', BS.tools.list().filter(t => t.key).map(t => [t.title, t.key])],
-    ['Editor', [['Salvar', 'Ctrl+S'], ['Salvar todos', 'Ctrl+Shift+S'], ['Fechar aba', 'Ctrl+W'], ['Próxima alteração do diff', 'Alt+↓'], ['Alteração anterior do diff', 'Alt+↑'], ['Lint do arquivo', 'Ctrl+Alt+L'], ['Apresentar em tela cheia', 'F11']]],
+    ['Editor', [['Salvar', 'Ctrl+S'], ['Salvar todos', 'Ctrl+Shift+S'], ['Fechar aba', 'Ctrl+W'], ['Próxima alteração do diff', 'Alt+↓'], ['Alteração anterior do diff', 'Alt+↑'], ['Próximo / anterior arquivo alterado', 'Alt+→ / Alt+←'], ['Commit mais antigo / mais novo', 'Alt+PageDown / Alt+PageUp'], ['Lint do arquivo', 'Ctrl+Alt+L'], ['Apresentar em tela cheia', 'F11']]],
     ['Geral', [['Atualizar projeto', 'F5'], ['Fechar menus e buscas', 'Esc'], ['Esta tela', 'F1']]],
   ];
   const known = new Set(groups.flatMap(g => g[1].map(x => x[1])));
@@ -1758,6 +1859,10 @@ BS.keys.add('Alt+P', () => quickProject());
 BS.keys.add('Ctrl+W', () => { if (!S.active) return false; closeTab(S.active); });
 BS.keys.add('Alt+ArrowDown', () => goDiff('next'));
 BS.keys.add('Alt+ArrowUp', () => goDiff('previous'));
+BS.keys.add('Alt+ArrowRight', () => { stepFile(1); });
+BS.keys.add('Alt+ArrowLeft', () => { stepFile(-1); });
+BS.keys.add('Alt+PageDown', () => { goCommit(S.changeMode === 'last' ? commitIx() + 1 : 0); });
+BS.keys.add('Alt+PageUp', () => { if (S.changeMode === 'last') goCommit(commitIx() - 1); });
 document.addEventListener('keydown', (e) => {
   const c = keyCombo(e);
   if (document.body.classList.contains('welcome') && !/^(Escape|F1|Ctrl\+Alt\+S|Alt\+P)$/.test(c)) return; // sem projeto, a IDE está escondida

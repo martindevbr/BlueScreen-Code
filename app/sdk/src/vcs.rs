@@ -220,17 +220,21 @@ pub async fn changes(dir: &Path, mode: &str, rev: Option<&str>) -> Changes {
     }
 }
 
-pub async fn history(dir: &Path) -> Vec<Commit> {
+pub async fn history(dir: &Path) -> Vec<Commit> { history_n(dir, 30).await }
+
+/// os `n` commits mais recentes (a aba Alterações pede mais conforme se navega para trás)
+pub async fn history_n(dir: &Path, n: usize) -> Vec<Commit> {
+    let n = n.clamp(1, 2000).to_string();
     match detect(dir) {
         Some("git") => {
-            let r = git(dir, &["log", "-n", "30", "--format=%H%x1f%h%x1f%an%x1f%ct%x1f%s", "--", "."]).await;
+            let r = git(dir, &["log", "-n", &n, "--format=%H%x1f%h%x1f%an%x1f%ct%x1f%s", "--", "."]).await;
             r.out.lines().filter_map(|l| {
                 let f: Vec<&str> = l.split('\x1f').collect();
                 (f.len() >= 5).then(|| Commit { id: Some(f[0].into()), hash: f[1].into(), author: f[2].into(), when: rel_time_unix(f[3]), subject: f[4].into() })
             }).collect()
         }
         Some("svn") => {
-            let r = svn(dir, &["log", "-l", "30", "--xml"]).await;
+            let r = svn(dir, &["log", "-l", &n, "--xml"]).await;
             parse_svn_log(&r.out).into_iter().map(|mut c| { c.id = Some(c.hash.clone()); c.hash = format!("r{}", c.hash); c }).collect()
         }
         _ => vec![],
