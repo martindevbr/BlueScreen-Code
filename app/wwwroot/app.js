@@ -66,6 +66,12 @@ function semRules(c) {
     r('s-type', c.type), r('s-class', c.type), r('s-struct', c.type), r('s-enum', c.type), r('s-interface', c.type), r('s-typeAlias', c.type), r('s-builtinType', c.kw), r('s-typeParameter', c.type, 'italic'),
     r('s-property', c.field), r('s-enumMember', c.konst, 'italic'), r('s-variable.static', c.konst, 'italic'), r('s-variable.constant', c.konst, 'italic'), r('s-const', c.konst, 'italic'), r('s-static', c.konst, 'italic'),
     r('s-lifetime', c.lifetime, 'italic'), r('s-selfKeyword', c.kw), r('s-selfTypeKeyword', c.kw), r('s-keyword', c.kw),
+    // o Monaco pinta token semântico sem regra com a cor da regra raiz (código comum), por cima da sintaxe: comentário,
+    // texto, número e pontuação que o servidor manda (o rust-analyzer manda até os /// e //!) precisam de regra própria
+    r('s-comment', c.comment, 'italic'), r('s-string', c.str), r('s-character', c.str), r('s-regexp', c.str),
+    r('s-escapeSequence', c.num), r('s-formatSpecifier', c.num), r('s-invalidEscapeSequence', c.num), r('s-number', c.num), r('s-boolean', c.kw),
+    ...['operator', 'punctuation', 'arithmetic', 'bitwise', 'comparison', 'logical', 'angle', 'brace', 'bracket', 'parenthesis', 'colon', 'comma', 'dot', 'semicolon', 'attributeBracket', 'macroBang'].map(t => r('s-' + t, c.delim)),
+    r('s-builtinAttribute', c.macro), r('s-derive', c.macro), r('s-deriveHelper', c.macro), r('s-procMacro', c.macro), r('s-label', c.lifetime, 'italic'),
     // variável mutável sublinhada (como o rust-analyzer e o IntelliJ)
     { token: 's-variable.mutable', fontStyle: 'underline' }, { token: 's-parameter.mutable', fontStyle: 'underline' },
   ].filter(Boolean);
@@ -82,7 +88,7 @@ require(['vs/editor/editor.main'], () => {
     { token: 'string', foreground: '6AAB73' }, { token: 'number', foreground: '2AACB8' }, { token: 'type', foreground: 'BCBEC4' }, { token: 'type.identifier', foreground: 'C77DBB' },
     { token: 'identifier', foreground: 'BCBEC4' }, { token: 'delimiter', foreground: 'BCBEC4' }, { token: 'tag', foreground: 'D5B778' }, { token: 'attribute.name', foreground: 'BCBEC4' }, { token: 'attribute.value', foreground: '6AAB73' },
     { token: 'annotation', foreground: 'B3AE60' }, { token: 'metatag', foreground: 'B3AE60' }, { token: 'variable', foreground: 'C77DBB' },
-    ...semRules({ fn: '#56A8F5', type: '#C77DBB', field: '#C77DBB', konst: '#C77DBB', macro: '#B3AE60', lifetime: '#20999D', kw: '#CF8E6D' }),
+    ...semRules({ fn: '#56A8F5', type: '#C77DBB', field: '#C77DBB', konst: '#C77DBB', macro: '#B3AE60', lifetime: '#20999D', kw: '#CF8E6D', comment: '#7A7E85', str: '#6AAB73', num: '#2AACB8', delim: '#BCBEC4' }),
   ], colors: {
     'editor.background': '#191B21', 'editor.foreground': '#BCBEC4', 'editorLineNumber.foreground': '#4B5059', 'editorLineNumber.activeForeground': '#A1A3AB',
     'editor.lineHighlightBackground': '#20232B', 'editor.selectionBackground': '#24467F', 'editorCursor.foreground': '#CED0D6', 'editorGutter.background': '#191B21',
@@ -1149,7 +1155,7 @@ async function runLint(tab = S.active, quiet) {
 }
 function lintMarkers(tab) {
   const p = tab.problems || [];
-  if (tab.model) monaco.editor.setModelMarkers(tab.model, 'bs-lint', p.map(x => ({ startLineNumber: x.line, startColumn: x.col, endLineNumber: x.line, endColumn: x.col + 1, message: x.msg + (x.rule ? ` (${x.rule})` : ''), severity: x.sev === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning })));
+  if (tab.model) monaco.editor.setModelMarkers(tab.model, 'bs-lint', p.map(x => ({ startLineNumber: x.line, startColumn: x.col, endLineNumber: x.end_line || x.line, endColumn: x.end_line ? x.end_col : x.col + 1, message: x.msg + (x.rule ? ` (${x.rule})` : ''), severity: x.sev === 'error' ? monaco.MarkerSeverity.Error : x.sev === 'info' ? monaco.MarkerSeverity.Info : monaco.MarkerSeverity.Warning })));
   const b = $('#badge-problems'); if (b) { b.hidden = !p.length; b.textContent = p.length; }
   renderProblems(tab);
 }

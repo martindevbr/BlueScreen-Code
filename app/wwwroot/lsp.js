@@ -495,6 +495,7 @@ async function lsCheckProject() {
   const missing = [];
   for (const [lang, n] of Object.entries(count)) {
     if (n < 3 || serverFor(lang)) continue; // poucos arquivos (um script solto) não justificam o aviso
+    if (bs.lint && (bs.lint.universal || []).includes(lang)) continue; // plugin com lint embutido (Linter Universal): nada a baixar
     const known = knownFor(lang); if (!known.length) continue;
     const tool = known.find(t => t.auto) || known[0];
     const same = missing.find(m => m.tool.id === tool.id);

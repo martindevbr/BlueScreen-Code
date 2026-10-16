@@ -21,7 +21,7 @@ function Invoke-Cargo([string[]]$CargoArgs) {
   $hasPlugins = [bool](Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
   $toml = Join-Path $PSScriptRoot 'Cargo.toml'; $lock = Join-Path $PSScriptRoot 'Cargo.lock'
   $tomlText = [IO.File]::ReadAllText($toml); $lockText = [IO.File]::ReadAllText($lock)
-  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[\s*"\.",\s*"sdk"\s*\]', 'members = [".", "sdk", "plugins/*"]')) }
+  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[[^\]]*\]', 'members = [".", "sdk", "plugins/*"]')) }
   try { cargo @CargoArgs | Out-Host; return $LASTEXITCODE }
   finally { if ($hasPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
 }

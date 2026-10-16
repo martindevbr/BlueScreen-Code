@@ -1,0 +1,9 @@
+{
+  "id": "unilint",
+  "name": "Linter Universal",
+  "description": "Lint embutido para 16 linguagens (Python, JS/TS, Java, Rust, Go, C/C++, C#, Kotlin, PHP, Ruby, Lua, Bash, PowerShell): sem baixar linters, uma passada por arquivo, em paralelo.",
+  "version": "0.1.0",
+  "author": "BlueScreen",
+  "order": 10,
+  "hooks": { "lint": "unilint/lint" }
+}

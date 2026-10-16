@@ -7,7 +7,13 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 #[derive(Serialize, Clone)]
-pub struct Problem { pub line: usize, pub col: usize, pub sev: &'static str, pub msg: String, pub rule: String }
+pub struct Problem {
+    pub line: usize, pub col: usize, pub sev: &'static str, pub msg: String, pub rule: String,
+    /// fim do trecho (0 = só a posição inicial); os linters embutidos não informam, o Linter Universal sim
+    #[serde(skip_serializing_if = "is_zero")] pub end_line: usize,
+    #[serde(skip_serializing_if = "is_zero")] pub end_col: usize,
+}
+fn is_zero(n: &usize) -> bool { *n == 0 }
 #[derive(Serialize, Default)]
 pub struct LintResult {
     pub tool: Option<String>,
@@ -17,7 +23,7 @@ pub struct LintResult {
 }
 
 fn p(line: usize, col: usize, sev: &'static str, msg: impl Into<String>, rule: &str) -> Problem {
-    Problem { line: line.max(1), col: col.max(1), sev, msg: msg.into(), rule: rule.into() }
+    Problem { line: line.max(1), col: col.max(1), sev, msg: msg.into(), rule: rule.into(), end_line: 0, end_col: 0 }
 }
 fn pl(lc: (usize, usize), sev: &'static str, msg: impl Into<String>, rule: &str) -> Problem { p(lc.0, lc.1, sev, msg, rule) }
 /// linha e coluna (contadas em caracteres) do índice em bytes
@@ -329,6 +335,29 @@ async fn js(dir: &Path, file: &Path, ext: &str) -> LintResult {
     LintResult { tool: Some("typescript (editor)".into()), client: Some("ts"), ..Default::default() }
 }
 
+// ---------- plugins (gancho "lint") ----------
+/// Plugin inscrito no gancho `lint` (o Linter Universal) responde primeiro. Se ele recusar (`handled: false`,
+/// linguagem que ele não conhece), falhar ou estiver desligado, o lint segue o caminho de sempre.
+async fn plugin_lint(project: &Path, rel: &str) -> Option<LintResult> {
+    for (id, route) in crate::server::host().hooks("lint") {
+        let body = serde_json::json!({ "project": project.to_string_lossy(), "file": rel });
+        match bluescreen_sdk::plugin::core().post(&route, &[], &body).await {
+            Ok(v) if v["handled"] == true => {
+                let n = |x: &serde_json::Value, k: &str| x[k].as_u64().unwrap_or(0) as usize;
+                let problems = v["problems"].as_array().map(|a| a.iter().map(|x| Problem {
+                    line: n(x, "line").max(1), col: n(x, "col").max(1), end_line: n(x, "end_line"), end_col: n(x, "end_col"),
+                    sev: match x["sev"].as_str() { Some("error") => "error", Some("info") => "info", _ => "warning" },
+                    msg: x["msg"].as_str().unwrap_or("").into(), rule: x["rule"].as_str().unwrap_or(&id).into(),
+                }).collect()).unwrap_or_default();
+                return Some(LintResult { tool: v["tool"].as_str().map(String::from).or(Some(id)), problems, note: None, client: (v["client"] == "ts").then_some("ts") });
+            }
+            Ok(_) => {}
+            Err(e) => log(format!("plugin {id}: lint falhou, usando o lint de sempre ({})", e.msg)),
+        }
+    }
+    None
+}
+
 // ---------- entrada ----------
 static XML_EXT: LazyLock<HashSet<&str>> = LazyLock::new(|| ["xml", "xsd", "wsdl", "xsl", "xslt", "tld", "jrxml", "xmi", "pom", "svg", "project", "classpath", "launch", "component", "factorypath", "jsdtscope", "container", "name", "plist", "dtd"].into_iter().collect());
 const PLAIN_EXT: &[&str] = &["txt", "mf", "gitignore", "editorconfig", "iml", "log", "csv", "tu", "ti", "prd", "hml", "dnx"];
@@ -338,6 +367,12 @@ pub async fn lint(project: &Path, rel_file: &str) -> LintResult {
     let base = Path::new(rel_file).file_name().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if BINARY.contains(&ext.as_str()) { return LintResult { note: Some("Binário, sem lint".into()), ..Default::default() }; }
     let txt = match tokio::fs::read(&abs).await { Ok(b) => String::from_utf8_lossy(&b).into_owned(), Err(e) => return LintResult { note: Some(e.to_string()), ..Default::default() } };
+    if let Some(mut out) = plugin_lint(project, rel_file).await {
+        let mut all = generic(&txt);
+        all.append(&mut out.problems);
+        out.problems = all;
+        return out;
+    }
     let mut out = match ext.as_str() {
         "java" => java(project, &abs).await,
         "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "vue" => js(project, &abs, &ext).await,
