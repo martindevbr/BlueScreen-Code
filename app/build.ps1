@@ -20,11 +20,14 @@ function Copy-Plugin([string]$id, [string]$dest) {
 
 # plugins com servidor próprio (plugins\<id>\Cargo.toml) entram no workspace só durante o cargo build: o Cargo.toml
 # fica sem "plugins/*" (vazio, o curinga faz o cargo recusar o manifesto). Cargo.toml e Cargo.lock voltam como estavam.
+# Os membros são listados um a um: o curinga também pegaria os plugins só de interface (sem Cargo.toml, ex.: sheets),
+# e o cargo recusa o workspace inteiro por causa deles.
 function Invoke-Cargo([string[]]$CargoArgs) {
-  $hasPlugins = [bool](Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
+  $crates = @(Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') } | ForEach-Object { "`"plugins/$($_.Name)`"" })
+  $hasPlugins = $crates.Count -gt 0
   $toml = Join-Path $PSScriptRoot 'Cargo.toml'; $lock = Join-Path $PSScriptRoot 'Cargo.lock'
   $tomlText = [IO.File]::ReadAllText($toml); $lockText = [IO.File]::ReadAllText($lock)
-  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[[^\]]*\]', 'members = [".", "sdk", "plugin-server", "plugins/*"]')) }
+  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[[^\]]*\]', "members = [`".`", `"sdk`", `"plugin-server`", $($crates -join ', ')]")) }
   try { cargo @CargoArgs | Out-Host; return $LASTEXITCODE }
   finally { if ($hasPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
 }

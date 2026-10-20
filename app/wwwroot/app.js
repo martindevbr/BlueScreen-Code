@@ -423,7 +423,43 @@ function fileMenu(e, rel, isDir, vcsSub) {
     { label: 'Mostrar no Explorer', icon: I.explorer, action: () => reveal(absPath(rel)) },
     { label: 'Copiar caminho', icon: I.copy, action: () => copyText(absPath(rel)) },
     { label: 'Copiar caminho relativo', icon: I.copy, action: () => copyText(rel) },
+    ...(S.remote ? [] : ['-', { label: 'Excluir…', icon: I.x, k: 'Delete', action: () => deletePath(rel, isDir) }]),
   ], { rel, isDir, chg }), rel + (chg ? `  ·  ${chg.code}` : ''));
+}
+// Excluir (como o IntelliJ): confirma e manda para a Lixeira do Windows, então dá para desfazer por lá.
+// As abas do que foi excluído fecham sem salvar (salvar recriaria o arquivo).
+function deletePath(rel, isDir) {
+  if (!S.project || !rel) return;
+  const inside = (t) => t.project === S.project.path && (t.path === rel || (isDir && t.path.startsWith(rel + '/')));
+  const dirty = S.tabs.filter(t => inside(t) && t.dirty);
+  const name = rel.split('/').pop();
+  dialog('delDlg', `<div class="dlg-hd"><span class="dlg-ic del">${I.x}</span><div><h3>Excluir ${isDir ? 'a pasta' : 'o arquivo'} "${esc(name)}"?</h3><p>${esc(rel)}</p></div></div>
+    <p class="del-msg">${isDir ? 'A pasta e tudo o que está dentro dela vão' : 'O arquivo vai'} para a Lixeira do Windows; dá para restaurar por lá.</p>
+    ${dirty.length ? `<p class="del-msg warn">${dirty.length === 1 ? `${esc(dirty[0].path.split('/').pop())} tem alterações não salvas, que serão perdidas.` : `${dirty.length} arquivos abertos têm alterações não salvas, que serão perdidas.`}</p>` : ''}
+    <div class="err" id="delErr"></div>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip primary danger" id="delOk">Excluir</button></div>`, (el) => {
+    const ok = $('#delOk'); ok.focus();
+    el.onkeydown = (e) => { if (e.key === 'Escape') el.hidden = true; };
+    ok.onclick = async () => {
+      ok.disabled = true; $('#delErr').textContent = '';
+      // a linha que fica selecionada depois: a seguinte (ou a anterior) que não está dentro do que sai
+      const rows = S.treeRowsCache || [], at = rows.findIndex(r => r.p === rel);
+      const out = (p) => p === rel || p.startsWith(rel + '/');
+      const next = rows.slice(at + 1).find(r => !out(r.p)) || rows.slice(0, Math.max(0, at)).reverse().find(r => !out(r.p));
+      try { await api('file/delete', { project: S.project.path }, { method: 'POST', body: JSON.stringify({ paths: [rel] }) }); }
+      catch (e) { $('#delErr').textContent = e.message; ok.disabled = false; return; }
+      el.hidden = true;
+      S.tabs.filter(inside).forEach(t => { t.gone = true; t.dirty = false; closeTab(t); });
+      const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      for (const k of Object.keys(S.tree)) if (k === parent || out(k) || !k || parent.startsWith(k + '/')) delete S.tree[k];
+      for (const p of [...S.treeOpen]) if (out(p)) S.treeOpen.delete(p);
+      if (S.treeSel && out(S.treeSel)) S.treeSel = next ? next.p : null;
+      await refreshProject();
+      if (next) treeSelect(next.p, true);
+      toast(`${name} foi para a Lixeira`, 'ok');
+      BS.hooks.run('file:delete', rel, isDir);
+    };
+  });
 }
 function tabMenu(e, t) {
   showMenu(e, BS.hooks.apply('menu:tab', [
@@ -436,6 +472,7 @@ function tabMenu(e, t) {
     '-',
     { label: 'Mostrar no Explorer', icon: I.explorer, action: () => reveal(t.project + '\\' + t.path.replace(/\//g, '\\')) },
     { label: 'Copiar caminho', icon: I.copy, action: () => copyText(t.project + '\\' + t.path.replace(/\//g, '\\')) },
+    ...(S.remote || t.project !== S.project?.path ? [] : ['-', { label: 'Excluir arquivo…', icon: I.x, action: () => deletePath(t.path, false) }]),
   ], t), t.path);
 }
 function commitMenu(e, c) {
@@ -820,6 +857,7 @@ function bindTree(el) {
       else { for (let j = i - 1; j >= 0; j--) if (rows[j].depth < cur.depth) { go(j); break; } }
     }
     else if ((e.key === 'Enter' || e.key === 'F4') && cur) treeActivate(cur.p);
+    else if (e.key === 'Delete' && cur && cur.p && !S.remote) deletePath(cur.p, !!cur.dir);
     else return;
     e.preventDefault();
   };
