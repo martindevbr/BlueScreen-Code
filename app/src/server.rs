@@ -91,6 +91,15 @@ fn in_project(r: &Req, key: &str) -> ApiResult<(PathBuf, PathBuf, String)> {
     if !within(&p, &abs) { return Err(fail("fora do projeto", 400)); }
     Ok((p, abs, rel))
 }
+// caminho relativo que dá para criar no Windows: sem nomes vazios, "..", caracteres proibidos ou ponto/espaço no fim
+fn valid_rel(rel: &str) -> ApiResult<()> {
+    if rel.is_empty() { return Err(fail("Dê um nome", 400)); }
+    for s in rel.split('/') {
+        let bad = s.is_empty() || s == "." || s == ".." || s.ends_with('.') || s.ends_with(' ') || s.chars().any(|c| "\\:*?\"<>|".contains(c) || c.is_control());
+        if bad { return Err(fail(format!("Nome inválido: \"{s}\" (não use \\ : * ? \" < > |)"), 400)); }
+    }
+    Ok(())
+}
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = ApiResult<T>> {
     async move { tokio::task::spawn_blocking(f).await.map_err(|e| fail(e.to_string(), 500)) }
 }
@@ -220,6 +229,51 @@ fn core_routes() -> HashMap<String, RouteFn> {
             out.insert(f.to_string(), st.unwrap_or(Value::Null));
         }
         ok(json!({ "files": out }))
+    }));
+    // POST { path, dir, content }: cria arquivo (ou pasta, com dir: true) e as pastas no caminho; nunca grava por cima
+    add("file/new", route_fn(|r| async move {
+        if !r.is_post() { return Err(fail("POST", 405)); }
+        let p = absolute(&project(&r)?);
+        let b: Value = r.body_json()?;
+        let rel = norm(b["path"].as_str().unwrap_or("").trim()).trim_matches('/').to_string();
+        valid_rel(&rel)?;
+        let abs = absolute(&p.join(&rel));
+        if !within(&p, &abs) { return Err(fail("fora do projeto", 400)); }
+        if abs.exists() { return Err(fail(format!("Já existe {rel}"), 409)); }
+        if b["dir"].as_bool().unwrap_or(false) {
+            tokio::fs::create_dir_all(&abs).await.map_err(|e| fail(format!("Não deu para criar {rel}: {e}"), 500))?;
+        } else {
+            if let Some(d) = abs.parent() { tokio::fs::create_dir_all(d).await.map_err(|e| fail(format!("Não deu para criar a pasta: {e}"), 500))?; }
+            let mut f = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&abs).await.map_err(|e| fail(format!("Não deu para criar {rel}: {e}"), 500))?;
+            use tokio::io::AsyncWriteExt;
+            f.write_all(b["content"].as_str().unwrap_or("").as_bytes()).await?;
+        }
+        ok(json!({ "path": rel }))
+    }));
+    // POST { from, to }: move/renomeia dentro do projeto (ex.: classe para o pacote certo); cria as pastas do destino
+    add("file/move", route_fn(|r| async move {
+        if !r.is_post() { return Err(fail("POST", 405)); }
+        let p = absolute(&project(&r)?);
+        let b: Value = r.body_json()?;
+        let (from, to) = (norm(b["from"].as_str().unwrap_or("")), norm(b["to"].as_str().unwrap_or("").trim()).trim_matches('/').to_string());
+        valid_rel(&to)?;
+        let (src, dst) = (absolute(&p.join(&from)), absolute(&p.join(&to)));
+        if !within(&p, &src) || !within(&p, &dst) || src == p { return Err(fail("fora do projeto", 400)); }
+        if !src.exists() { return Err(fail(format!("{from} não existe"), 404)); }
+        if dst.exists() { return Err(fail(format!("Já existe {to}"), 409)); }
+        if let Some(d) = dst.parent() { tokio::fs::create_dir_all(d).await?; }
+        tokio::fs::rename(&src, &dst).await.map_err(|e| fail(format!("Não deu para mover: {e}"), 500))?;
+        ok(json!({ "path": to }))
+    }));
+    // pacote Java de uma pasta: { root, kind, pkg } (pkg só existe dentro de um source root de código, src ou test)
+    add("file/pkg", route_fn(|r| async move {
+        let (p, _, rel) = in_project(&r, "dir")?;
+        let p = absolute(&p);
+        let rel = norm(&rel).trim_matches('/').to_string();
+        let m = blocking(move || workspace::model(&p, false)).await?;
+        let Some((root, kind)) = workspace::root_of(&m, &rel) else { return ok(json!({ "root": null })) };
+        let pkg = if !matches!(kind, "src" | "test") { None } else if rel == root { Some(String::new()) } else { Some(rel[root.len() + 1..].replace('/', ".")) };
+        ok(json!({ "root": root, "kind": kind, "pkg": pkg }))
     }));
     // arquivos grandes, lidos em janelas de linhas (ver bigfile.rs)
     add("big/info", route_fn(|r| async move {

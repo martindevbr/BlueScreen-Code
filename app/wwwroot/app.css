@@ -846,6 +846,28 @@ html:not(.desktop) .wel-top { padding-right: 8px; }
 
 /* ===== SDKs e runtimes (sdk.js) ===== */
 .dlg-box.sdk-box { width: 820px; }
+/* Novo arquivo (newfile.js): nome em cima, tipos embaixo, setas trocam o tipo */
+.dlg-box.nf-box { width: 440px; }
+.nf-list { margin: 10px 0 0; max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: color-mix(in srgb, var(--bg) 50%, transparent); }
+.nf-it { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: 5px; font-size: 12.5px; color: var(--fg); cursor: pointer; }
+.nf-it:hover { background: var(--hover); }
+.nf-it.on { background: var(--sel); }
+.nf-it .ti { width: 16px; height: 16px; flex: none; }
+.nf-it em { margin-left: auto; font: 11px var(--mono); font-style: normal; color: var(--muted); }
+.nf-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+/* entrada rápida (sem modal), aberta onde foi o clique */
+.nf-pop { position: fixed; z-index: 95; width: 320px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 9px; box-shadow: var(--shadow); padding: 8px; animation: pop-in .09s ease-out; }
+.nf-pop .nf-t { display: flex; align-items: baseline; gap: 8px; padding: 0 2px 6px; font-size: 12px; }
+.nf-pop .nf-t b { font-weight: 600; color: var(--fg); white-space: nowrap; }
+.nf-pop .nf-t span { margin-left: auto; color: var(--muted); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nf-pop .nf-in { display: flex; align-items: center; gap: 4px; }
+.nf-pop .nf-in input { flex: 1; min-width: 0; height: 28px; }
+.nf-pop .nf-in input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.nf-pop .nf-in em { font: 11.5px var(--mono); font-style: normal; color: var(--muted); }
+.nf-pop .nf-kinds { margin-top: 6px; }
+.nf-pop .nf-msg { margin-top: 6px; min-height: 1em; font: 11px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nf-pop .nf-msg.err { color: var(--del); font-family: inherit; white-space: normal; }
+.ctx .it.has-sub.open { background: var(--hover); }
 .sdk-wrap { display: flex; gap: 14px; min-height: 380px; }
 .sdk-nav { flex: none; width: 170px; display: flex; flex-direction: column; gap: 2px; padding-right: 12px; border-right: 1px solid var(--line); }
 .sdk-k { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: var(--r-sm); color: var(--fg-2); text-align: left; }

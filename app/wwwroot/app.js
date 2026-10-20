@@ -338,15 +338,33 @@ function projectSwitcher() {
 // ===== Menu de contexto =====
 function showMenu(e, items, header) {
   e.preventDefault(); e.stopPropagation(); closeMenu();
-  const m = document.createElement('div'); m.className = 'ctx'; m.id = 'ctx';
-  m.innerHTML = (header ? `<div class="hd">${esc(header)}</div><div class="sep"></div>` : '') + items.map((it, i) => it === '-' ? '<div class="sep"></div>' : `<div class="it" data-i="${i}">${it.icon || '<span style="width:16px;flex:none"></span>'}<span>${esc(it.label)}</span>${it.k ? `<span class="k">${esc(it.k)}</span>` : ''}</div>`).join('');
-  document.body.appendChild(m);
+  const m = menuEl('ctx', items, header);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + 'px'; m.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + 'px';
-  m.querySelectorAll('.it').forEach(el => el.onclick = () => { closeMenu(); items[el.dataset.i].action(); });
 }
-function closeMenu() { $('#ctx')?.remove(); }
-document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctx, #btnSaveMenu')) closeMenu(); });
+// itens com sub: [...] abrem um submenu ao lado (passar o mouse ou clicar), como o "New ›" do IntelliJ
+function menuEl(id, items, header) {
+  const m = document.createElement('div'); m.className = 'ctx'; m.id = id;
+  m.innerHTML = (header ? `<div class="hd">${esc(header)}</div><div class="sep"></div>` : '') + items.map((it, i) => it === '-' ? '<div class="sep"></div>' : `<div class="it${it.sub ? ' has-sub' : ''}" data-i="${i}">${it.icon || '<span style="width:16px;flex:none"></span>'}<span>${esc(it.label)}</span>${it.sub ? '<span class="k">›</span>' : it.k ? `<span class="k">${esc(it.k)}</span>` : ''}</div>`).join('');
+  document.body.appendChild(m);
+  m.querySelectorAll('.it').forEach(el => {
+    const it = items[el.dataset.i];
+    if (it.sub) { el.onmouseenter = el.onclick = () => subMenu(el, it.sub); return; }
+    if (id === 'ctx') el.onmouseenter = () => $('#ctxSub')?.remove();
+    el.onclick = () => { closeMenu(); it.action(); };
+  });
+  return m;
+}
+function subMenu(row, items) {
+  if ($('#ctxSub')?.dataset.for === row.dataset.i) return;
+  $('#ctxSub')?.remove(); $('#ctx .it.open')?.classList.remove('open'); row.classList.add('open');
+  const s = menuEl('ctxSub', items); s.dataset.for = row.dataset.i;
+  const r = row.getBoundingClientRect(), w = s.getBoundingClientRect();
+  s.style.left = (r.right + w.width + 4 > innerWidth ? r.left - w.width - 2 : r.right + 2) + 'px';
+  s.style.top = Math.max(8, Math.min(r.top - 5, innerHeight - w.height - 8)) + 'px';
+}
+function closeMenu() { $('#ctx')?.remove(); $('#ctxSub')?.remove(); }
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('.ctx, #btnSaveMenu')) closeMenu(); });
 window.addEventListener('blur', closeMenu);
 const I = {
   open: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
@@ -1284,6 +1302,7 @@ async function runLint(tab = S.active, quiet) {
   $('#stLint').textContent = 'lint…';
   try {
     const r = await api('lint', { project: tab.project, file: tab.path });
+    if (!S.tabs.includes(tab)) return; // a aba fechou (ou o arquivo foi movido) enquanto o lint rodava
     if (r.client === 'ts' && (tab.lang === 'typescript' || tab.lang === 'javascript')) { const d = await tsDiagnostics(tab); r.problems = r.problems.concat(d); if (d.length || !r.problems.length) r.tool = (r.tool || '') + (r.tool && r.tool.includes('typescript') ? '' : ' + typescript'); }
     tab.problems = r.problems; tab.lintTool = r.tool || r.note;
     lintMarkers(tab); renderProblems(tab);
