@@ -206,6 +206,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bluescreen-plugin-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "bluescreen-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "bluescreen-sdk"
 version = "2.0.0"
 dependencies = [
@@ -223,6 +235,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "urlencoding",
  "zip",

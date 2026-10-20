@@ -1778,8 +1778,10 @@ function renderPlugins() {
   body.querySelectorAll('.plug').forEach(el => {
     const p = list.find(x => x.id === el.dataset.id);
     el.querySelector('.toggle').onclick = () => pluginsPost({ id: p.id, enabled: !p.enabled });
-    el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) }], `${p.name} v${p.version}`);
+    el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
   });
+  // servidores de plugins (plugstore.js): atualizações, catálogo e a lista de servidores
+  if (BS.pluginStore) BS.pluginStore.decorate(body);
 }
 async function pluginsPost(body) {
   // a janela recarrega para aplicar o plugin; volta direto para a aba Plugins

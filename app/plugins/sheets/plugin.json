@@ -1,0 +1,8 @@
+{
+  "id": "sheets",
+  "name": "Planilhas (CSV e XLSX)",
+  "description": "Abre .csv, .tsv e .xlsx numa tabela: várias abas, filtro, ordenação por coluna, cabeçalho, fórmulas e datas do Excel. Sem bibliotecas: tudo roda na página.",
+  "version": "1.0.0",
+  "author": "BlueScreen",
+  "order": 40
+}

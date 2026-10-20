@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod external;
+pub mod remote;
 pub use bluescreen_sdk::plugin::{Reply, Req, RouteFn, ok, path_str, project_of, route_fn};
 
 #[derive(Serialize, Clone, Default)]
@@ -50,6 +51,10 @@ pub struct PluginStatus {
     pub requires: Vec<String>,
     pub routes: Vec<String>,
     pub hooks: BTreeMap<String, String>,
+    /// instalado de um servidor de plugins: { server, version, sha256, installed } (.origin.json na pasta)
+    pub origin: Value,
+    /// está na pasta do usuário (~/.bluescreen/plugins), que é onde os servidores de plugins instalam
+    pub user: bool,
 }
 
 #[derive(Default)]
@@ -65,8 +70,15 @@ pub struct Registry {
 
 pub fn dirs() -> Vec<PathBuf> { vec![app_dir().join("plugins"), user_dir().join("plugins")] }
 pub fn config_file() -> PathBuf { user_dir().join("plugins.json") }
+/// ~/.bluescreen/plugins.json: { disabled: [ids], servers: [{ url, token }] }
+pub fn config() -> Value { match read_json(&config_file()) { v @ Value::Object(_) => v, _ => json!({}) } }
+pub fn save_config(f: impl FnOnce(&mut serde_json::Map<String, Value>)) {
+    let mut v = config();
+    if let Some(o) = v.as_object_mut() { f(o); }
+    let _ = write_atomic(&config_file(), &serde_json::to_string_pretty(&v).unwrap_or_default());
+}
 fn disabled() -> HashSet<String> {
-    read_json(&config_file())["disabled"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+    config()["disabled"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
 }
 
 struct Entry { manifest: Manifest, path: PathBuf, rank: usize, broken: Option<String> }
@@ -125,7 +137,10 @@ impl Host {
     }
     pub fn get(&self) -> Arc<Registry> { self.current.read().clone() }
     pub fn core(&self) -> &HashMap<String, RouteFn> { &self.core }
-    pub fn load(&self) {
+    pub fn load(&self) { self.load_skip(None) }
+    /// Recarrega sem um plugin: o processo dele sai e a pasta fica livre (para instalar uma versão nova por cima).
+    pub fn unload(&self, id: &str) { self.load_skip(Some(id)) }
+    fn load_skip(&self, skip: Option<&str>) {
         let mut reg = Registry::default();
         let off = disabled();
         let entries = discover();
@@ -133,11 +148,13 @@ impl Host {
         let mut active: HashSet<String> = HashSet::new();
         for e in entries {
             let m = e.manifest.clone();
+            if skip == Some(m.id.as_str()) { continue; }
             let exe = external::server_exe(&e.path, &m.id);
             let mut st = PluginStatus {
                 id: m.id.clone(), name: m.name.clone(), version: m.version.clone(), description: m.description.clone(), author: m.author.clone(),
                 kind: if exe.is_some() { "process" } else { "ui" }, path: e.path.to_string_lossy().into(), enabled: !off.contains(&m.id),
                 error: None, ui: false, server: exe.is_some(), order: m.order, requires: m.requires.clone(), routes: vec![], hooks: m.hooks.clone(),
+                origin: read_json(&e.path.join(".origin.json")), user: e.rank == 1,
             };
             if !st.enabled { reg.list.push(st); continue; }
             if let Some(b) = &e.broken { st.error = Some(b.clone()); reg.list.push(st); continue; }
@@ -180,7 +197,7 @@ impl Host {
         let mut set = disabled();
         if on { set.remove(id); } else { set.insert(id.to_string()); }
         let mut v: Vec<String> = set.into_iter().collect(); v.sort();
-        let _ = write_atomic(&config_file(), &serde_json::to_string_pretty(&json!({ "disabled": v })).unwrap_or_default());
+        save_config(|c| { c.insert("disabled".into(), json!(v)); });
         self.load();
     }
     /// ui.js + style.css de um plugin, servidos como um único script.

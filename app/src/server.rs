@@ -436,6 +436,7 @@ fn core_routes() -> HashMap<String, RouteFn> {
     for (name, f) in crate::deps::routes() { add(name, f); }
     // atualização pelo repositório git de origem
     for (name, f) in crate::update::routes() { add(name, f); }
+    for (name, f) in crate::plugins::remote::routes() { add(name, f); }
     m
 }
 
@@ -542,8 +543,10 @@ async fn handle(req: Request<Body>, remote: bool) -> Response {
     if path == "/api/mirror/ws" { return crate::share::mirror_ws(req, remote).await; }
     if path == "/api/terminal/ws" { let q = parse_query(req.uri().query()); return crate::terminal::ws(req, remote, q).await; }
     let name = path[5..].to_string();
-    let reg = host().get();
-    let Some(handler) = reg.routes.get(&name).cloned().or_else(|| host().core().get(&name).cloned()) else { return bad("rota desconhecida", 404) };
+    // o registro não fica preso durante a rota: instalar/atualizar um plugin troca o registro e precisa que o antigo
+    // saia (é ele que encerra o server.exe e solta o arquivo)
+    let handler = host().get().routes.get(&name).cloned().or_else(|| host().core().get(&name).cloned());
+    let Some(handler) = handler else { return bad("rota desconhecida", 404) };
     let (parts, body) = req.into_parts();
     let body = match axum::body::to_bytes(body, 256 * 1024 * 1024).await { Ok(b) => b, Err(e) => return bad(&e.to_string(), 413) };
     let internal = !remote && parts.headers.get(bluescreen_sdk::plugin::H_TOKEN).and_then(|v| v.to_str().ok()) == Some(bluescreen_sdk::plugin::core().token());

@@ -80,3 +80,41 @@ O núcleo chama a rota indicada (POST, como chamada interna) e usa a resposta. G
 | `build.info` | `{ project, root, rel, vcs, aggregator, poms, mavens, jdks }` | `{ tasks, aggregator, maven, systemNames, repos, data }`: tarefas extras (`main` destaca, `detail` lista os passos), pom agregador, versão de Maven preferida, nome dos grupos de tarefas, repositórios Maven (`{ id, label, default }`) e dados livres que o `ui.js` lê em `bs.build.info().plugins[id]` |
 | `build.run` | `{ project, root, repo }` quando o usuário escolheu um repositório do plugin | `{ settings, env, note }`: settings.xml do Maven, variáveis de ambiente do build e o aviso no console |
 | `lint` | `{ project, file }` (caminho relativo ao projeto) | `{ handled, tool, problems: [{ line, col, end_line, end_col, sev, msg, rule }], client }`. Com `handled: false` (ou erro), o núcleo segue o lint de sempre. `sev` é `error`, `warning` ou `info`; `client: "ts"` mantém o verificador TypeScript do editor |
+
+## Servidor de plugins
+
+`app/plugin-server` é um programa à parte que hospeda plugins com versões. A IDE aponta para ele na aba **Plugins** › **Servidores de plugins** (endereço e, para publicar, o token). A lista fica em `~/.bluescreen/plugins.json` (`servers`).
+
+**Na IDE:**
+- **Instalar.** Os plugins do servidor aparecem em **Disponíveis nos servidores**, com o botão **Instalar**.
+- **Aviso de atualização.**
+  - A IDE consulta os servidores alguns segundos depois de abrir, de meia em meia hora e quando você volta para a janela.
+  - Havendo versão maior de um plugin instalado, aparecem o selo no topo e o número na aba Plugins.
+  - O botão **Atualizar para vX** fica na linha do plugin.
+  - O aviso some quando você atualiza.
+- **Onde instala.** O plugin vai para `~/.bluescreen/plugins/<id>`, que vale mais que o do app.
+  - O pacote é conferido pelo sha256 antes.
+  - Um plugin com `server.exe` é encerrado e trocado sem fechar a IDE.
+  - A pasta ganha um `.origin.json` com o servidor e a versão.
+- **Publicar.** Clique com o botão direito no plugin › **Publicar no servidor**.
+  - Vão todos os arquivos da pasta, menos `src/`, `target/`, `Cargo.*` e os ocultos.
+  - Com o exe do cargo, em desenvolvimento, ele vai como `server.exe`.
+  - Para as IDEs receberem o aviso, aumente o `version` do `plugin.json`. Publicar a mesma versão pede confirmação para substituir.
+- **Desinstalar.** Botão direito no plugin › **Desinstalar**. Só vale para plugins da pasta do usuário. Se o app tiver o mesmo plugin, a versão do app volta a valer.
+
+**No servidor:**
+
+```
+app\build.ps1 -PluginServer
+dist\PluginServer\bluescreen-plugin-server.exe --port 4900 --dir D:\plugins --token SEGREDO --name "Plugins da equipe"
+```
+
+- **Pasta de dados:** `<dir>/<id>/<versão>/`. As IDEs sempre recebem a maior versão; as antigas ficam guardadas.
+- **Publicar sem a IDE:** solte a pasta do plugin, a que tem o `plugin.json`, direto em `<dir>/`. O servidor lê o id e a versão e arquiva sozinho.
+- **Rotas:**
+  - `GET /api/index`
+  - `GET /api/plugins/<id>[?version=]`, que devolve o pacote `{ id, version, sha256, files: [{ path, data (base64) }] }`
+  - `POST /api/publish[?force=1]` e `DELETE /api/plugins/<id>/<versão>`, as duas com `Authorization: Bearer <token>`
+  - `GET /`, uma página com a lista
+- **Token:** sem `--token`, o servidor gera um e o guarda em `<dir>/.token`.
+

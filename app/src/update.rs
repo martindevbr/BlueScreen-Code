@@ -46,7 +46,8 @@ async fn git(repo: &Path, args: &[&str], ms: u64) -> ProcResult { run("git", arg
 
 /// o arquivo mudado exige compilar o núcleo?
 fn native(f: &str) -> bool {
-    if !f.starts_with("app/") || f.ends_with(".md") || f.starts_with("app/wwwroot/") { return false; }
+    // o servidor de plugins é um programa à parte, que a IDE não usa
+    if !f.starts_with("app/") || f.ends_with(".md") || f.starts_with("app/wwwroot/") || f.starts_with("app/plugin-server/") { return false; }
     if f.starts_with("app/plugins/") { return f.contains("/src/") || f.ends_with("Cargo.toml"); }
     true
 }
@@ -461,6 +462,7 @@ mod tests {
         assert!(native("app/plugins/unilint/src/engine.rs"));
         assert!(!native("app/wwwroot/app.js"));
         assert!(!native("app/plugins/unilint/ui.js"));
+        assert!(!native("app/plugin-server/src/main.rs"));
         assert!(!native("README.md"));
         assert!(!native("Instalar BlueScreen.cmd"));
     }

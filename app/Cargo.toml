@@ -11,7 +11,7 @@ publish = false
 # Plugins com servidor próprio (pastas em plugins/ com Cargo.toml) entram no workspace só na hora do build.ps1:
 # um "plugins/*" fixo aqui, com a pasta sem nenhum crate, faz o cargo recusar o manifesto inteiro (e com ele o
 # cargo check, o rust-analyzer e qualquer ferramenta de Rust). O unilint (plugin oficial) fica sempre: a pasta existe.
-members = [".", "sdk", "plugins/unilint"]
+members = [".", "sdk", "plugin-server", "plugins/unilint"]
 
 [dependencies]
 bluescreen-sdk = { path = "sdk" }

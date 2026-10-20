@@ -6,7 +6,7 @@
 // Texto grande demais para o editor (logs de GB) abre no leitor por janelas de linhas (bigview.js).
 // A aba do visualizador tem mode 'view' e não tem modelo do Monaco; o elemento de cada aba fica guardado, então
 // trocar de aba não recarrega a imagem nem perde o ponto do vídeo. Se o arquivo mudar no disco, recarrega sozinho.
-// custom: tipos registrados por outros arquivos (bigview.js): { build(t, el), show(t), reload(t), close(t), goto(t, line), save(t, auto) }
+// custom: tipos registrados por outros arquivos (bigview.js) e por plugins (planilhas): { build(t, el), show(t), reload(t), close(t), goto(t, line), save(t, auto) }
 const VW = { el: null, forceText: new Set(), custom: {} };
 const VW_KINDS = {
   image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'],
@@ -164,7 +164,7 @@ function vwReload(t) {
 (function vwInit() {
   VW.el = document.createElement('div'); VW.el.id = 'vw'; VW.el.style.display = 'none';
   $('#mon').appendChild(VW.el);
-  BS.fileViewer = { kind: vwKind, open: vwOpen, openBig: vwOpenBig, show: vwShow, reload: vwReload, kinds: VW_KINDS, custom: VW.custom, bar: vwBar, size: vwSize, act: vwAct,
+  BS.fileViewer = { kind: vwKind, open: vwOpen, openBig: vwOpenBig, show: vwShow, reload: vwReload, kinds: VW_KINDS, labels: VW_LABEL, forceText: VW.forceText, custom: VW.custom, bar: vwBar, size: vwSize, act: vwAct, url: vwUrl,
     // abas de visualizador que editam (arquivo grande): salvar passa pelo tipo
     save: (t, auto) => VW.custom[t.kind]?.save?.(t, auto) };
   BS.hooks.on('tab:close', (t) => {

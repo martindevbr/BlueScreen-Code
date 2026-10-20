@@ -3,7 +3,8 @@
 #   .\build.ps1 -Plugin <id> monta só dist\plugins\<id> (para copiar em ~\.bluescreen\plugins de outra máquina)
 #   .\build.ps1 -Packages bluescreen,bluescreen-unilint   compila só esses pacotes (o atualizador passa o que mudou);
 #                         os outros exes vêm do target\release da compilação anterior (sem eles, compila tudo)
-param([string]$Plugin = '', [string]$Out = "$PSScriptRoot\dist", [string[]]$Packages = @())
+#   .\build.ps1 -PluginServer   monta só o servidor de plugins em dist\PluginServer
+param([string]$Plugin = '', [string]$Out = "$PSScriptRoot\dist", [string[]]$Packages = @(), [switch]$PluginServer)
 $ErrorActionPreference = 'Continue' # o cargo escreve o progresso no stderr; o que vale é o código de saída
 Set-Location $PSScriptRoot
 
@@ -23,7 +24,7 @@ function Invoke-Cargo([string[]]$CargoArgs) {
   $hasPlugins = [bool](Get-ChildItem 'plugins' -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') })
   $toml = Join-Path $PSScriptRoot 'Cargo.toml'; $lock = Join-Path $PSScriptRoot 'Cargo.lock'
   $tomlText = [IO.File]::ReadAllText($toml); $lockText = [IO.File]::ReadAllText($lock)
-  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[[^\]]*\]', 'members = [".", "sdk", "plugins/*"]')) }
+  if ($hasPlugins) { [IO.File]::WriteAllText($toml, ($tomlText -replace 'members = \[[^\]]*\]', 'members = [".", "sdk", "plugin-server", "plugins/*"]')) }
   try { cargo @CargoArgs | Out-Host; return $LASTEXITCODE }
   finally { if ($hasPlugins) { [IO.File]::WriteAllText($toml, $tomlText); [IO.File]::WriteAllText($lock, $lockText) } }
 }
@@ -46,6 +47,15 @@ function Copy-WebView2Loader([string]$exe, [string]$dest) {
   Write-Host "WebView2Loader.dll ($arch) -> $dest (build com o Rust GNU)"
 }
 
+# servidor de plugins (programa à parte, fora da IDE): dist\PluginServer\bluescreen-plugin-server.exe
+if ($PluginServer) {
+  if (Invoke-Cargo @('build', '--release', '-p', 'bluescreen-plugin-server')) { exit 1 }
+  $dest = Join-Path $Out 'PluginServer'; New-Item -ItemType Directory -Force $dest | Out-Null
+  Copy-Item 'target\release\bluescreen-plugin-server.exe' $dest
+  Write-Host "servidor de plugins -> $dest (rode bluescreen-plugin-server.exe --help)"
+  exit 0
+}
+
 if ($Plugin) {
   if (Test-Path "plugins\$Plugin\Cargo.toml") { if (Invoke-Cargo @('build', '--release', '-p', "bluescreen-$Plugin")) { exit 1 } }
   Copy-Plugin $Plugin (Join-Path $Out "plugins\$Plugin")
@@ -62,7 +72,7 @@ if ($partial) {
   Write-Host "Compilando só: $($Packages -join ', ')"
   $cargoArgs = @('build', '--release'); foreach ($p in $Packages) { $cargoArgs += @('-p', $p) }
   if (Invoke-Cargo $cargoArgs) { exit 1 }
-} elseif (Invoke-Cargo @('build', '--release', '--workspace')) { exit 1 }
+} elseif (Invoke-Cargo @('build', '--release', '--workspace', '--exclude', 'bluescreen-plugin-server')) { exit 1 }
 $dist = Join-Path $Out 'BlueScreen'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
