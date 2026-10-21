@@ -1,8 +1,8 @@
 /* BlueScreen: Cofre (plugins/vault.rs). Tokens que você guarda uma vez e libera para os plugins que quiser.
    O valor nunca passa por esta tela: entra pela área de transferência, lida pelo núcleo, e fica cifrado (DPAPI).
    Gravar, liberar um plugin e acrescentar sites ou programas pedem um "Sim" numa caixa nativa do Windows, que o
-   JavaScript da página não clica; tirar acesso e apagar não pedem. Abre pela aba Plugins (ícone da chave), pelo
-   Buscar em tudo ("Cofre") e por plugin.vault.request(nome) no ui.js de um plugin. */
+   JavaScript da página não clica; tirar acesso e apagar não pedem. Abre pelo ícone da chave na barra da esquerda
+   (Alt+8), pela faixa no topo da aba Plugins, pelo Buscar em tudo ("Cofre") e por plugin.vault.request(nome). */
 (function (bs) {
 if (bs.doc) return;
 const { $, esc, toast, api } = bs;
@@ -17,8 +17,20 @@ const post = async (body, wait) => {
 };
 const load = async () => { V.data = await api('vault'); mark(); return V.data; };
 const pending = () => (V.data ? V.data.requests : []).filter(r => !r.granted || (r.reveal && !r.revealGranted));
-// ponto na chave da aba Plugins quando algum plugin pede um segredo que ainda não foi liberado
-function mark() { const b = $('#plVault'); if (b) b.classList.toggle('dot', pending().some(r => !r.granted)); }
+// número no ícone da barra lateral e faixa da aba Plugins: pedidos de plugins ainda não liberados
+function mark() {
+  const n = pending().filter(r => !r.granted).length;
+  const b = $('#badge-vault'); if (b) { b.hidden = !n; b.textContent = n; }
+  const ban = $('.vt-wrap'); if (ban) ban.outerHTML = banner();
+  bindBanner(document);
+}
+// faixa no topo da aba Plugins: o que tem no cofre e o que os plugins pedem
+function banner() {
+  const d = V.data; const n = d ? d.entries.length : 0; const p = pending().filter(r => !r.granted).length;
+  const sub = !d ? 'Tokens e senhas que os plugins usam sem ver o valor.' : `${n ? `${n} segredo${n > 1 ? 's' : ''} guardado${n > 1 ? 's' : ''}` : 'Nenhum segredo guardado'}${p ? ` · <b>${p} pedido${p > 1 ? 's' : ''} de plugin</b>` : ''}`;
+  return `<div class="vt-wrap"><div class="vt-banner ${p ? 'ask' : ''}"><span class="vt-key">${KEY}</span><div class="vt-tx"><div class="vt-bt">Cofre de credenciais</div><div class="vt-bs">${sub}</div></div><button class="chip ${p ? 'primary' : ''}" data-vault-open>Abrir cofre</button></div></div>`;
+}
+function bindBanner(root) { root.querySelectorAll('[data-vault-open]').forEach(b => b.onclick = () => open()); }
 
 const chips = (list, empty) => list && list.length ? list.map(h => `<span class="vt-chip">${esc(h)}</span>`).join('') : `<span class="vt-none">${esc(empty)}</span>`;
 const pname = (id) => (bs.plugins.list.find(p => p.id === id) || { name: id }).name;
@@ -74,7 +86,7 @@ function newForm() {
 function render() {
   const d = V.data || { entries: [], requests: [], audit: [] };
   const reqs = pending();
-  return `<div class="dlg-hd"><span class="dlg-ic">${KEY}</span><div><h3>Cofre</h3><p>Tokens que você guarda uma vez e libera para os plugins. Ficam cifrados neste PC, e os plugins usam sem ver o valor, só nos sites que você liberar.</p></div></div>
+  return `<div class="dlg-hd"><span class="dlg-ic">${KEY}</span><div><h3>Cofre de credenciais</h3><p>Tokens que você guarda uma vez e libera para os plugins. Ficam cifrados neste PC, e os plugins usam sem ver o valor, só nos sites que você liberar.</p></div></div>
     <div class="vt-body">
     ${reqs.length ? `<div class="vt-sub">Pedidos dos plugins</div>${reqs.map(requestCard).join('')}` : ''}
     <div class="vt-sub">Segredos${d.entries.length ? ` <span class="vt-n">${d.entries.length}</span>` : ''}</div>
@@ -151,8 +163,10 @@ async function open(focus) {
   draw();
 }
 
-bs.vault = { open, refresh: load };
-bs.actions.add({ label: 'Cofre de segredos (tokens dos plugins)', icon: KEY, run: () => open() });
+bs.vault = { open, refresh: load, banner, bindBanner };
+bs.actions.add({ label: 'Cofre de credenciais (tokens dos plugins)', icon: KEY, k: 'Alt+8', run: () => open() });
+// ícone próprio na barra da esquerda, junto de Plugins: abre o cofre (não é um painel)
+bs.tools.register({ id: 'vault', title: 'Cofre de credenciais', icon: KEY, key: 'Alt+8', order: 990, bottom: true, render() {}, toggle() { open(); } });
 bs.hooks.on('refresh', () => load().catch(() => {}));
 // depois de os plugins carregarem: o ponto na chave avisa pedidos pendentes
 setTimeout(() => load().catch(() => {}), 1500);

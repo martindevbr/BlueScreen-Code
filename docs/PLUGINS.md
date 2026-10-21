@@ -91,7 +91,7 @@ await plugin.files.write('cache/repos.json', repos);
 
 O cofre guarda tokens da IDE (GitHub, OpenAI, Jira, a API da empresa) **uma vez só** e libera cada um para os plugins que você escolher. É diferente de `plugin.secrets`, que é de um plugin só: um segredo do cofre pode servir a vários plugins, e você controla para onde ele vai.
 
-Abre pela aba **Plugins** (ícone da chave; um ponto azul avisa que algum plugin está pedindo acesso), pelo **Buscar em tudo** ("Cofre") ou pelo botão direito num plugin › **Cofre…**. Fica em `~/.bluescreen/vault.json`.
+Abre pelo ícone da chave na barra da esquerda (**Alt+8**; um número nele avisa que há plugins pedindo acesso), pela faixa **Cofre de credenciais** no topo da aba Plugins, pelo **Buscar em tudo** ("Cofre") ou pelo botão direito num plugin › **Cofre…**. Fica em `~/.bluescreen/vault.json`.
 
 ### Para quem usa
 

@@ -2041,18 +2041,20 @@ BS.tools.register({ id: 'plugins', title: 'Plugins', icon: I.plug, key: 'Alt+7',
 function renderPlugins() {
   const body = $('#toolBody'); const list = BS.plugins.list;
   $('#toolSub').textContent = `${list.filter(p => p.enabled && !p.error).length} de ${list.length}`;
-  $('#toolActions').innerHTML = `${BS.vault ? `<button class="icon-btn" id="plVault" title="Cofre: tokens dos plugins">${VAULT_ICON}</button>` : ''}<button class="icon-btn" id="plDir" title="Abrir a pasta dos seus plugins">${I.explorer}</button><button class="icon-btn" id="plReload" title="Recarregar plugins">${I.refresh}</button>`;
+  $('#toolActions').innerHTML = `<button class="icon-btn" id="plDir" title="Abrir a pasta dos seus plugins">${I.explorer}</button><button class="icon-btn" id="plReload" title="Recarregar plugins">${I.refresh}</button>`;
   $('#plReload').onclick = () => pluginsPost({ reload: true });
-  if (BS.vault) { $('#plVault').onclick = () => BS.vault.open(); BS.vault.refresh().catch(() => {}); }
   $('#plDir').onclick = () => reveal(BS.plugins.dirs[1] || BS.plugins.dirs[0]);
-  // um cartão por plugin: ícone, nome, descrição (duas linhas; "mais" abre o resto) e o interruptor à direita
-  body.innerHTML = list.length ? `<div class="plugs">${list.map(p => `<div class="plug ${p.enabled ? '' : 'off'} ${p.error ? 'bad' : ''}" data-id="${esc(p.id)}">
+  // no topo, a faixa do cofre de credenciais (vault.js); depois um cartão por plugin: ícone, nome, descrição (duas
+  // linhas; "mais" abre o resto) e o interruptor à direita
+  const vault = BS.vault ? BS.vault.banner() : '';
+  body.innerHTML = vault + (list.length ? `<div class="plugs">${list.map(p => `<div class="plug ${p.enabled ? '' : 'off'} ${p.error ? 'bad' : ''}" data-id="${esc(p.id)}">
       ${plugIcon(p)}
       <div class="tx"><div class="nm"><span class="pl-name">${esc(p.name)}</span></div>
         ${p.description ? `<div class="ds">${esc(p.description)}</div><button class="pl-more" hidden>mais</button>` : ''}
         ${p.requires && p.requires.length ? `<div class="pl-req">Precisa de: ${p.requires.map(esc).join(', ')}</div>` : ''}
         ${p.error ? `<div class="er">${esc(p.error)}</div>` : ''}</div>
-      <div class="pl-side">${p.settings && p.settings.length ? `<button class="icon-btn pl-cfg" title="Configurações de ${esc(p.name)}">${I.gear}</button>` : ''}<button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>';
+      <div class="pl-side">${p.settings && p.settings.length ? `<button class="icon-btn pl-cfg" title="Configurações de ${esc(p.name)}">${I.gear}</button>` : ''}<button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>');
+  if (BS.vault) { BS.vault.bindBanner(body); BS.vault.refresh().catch(() => {}); }
   body.querySelectorAll('.plug').forEach(el => {
     const p = list.find(x => x.id === el.dataset.id), sw = el.querySelector('.sw2');
     sw.onclick = () => { if (sw.disabled) return; sw.disabled = true; sw.classList.toggle('on'); sw.classList.add('busy'); sw.setAttribute('aria-checked', String(!p.enabled)); setTimeout(() => pluginsPost({ id: p.id, enabled: !p.enabled }), 180); };
