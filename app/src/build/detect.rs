@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -27,6 +27,8 @@ pub struct TaskStep {
     #[serde(skip_serializing_if = "String::is_empty")] pub cwd: String,
     /// precisa do JDK escolhido (JAVA_HOME)
     #[serde(skip_serializing_if = "std::ops::Not::not")] pub java: bool,
+    /// variáveis de ambiente só deste passo (ex.: PYTHONPATH de um plugin que executa o main)
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")] pub env: BTreeMap<String, String>,
 }
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -117,7 +119,7 @@ impl Ctx<'_> {
         let id = format!("{}#{}", self.sys, line);
         self.tasks.push(Task {
             id, label: label.into(), desc: desc.into(), system: self.sys.clone(), long,
-            steps: vec![TaskStep { kind: "cmd".into(), label: line, args, program: program.into(), cwd: self.dir.to_string_lossy().into(), java: self.java }],
+            steps: vec![TaskStep { kind: "cmd".into(), label: line, args, program: program.into(), cwd: self.dir.to_string_lossy().into(), java: self.java, ..Default::default() }],
             ..Default::default()
         });
     }
@@ -437,7 +439,7 @@ pub fn run_file(project: &Path, rel: &str) -> Option<(String, Vec<TaskStep>)> {
     let ext = Path::new(rel).extension()?.to_string_lossy().to_lowercase();
     let exe = std::env::temp_dir().join(format!("bluescreen-run{}", if cfg!(windows) { ".exe" } else { "" })).to_string_lossy().to_string();
     let py = if cfg!(windows) { first_tool(&["py", "python"]).0 } else { "python3".into() };
-    let step = |program: &str, args: Vec<String>| TaskStep { kind: "cmd".into(), label: format!("{} {}", program, args.join(" ")), args, program: program.into(), cwd: dir.clone(), java: false };
+    let step = |program: &str, args: Vec<String>| TaskStep { kind: "cmd".into(), label: format!("{} {}", program, args.join(" ")), args, program: program.into(), cwd: dir.clone(), ..Default::default() };
     let one = |program: &str, args: &[&str]| vec![step(program, args.iter().map(|a| a.replace("{f}", &f)).collect())];
     let steps: Vec<TaskStep> = match ext.as_str() {
         "py" | "pyw" => one(&py, &["{f}"]),

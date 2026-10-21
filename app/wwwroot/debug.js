@@ -295,8 +295,11 @@ bs.hooks.on('editor:ready', (ed) => {
   ed.addCommand(K.Shift | C.F9, () => start());
   ed.addCommand(K.CtrlCmd | C.F8, () => { const t = S.active; if (t && t.mode === 'editor') bpToggle(t, ed.getPosition().lineNumber); });
   const GM = monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN;
-  ed.onMouseDown((e) => { if (e.target.type === GM && e.event.leftButton && S.active && S.active.mode === 'editor') bpToggle(S.active, e.target.position.lineNumber); });
-  ed.onContextMenu((e) => { if (e.target.type !== GM || !S.active) return; const line = e.target.position.lineNumber; const t = S.active; const has = bpsOf(t.path).has(line);
+  // a faixa da esquerda da margem é dos plugins (ex.: ▶ do main, do plugin runtimes); a do meio é dos breakpoints
+  const LEFT = monaco.editor.GlyphMarginLane.Left;
+  const OTHER_LANE = (e) => { const m = ed.getModel(); return !!(m && e.target.detail && e.target.detail.glyphMarginLane === LEFT && e.target.position && m.getLineDecorations(e.target.position.lineNumber).some(d => d.options.glyphMargin && d.options.glyphMargin.position === LEFT)); };
+  ed.onMouseDown((e) => { if (e.target.type === GM && !OTHER_LANE(e) && e.event.leftButton && S.active && S.active.mode === 'editor') bpToggle(S.active, e.target.position.lineNumber); });
+  ed.onContextMenu((e) => { if (e.target.type !== GM || OTHER_LANE(e) || !S.active) return; const line = e.target.position.lineNumber; const t = S.active; const has = bpsOf(t.path).has(line);
     showMenu(e.event.browserEvent, [{ label: has ? 'Remover breakpoint' : 'Adicionar breakpoint', icon: BUG, action: () => bpToggle(t, line) }, { label: 'Condição…', icon: I.edit, action: () => bpCondition(t, line) }], 'Linha ' + line); });
   // prévia do breakpoint ao passar pela margem
   let ghost = [];

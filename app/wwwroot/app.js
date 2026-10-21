@@ -104,6 +104,7 @@ require(['vs/editor/editor.main'], () => {
   ], colors: { 'editor.background': '#FFFFFF', 'editor.lineHighlightBackground': '#F5F8FE', 'editor.selectionBackground': '#A6D2FF', 'editorLineNumber.foreground': '#AEB3C2', 'editorGutter.background': '#FFFFFF', 'diffEditor.insertedTextBackground': '#BEE6BE80', 'diffEditor.removedTextBackground': '#FFD5CC80' } });
   try { const ts = monaco.languages.typescript; const co = { allowJs: true, checkJs: false, allowNonTsExtensions: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.NodeJs, experimentalDecorators: true, noEmit: true, jsx: ts.JsxEmit.Preserve }; ts.typescriptDefaults.setCompilerOptions(co); ts.javascriptDefaults.setCompilerOptions(co); ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false }); } catch {}
   registerJsp();
+  registerGherkin();
   applyTheme();
   boot();
 });
@@ -135,6 +136,47 @@ function registerJsp() {
     } };
   }));
 }
+// Gherkin (.feature do Cucumber, Behave, SpecFlow): palavras-chave em inglês, português e espanhol, as mesmas do
+// lint (lint_formats.rs); tags, <colunas> dos Exemplos, tabelas e docstrings
+function registerGherkin() {
+  const L = monaco.languages;
+  L.register({ id: 'gherkin', extensions: ['.feature', '.gherkin'], aliases: ['Gherkin', 'Cucumber'] });
+  L.setLanguageConfiguration('gherkin', {
+    comments: { lineComment: '#' },
+    autoClosingPairs: [{ open: '"', close: '"' }, { open: "'", close: "'" }, { open: '<', close: '>' }, { open: '(', close: ')' }, { open: '[', close: ']' }, { open: '{', close: '}' }],
+    surroundingPairs: [{ open: '"', close: '"' }, { open: '<', close: '>' }],
+    folding: { offSide: true },
+  });
+  const heads = ['Feature', 'Business Need', 'Ability', 'Rule', 'Background', 'Scenario Outline', 'Scenario Template', 'Scenario', 'Example', 'Examples', 'Scenarios',
+    'Funcionalidade', 'Característica', 'Caracteristica', 'Regra', 'Contexto', 'Cenário de Fundo', 'Cenario de Fundo', 'Fundo', 'Esquema do Cenário', 'Esquema do Cenario',
+    'Delineação do Cenário', 'Delineacao do Cenario', 'Cenário', 'Cenario', 'Exemplos', 'Exemplo', 'Cenários', 'Cenarios',
+    'Necesidad del negocio', 'Requisito', 'Regla de negocio', 'Regla', 'Antecedentes', 'Esquema del escenario', 'Escenario', 'Ejemplos', 'Ejemplo'];
+  const steps = ['Given', 'When', 'Then', 'And', 'But', 'Dado', 'Dada', 'Dados', 'Dadas', 'Quando', 'Então', 'Entao', 'E', 'Mas', 'Cuando', 'Entonces', 'Y', 'Pero'];
+  const alt = (w) => w.sort((a, b) => b.length - a.length).join('|');
+  L.setMonarchTokensProvider('gherkin', {
+    tokenizer: {
+      root: [
+        [/^\s*#\s*language\s*:.*$/, 'keyword'],
+        [/^\s*#.*$/, 'comment'],
+        [new RegExp(`^(\\s*)(${alt(heads)})(:)`), ['', 'keyword', 'delimiter']],
+        [new RegExp(`^(\\s*)(${alt(steps)}|\\*)(?= )`), ['', 'type.identifier']],
+        [/^\s*("""|```).*$/, 'string', '@doc'],
+        [/@[^\s@#]+/, 'tag'],
+        [/\|/, 'delimiter'],
+        [/<[^<>\s][^<>]*>/, 's-typeParameter'], // a regra existe em todos os temas (semRules): itálico
+        [/"(?:[^"\\]|\\.)*"/, 'string'],
+        [/'(?:[^'\\]|\\.)*'/, 'string'],
+        [/-?\b\d+(?:[.,]\d+)?\b/, 'number'],
+        [/[^\s|<"'@\d-]+|./, ''],
+      ],
+      doc: [
+        [/^\s*("""|```)\s*$/, 'string', '@pop'],
+        [/<[^<>\s][^<>]*>/, 's-typeParameter'],
+        [/[^<]+|</, 'string'],
+      ],
+    },
+  });
+}
 const editorOpts = () => ({ fontFamily: "'JetBrains Mono', 'Cascadia Code', Consolas, monospace", fontSize: S.fontSize || 13, fontLigatures: true, lineHeight: Math.round((S.fontSize || 13) * 1.7), minimap: { enabled: false }, scrollBeyondLastLine: false, renderLineHighlight: 'all', smoothScrolling: true, cursorBlinking: 'smooth', padding: { top: 8 }, wordWrap: S.wrap ? 'on' : 'off', automaticLayout: true, bracketPairColorization: { enabled: true }, guides: { bracketPairs: true, indentation: true }, scrollbar: { verticalScrollbarSize: 10 }, roundedSelection: false, stickyScroll: { enabled: true }, showFoldingControls: 'mouseover', cursorSmoothCaretAnimation: 'on', lineNumbersMinChars: 4, renderWhitespace: 'trailing', 'semanticHighlighting.enabled': true, inlayHints: { enabled: 'on', fontSize: Math.max(10, (S.fontSize || 13) - 2), padding: true }, theme: themeName() });
 const themeName = () => window.BS_MONACO_THEME || (document.documentElement.dataset.theme === 'light' ? 'bs-light' : 'bs-dark');
 // tema: Monaco + barra de título da janela nativa (cor do fundo azul)
@@ -146,7 +188,7 @@ function applyTheme() {
 // janela do aplicativo (WebView2): mensagens para a parte nativa; no navegador não faz nada
 const desktop = (msg) => { try { if (window.BS_DESKTOP && window.ipc) window.ipc.postMessage(JSON.stringify(msg)); } catch {} };
 
-const LANG = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', json: 'json', html: 'html', htm: 'html', jsp: 'jsp', jspf: 'jsp', tag: 'jsp', vue: 'html', xml: 'xml', xsd: 'xml', wsdl: 'xml', css: 'css', scss: 'scss', less: 'less', md: 'markdown', py: 'python', java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cs: 'csharp', php: 'php', rb: 'ruby', sh: 'shell', bat: 'bat', ps1: 'powershell', yml: 'yaml', yaml: 'yaml', sql: 'sql', properties: 'ini', ini: 'ini', toml: 'ini', dockerfile: 'dockerfile', gradle: 'groovy', groovy: 'groovy', txt: 'plaintext' };
+const LANG = { js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', json: 'json', html: 'html', htm: 'html', jsp: 'jsp', jspf: 'jsp', tag: 'jsp', vue: 'html', xml: 'xml', xsd: 'xml', wsdl: 'xml', css: 'css', scss: 'scss', less: 'less', md: 'markdown', py: 'python', java: 'java', kt: 'kotlin', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', cs: 'csharp', php: 'php', rb: 'ruby', sh: 'shell', bat: 'bat', ps1: 'powershell', yml: 'yaml', yaml: 'yaml', sql: 'sql', properties: 'ini', ini: 'ini', toml: 'ini', dockerfile: 'dockerfile', gradle: 'groovy', groovy: 'groovy', feature: 'gherkin', gherkin: 'gherkin', txt: 'plaintext' };
 const langOf = (f) => { const n = f.toLowerCase(); if (n.endsWith('dockerfile')) return 'dockerfile'; return LANG[n.split('.').pop()] || 'plaintext'; };
 
 // ===== Boot =====
@@ -283,7 +325,11 @@ async function openProjectDialog() {
 function newProjectDialog() {
   closeMenu();
   if (S.remote) return toast('Novo projeto só pelo PC');
-  const loc = store.get('newProjLoc', null) || S.root || '';
+  // projetos novos vão para a pasta Projects da raiz (criada se faltar); o local guardado que era a própria raiz também
+  const root = (S.root || '').replace(/[\\/]+$/, '');
+  const def = root ? root + (root.includes('/') && !root.includes('\\') ? '/' : '\\') + 'Projects' : '';
+  const saved = (store.get('newProjLoc', null) || '').replace(/[\\/]+$/, '');
+  const loc = saved && saved.toLowerCase() !== root.toLowerCase() ? saved : def;
   dialog('newProj', `<div class="dlg-hd"><span class="dlg-ic">${I.newp}</span><div><h3>Novo projeto</h3><p>Cria a pasta e, se quiser, o repositório Git e o README.</p></div></div>
     <label class="fld">Nome<input id="npName" spellcheck="false" autocomplete="off" placeholder="meu-projeto"></label>
     <label class="fld">Local<span class="line"><input id="npLoc" spellcheck="false" autocomplete="off" value="${esc(loc)}"><button class="chip" id="npPick" type="button">Procurar…</button></span></label>

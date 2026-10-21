@@ -465,7 +465,7 @@ fn text_rules(ext: &str, base: &str, txt: &str) -> Option<LintResult> {
         Properties => properties(txt), Csv(d) => formats::csv(txt, *d), Css(e) => css(txt, e),
         Sql => sql(txt), Markdown => markdown(txt), Docker => formats::dockerfile(txt), Make => formats::makefile(txt),
         Latex => formats::latex(txt), Vb => formats::vb(txt), Manifest => formats::manifest(txt), Po => formats::po(txt),
-        Diff => formats::diff(txt), Subs(v) => formats::subtitles(txt, *v),
+        Diff => formats::diff(txt), Subs(v) => formats::subtitles(txt, *v), Gherkin => formats::gherkin(txt),
         GoTpl => { let mut v = formats::go_template(txt); if txt.contains("</") { v.extend(html_lint(txt, ext)); } v }
         Code(s) => formats::code(txt, s), Plain => vec![],
     };

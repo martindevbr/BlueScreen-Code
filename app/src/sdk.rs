@@ -5,7 +5,8 @@
 //! - o resto vai para ~/.bluescreen/sdks/<tipo>/<versão>;
 //! - Rust é instalado pelo rustup (~/.cargo, ~/.rustup), que é como a própria linguagem se instala.
 //! O SDK padrão de cada tipo entra no PATH de tudo o que a IDE abre (terminal, build, servidores de linguagem,
-//! instalações) e nas buscas de programas (which). Assim as receitas dos servidores de linguagem ("npm i -g",
+//! instalações) e nas buscas de programas (which). Runtimes que a IDE não baixa (Ruby, PHP, Perl, Dart...) podem ser
+//! apontados à mão numa pasta já instalada (`paths` no sdks.json, rota sdk/path) e entram no PATH do mesmo jeito. Assim as receitas dos servidores de linguagem ("npm i -g",
 //! "pip install", "go install", "dotnet tool install") funcionam mesmo sem nada instalado no Windows.
 //! As listas de versões vêm ao vivo das fontes oficiais:
 //!   - JDK: api.foojay.io (Temurin, Microsoft, Corretto, Zulu, Liberica, GraalVM, Oracle, SapMachine, Semeru, JBR...)
@@ -65,6 +66,24 @@ fn under(p: &Path, base: &Path) -> bool { p.to_string_lossy().to_lowercase().sta
 // ---------- padrão de cada tipo (~/.bluescreen/sdks.json: { tipo: pasta }) ----------
 fn defaults_file() -> PathBuf { user_dir().join("sdks.json") }
 fn explicit_default(kind: &str) -> Option<PathBuf> { read_json(&defaults_file())[kind].as_str().filter(|s| !s.is_empty()).map(PathBuf::from).filter(|p| p.is_dir()) }
+/// SDK escolhido à mão para um tipo (Usar como padrão, ou uma pasta apontada pelo plugin runtimes)
+pub fn chosen(kind: &str) -> Option<PathBuf> { explicit_default(kind) }
+/// pastas de programas apontadas à mão para runtimes que a IDE não baixa: { "paths": { "ruby": "C:\\Ruby33\\bin" } }
+pub fn extra_paths() -> Vec<(String, PathBuf)> {
+    read_json(&defaults_file())["paths"].as_object().map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), PathBuf::from(v.as_str()?)))).filter(|(_, p)| p.is_dir()).collect()).unwrap_or_default()
+}
+/// aponta (ou esquece, com path vazio) a pasta de programas de um runtime que a IDE não baixa
+pub fn set_path(name: &str, path: &str) -> Result<(), String> {
+    if name.is_empty() || find_kind(name).is_some() { return Err("use sdk/default para os SDKs que a IDE baixa".into()); }
+    if !path.is_empty() && !Path::new(path).is_dir() { return Err(format!("a pasta {path} não existe")); }
+    let mut v = read_json(&defaults_file());
+    if !v.is_object() { v = json!({}); }
+    if !v["paths"].is_object() { v["paths"] = json!({}); }
+    if path.is_empty() { v["paths"].as_object_mut().map(|o| o.remove(name)); } else { v["paths"][name] = json!(path); }
+    write_atomic(&defaults_file(), &serde_json::to_string_pretty(&v).unwrap_or_default()).map_err(|e| e.to_string())?;
+    crate::build::detect::forget_which();
+    Ok(())
+}
 pub fn set_default(kind: &str, path: &str) -> Result<(), String> {
     let mut v = read_json(&defaults_file());
     if !v.is_object() { v = json!({}); }
@@ -88,6 +107,7 @@ pub fn default_dir(kind: &str) -> Option<PathBuf> {
 /// pastas dos SDKs padrão que entram no PATH (as que existem)
 pub fn path_dirs() -> Vec<PathBuf> {
     KINDS.iter().filter_map(|k| default_dir(k.id).map(|d| (k, d))).flat_map(|(k, d)| k.bins.iter().map(move |b| if b.is_empty() { d.clone() } else { d.join(b) }))
+        .chain(extra_paths().into_iter().map(|(_, p)| p))
         .filter(|p| p.is_dir()).collect()
 }
 /// variáveis para os processos que a IDE abre: PATH com os SDKs na frente, DOTNET_ROOT, JAVA_HOME (se escolhido)

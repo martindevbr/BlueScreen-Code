@@ -9,6 +9,10 @@
 //!   que a interface do plugin lê em `info.plugins[id]`.
 //! - "build.run": chamado quando o usuário escolheu um repositório do plugin; recebe `{ project, root, repo }` e
 //!   devolve `{ settings, env, note }`: o settings.xml do Maven, variáveis de ambiente do build e um aviso para o console.
+//!
+//! Plugins também podem rodar passos próprios no console (POST build/run com `{ project, title, steps, jdk }`, ex.: o
+//! plugin runtimes executando um main). Execuções de programa são interativas: o que se digita no console vai para a
+//! entrada do processo (POST build/input).
 use crate::plugins::{Reply, RouteFn, ok, path_str, project_of, route_fn};
 use crate::util::*;
 use futures_util::future::join_all;
@@ -143,6 +147,15 @@ async fn build_info(dir: &Path) -> ApiResult<Info> {
     })
 }
 
+/// JDK pedido (home): um dos achados ou, se não estiver na lista, qualquer pasta com bin/javac; senão o primeiro
+fn pick_jdk(info: &Info, want: Option<&str>) -> Option<Jdk> {
+    let want = want.filter(|w| !w.is_empty());
+    info.jdks.iter().find(|y| Some(y.home.as_str()) == want).cloned()
+        .or_else(|| want.map(PathBuf::from).filter(|h| h.join("bin").join(if cfg!(windows) { "javac.exe" } else { "javac" }).is_file())
+            .map(|h| Jdk { name: h.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), home: path_str(&h), major: 0 }))
+        .or_else(|| info.jdks.first().cloned())
+}
+
 static CACHE: LazyLock<Arc<TtlCache<PathBuf, Info>>> = LazyLock::new(|| Arc::new(TtlCache::new(Duration::from_secs(120))));
 
 /// Rotas do build (entram na tabela de rotas do núcleo).
@@ -170,12 +183,19 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             // arquivo solto: roda pela extensão (Python, Node, Java, Go, C#...)
             if let Some(file) = body["file"].as_str().filter(|x| !x.is_empty()) {
                 let (title, ts) = detect::run_file(&project, file).ok_or_else(|| fail("Não sei executar esse tipo de arquivo", 400))?;
-                let jdk = info.jdks.iter().find(|y| Some(y.home.as_str()) == body["jdk"].as_str()).or(info.jdks.first()).cloned();
+                let jdk = pick_jdk(&info, body["jdk"].as_str());
                 let steps = ts.into_iter().map(Step::from).collect();
-                let id = maven::start(maven::StartOpts { dir: path_str(&project), root: project.clone(), steps, mvn: None, jdk, title, extra: maven::Extra { env: vec![], jvm: vec![] }, note: String::new() });
+                let id = maven::start(maven::StartOpts { dir: path_str(&project), root: project.clone(), steps, mvn: None, jdk, title, extra: maven::Extra { env: vec![], jvm: vec![] }, note: String::new(), interactive: true });
                 return ok(json!({ "id": id }));
             }
-            let (mut steps, title): (Vec<Step>, String) = if let Some(custom) = body["custom"].as_str().filter(|x| !x.is_empty()) {
+            // passos prontos de um plugin (ex.: runtimes executando um main): rodam como uma tarefa, com o console interativo
+            let plugin_steps = body["steps"].as_array().filter(|a| !a.is_empty()).cloned();
+            let interactive = plugin_steps.is_some();
+            let (mut steps, title): (Vec<Step>, String) = if let Some(arr) = plugin_steps {
+                let ts: Vec<TaskStep> = serde_json::from_value(Value::Array(arr)).map_err(|e| fail(format!("passos inválidos: {e}"), 400))?;
+                let t = body["title"].as_str().filter(|x| !x.is_empty()).map(String::from).unwrap_or_else(|| ts[0].label.clone());
+                (ts.into_iter().map(Step::from).collect(), t)
+            } else if let Some(custom) = body["custom"].as_str().filter(|x| !x.is_empty()) {
                 let args: Vec<String> = maven::split_args(custom).into_iter().filter(|a| a != "mvn" && a != "mvn.cmd").collect();
                 if args.is_empty() { return Err(fail("comando vazio", 400)); }
                 let t = format!("mvn {}", args.join(" "));
@@ -187,7 +207,7 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             };
             let mvn = info.mavens.iter().find(|y| Some(y.home.as_str()) == body["mvn"].as_str())
                 .or_else(|| info.mavens.iter().find(|y| Some(&y.home) == info.mvn_default.as_ref())).cloned();
-            let jdk = info.jdks.iter().find(|y| Some(y.home.as_str()) == body["jdk"].as_str()).or(info.jdks.first()).cloned();
+            let jdk = pick_jdk(&info, body["jdk"].as_str());
             if steps.iter().any(|y| y.kind == "maven") && mvn.is_none() {
                 // sem Maven achado nas pastas de ferramentas: usa o mvnw do projeto ou o mvn do PATH
                 let w = Path::new(&info.root).join(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" });
@@ -226,9 +246,16 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
                 }
                 if let Some(sx) = &settings { if !st.args.iter().any(|a| a == "-s") { st.args.insert(0, sx.clone()); st.args.insert(0, "-s".into()); } }
             }
-            let id = maven::start(maven::StartOpts { dir: path_str(&project), root: PathBuf::from(&info.root), steps, mvn, jdk, title, extra, note });
+            let id = maven::start(maven::StartOpts { dir: path_str(&project), root: PathBuf::from(&info.root), steps, mvn, jdk, title, extra, note, interactive });
             ok(json!({ "id": id }))
         } })));
+        v.push(("build/input", route_fn(|r| async move {
+            // o que se digita no console vai para a entrada do programa que está rodando
+            r.local_only()?;
+            if !r.is_post() { return Err(fail("POST", 405)); }
+            let body: Value = r.body_json()?;
+            ok(json!({ "ok": maven::input(body["id"].as_str().unwrap_or(""), body["text"].as_str().unwrap_or("")) }))
+        })));
 
         v.push(("build/read", route_fn(|r| async move {
             let id = r.require("id")?;

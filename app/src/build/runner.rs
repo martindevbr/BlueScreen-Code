@@ -33,6 +33,9 @@ pub fn mavens() -> Vec<Maven> {
     let home = dirs::home_dir().unwrap_or_default();
     let mut cands: Vec<PathBuf> = vec![];
     for k in ["MAVEN_HOME", "M2_HOME"] { if let Ok(v) = std::env::var(k) { if !v.is_empty() { cands.push(PathBuf::from(v)); } } }
+    // o escolhido na janela SDKs e o mvn do PATH (scoop, pasta própria)
+    cands.extend(crate::sdk::chosen("maven"));
+    if let Some(h) = super::detect::which("mvn").and_then(|p| p.parent()?.parent().map(Path::to_path_buf)) { cands.push(h); }
     let re = Regex::new(r"(?i)^apache-maven-\d").unwrap();
     for base in [crate::sdk::root("maven"), home.join("Tools"), home.join("tools"), PathBuf::from("C:\\"), PathBuf::from("C:\\Program Files"), PathBuf::from("C:\\tools"), home.clone()] {
         cands.extend(glob_dirs(&base, &re));
@@ -47,7 +50,10 @@ pub fn mavens() -> Vec<Maven> {
         if let Some(jar) = jar {
             if d.join("bin").join("m2.conf").exists() {
                 let ds = d.to_string_lossy().to_string();
-                let version = ver_re.captures(&ds).map(|c| c[1].to_string()).unwrap_or_else(|| "?".into());
+                // apache-maven-3.9.9 no nome da pasta; senão o maven-core-3.9.9.jar de lib/
+                let version = ver_re.captures(&ds).map(|c| c[1].to_string())
+                    .or_else(|| std::fs::read_dir(d.join("lib")).ok()?.flatten().find_map(|e| e.file_name().to_string_lossy().strip_prefix("maven-core-").and_then(|v| v.strip_suffix(".jar")).map(String::from)))
+                    .unwrap_or_else(|| "?".into());
                 out.push(Maven { home: ds, version, classworlds: boot.join(jar).to_string_lossy().into() });
             }
         }
@@ -58,7 +64,12 @@ pub fn mavens() -> Vec<Maven> {
 pub fn jdks() -> Vec<Jdk> {
     let home = dirs::home_dir().unwrap_or_default();
     let mut cands: Vec<PathBuf> = vec![];
+    // o escolhido como padrão na janela SDKs (pode estar em qualquer pasta) vem primeiro
+    let chosen = crate::sdk::chosen("jdk");
+    cands.extend(chosen.clone());
     if let Ok(v) = std::env::var("JAVA_HOME") { if !v.is_empty() { cands.push(PathBuf::from(v)); } }
+    // o javac do PATH (scoop, winget, instalado em outra pasta)
+    if let Some(home) = super::detect::which("javac").and_then(|p| p.parent()?.parent().map(Path::to_path_buf)) { cands.push(home); }
     let any = Regex::new(".").unwrap();
     for base in ["C:\\Program Files\\Java", "C:\\Program Files\\Semeru", "C:\\Program Files\\AdoptOpenJDK", "C:\\Program Files\\Eclipse Adoptium", "C:\\Program Files\\Microsoft", "C:\\Program Files\\Amazon Corretto", "C:\\Program Files\\Zulu"].map(PathBuf::from).into_iter().chain([home.join(".jdks")]) {
         cands.extend(glob_dirs(&base, &any));
@@ -70,13 +81,17 @@ pub fn jdks() -> Vec<Jdk> {
         if !d.join("bin").join(if IS_WIN { "javac.exe" } else { "javac" }).exists() { continue; } // só JDK (JRE não compila)
         let name = d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         // jdk-8.0.482, corretto-1.8.0_422, corretto-17
-        let major = vre.captures(&name).map(|c| {
+        // JAVA_VERSION="21.0.2" do arquivo release; sem ele, o número do nome da pasta
+        let release = std::fs::read_to_string(d.join("release")).unwrap_or_default();
+        let ver = release.lines().find_map(|l| l.strip_prefix("JAVA_VERSION=")).map(|v| v.trim().trim_matches('"').to_string());
+        let major = vre.captures(ver.as_deref().unwrap_or(&name)).map(|c| {
             let a: u32 = c[1].parse().unwrap_or(0);
             match c.get(2) { Some(b) if a == 1 => b.as_str().parse().unwrap_or(a), _ => a }
         }).unwrap_or(0);
         out.push(Jdk { home: d.to_string_lossy().into(), major, name });
     }
-    out.sort_by(|a, b| (b.major == 8).cmp(&(a.major == 8)).then(b.major.cmp(&a.major)));
+    let is_chosen = |j: &Jdk| chosen.as_ref().is_some_and(|c| c.to_string_lossy().eq_ignore_ascii_case(&j.home));
+    out.sort_by(|a, b| is_chosen(b).cmp(&is_chosen(a)).then((b.major == 8).cmp(&(a.major == 8))).then(b.major.cmp(&a.major)));
     out
 }
 
@@ -140,9 +155,9 @@ pub fn split_args(s: &str) -> Vec<String> {
 // ---------- execuções ----------
 /// Passo de uma execução: "maven" (Maven pela JVM) ou "cmd" (qualquer programa: gradle, npm, cargo...).
 #[derive(Clone, Debug)]
-pub struct Step { pub kind: String, pub label: String, pub args: Vec<String>, pub program: String, pub cwd: String, pub java: bool }
+pub struct Step { pub kind: String, pub label: String, pub args: Vec<String>, pub program: String, pub cwd: String, pub java: bool, pub env: Vec<(String, String)> }
 impl From<super::detect::TaskStep> for Step {
-    fn from(t: super::detect::TaskStep) -> Self { Step { kind: t.kind, label: t.label, args: t.args, program: t.program, cwd: t.cwd, java: t.java } }
+    fn from(t: super::detect::TaskStep) -> Self { Step { kind: t.kind, label: t.label, args: t.args, program: t.program, cwd: t.cwd, java: t.java, env: t.env.into_iter().collect() } }
 }
 pub struct Extra { pub env: Vec<(String, String)>, pub jvm: Vec<String> }
 
@@ -151,17 +166,20 @@ struct Run {
     lines: Vec<String>, base: usize, tail: String,
     status: &'static str, started: f64, ended: Option<f64>, exit: Option<i32>, step: usize,
     pid: Option<u32>, stopped: bool,
+    /// execução de programa (Executar main): o console manda o que você digita para a entrada do processo
+    interactive: bool,
+    input: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 }
 type RunRef = Arc<Mutex<Run>>;
 struct Runs { map: BTreeMap<u64, RunRef>, seq: u64 }
 static RUNS: LazyLock<Mutex<Runs>> = LazyLock::new(|| Mutex::new(Runs { map: BTreeMap::new(), seq: 0 }));
 const MAX_LINES: usize = 30000;
 
-fn new_run(dir: &str, title: &str, steps: Vec<String>) -> RunRef {
+fn new_run(dir: &str, title: &str, steps: Vec<String>, interactive: bool) -> RunRef {
     let mut rs = RUNS.lock();
     rs.seq += 1;
     let id = rs.seq;
-    let r = Arc::new(Mutex::new(Run { id: id.to_string(), dir: dir.into(), title: title.into(), steps, lines: vec![], base: 0, tail: String::new(), status: "running", started: now_ms(), ended: None, exit: None, step: 0, pid: None, stopped: false }));
+    let r = Arc::new(Mutex::new(Run { id: id.to_string(), dir: dir.into(), title: title.into(), steps, lines: vec![], base: 0, tail: String::new(), status: "running", started: now_ms(), ended: None, exit: None, step: 0, pid: None, stopped: false, interactive, input: None }));
     rs.map.insert(id, r.clone());
     while rs.map.len() > 12 { let k = *rs.map.keys().next().unwrap(); rs.map.remove(&k); }
     r
@@ -185,7 +203,8 @@ fn flush(r: &RunRef) { let mut r = r.lock(); if !r.tail.is_empty() { let t = std
 
 async fn exec(r: &RunRef, cmd: &str, args: &[String], cwd: &Path, env: &[(String, String)]) -> i32 {
     let mut c = tokio::process::Command::new(cmd);
-    c.args(args).envs(crate::sdk::env()).current_dir(cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    let stdin = if r.lock().interactive { std::process::Stdio::piped() } else { std::process::Stdio::null() };
+    c.args(args).envs(crate::sdk::env()).current_dir(cwd).stdin(stdin).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
     for (k, v) in env { c.env(k, v); }
     #[cfg(windows)]
     c.creation_flags(0x0800_0000);
@@ -194,6 +213,15 @@ async fn exec(r: &RunRef, cmd: &str, args: &[String], cwd: &Path, env: &[(String
         Err(e) => { push(r, &format!("[BlueScreen] Falha ao iniciar: {e}\n")); return -1; }
     };
     r.lock().pid = child.id();
+    // entrada do console -> stdin do processo (cada passo tem o seu; o canal some quando o passo acaba)
+    let feeder = child.stdin.take().map(|mut sin| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        r.lock().input = Some(tx);
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            while let Some(s) = rx.recv().await { if sin.write_all(s.as_bytes()).await.is_err() || sin.flush().await.is_err() { break; } }
+        })
+    });
     async fn pump<R: tokio::io::AsyncRead + Unpin>(r: RunRef, s: Option<R>) {
         let Some(s) = s else { return };
         let mut rd = BufReader::new(s);
@@ -203,11 +231,29 @@ async fn exec(r: &RunRef, cmd: &str, args: &[String], cwd: &Path, env: &[(String
             match rd.read_until(b'\n', &mut buf).await { Ok(0) | Err(_) => break, Ok(_) => push(&r, &String::from_utf8_lossy(&buf)) }
         }
     }
+    /// programa interativo: o que chegar vai para o console na hora, mesmo sem quebra de linha ("Digite seu nome: ");
+    /// um caractere UTF-8 cortado entre dois pedaços espera o resto
+    async fn pump_raw<R: tokio::io::AsyncRead + Unpin>(r: RunRef, s: Option<R>) {
+        use tokio::io::AsyncReadExt;
+        let Some(mut s) = s else { return };
+        let (mut chunk, mut pend) = (vec![0u8; 8192], Vec::<u8>::new());
+        loop {
+            let n = match s.read(&mut chunk).await { Ok(0) | Err(_) => break, Ok(n) => n };
+            pend.extend_from_slice(&chunk[..n]);
+            let keep = match std::str::from_utf8(&pend) { Err(e) if e.error_len().is_none() => pend.len() - e.valid_up_to(), _ => 0 };
+            let cut = pend.len() - keep;
+            push(&r, &String::from_utf8_lossy(&pend[..cut]));
+            pend.drain(..cut);
+        }
+        if !pend.is_empty() { push(&r, &String::from_utf8_lossy(&pend)); }
+    }
     let (o, e) = (child.stdout.take(), child.stderr.take());
-    tokio::join!(pump(r.clone(), o), pump(r.clone(), e));
+    if r.lock().interactive { tokio::join!(pump_raw(r.clone(), o), pump_raw(r.clone(), e)); }
+    else { tokio::join!(pump(r.clone(), o), pump(r.clone(), e)); }
     let code = child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1);
     flush(r);
-    r.lock().pid = None;
+    { let mut g = r.lock(); g.pid = None; g.input = None; }
+    if let Some(f) = feeder { f.abort(); }
     code
 }
 fn maven_cmd(mvn: &Maven, jdk: &Jdk, args: &[String], cwd: &Path, extra: &Extra) -> (String, Vec<String>, Vec<(String, String)>) {
@@ -227,9 +273,9 @@ fn maven_cmd(mvn: &Maven, jdk: &Jdk, args: &[String], cwd: &Path, extra: &Extra)
     (java.to_string_lossy().into(), a, env)
 }
 
-pub struct StartOpts { pub dir: String, pub root: PathBuf, pub steps: Vec<Step>, pub mvn: Option<Maven>, pub jdk: Option<Jdk>, pub title: String, pub extra: Extra, pub note: String }
+pub struct StartOpts { pub dir: String, pub root: PathBuf, pub steps: Vec<Step>, pub mvn: Option<Maven>, pub jdk: Option<Jdk>, pub title: String, pub extra: Extra, pub note: String, pub interactive: bool }
 pub fn start(o: StartOpts) -> String {
-    let r = new_run(&o.dir, &o.title, o.steps.iter().map(|s| s.label.clone()).collect());
+    let r = new_run(&o.dir, &o.title, o.steps.iter().map(|s| s.label.clone()).collect(), o.interactive);
     let id = r.lock().id.clone();
     tokio::spawn(async move {
         let mut head = format!("[BlueScreen] {}\n[BlueScreen] pasta: {}\n", o.title, o.root.display());
@@ -244,7 +290,8 @@ pub fn start(o: StartOpts) -> String {
             push(&r, &format!("\n[BlueScreen] ===== passo {}/{n}: {} =====\n", i + 1, s.label));
             if s.kind == "maven" {
                 let (Some(mvn), Some(jdk)) = (&o.mvn, &o.jdk) else { code = -1; break };
-                let (cmd, args, env) = maven_cmd(mvn, jdk, &s.args, &o.root, &o.extra);
+                let (cmd, args, mut env) = maven_cmd(mvn, jdk, &s.args, &o.root, &o.extra);
+                env.extend(s.env.iter().cloned());
                 push(&r, &format!("[BlueScreen] $ mvn {}\n", s.args.join(" ")));
                 code = exec(&r, &cmd, &args, &o.root, &env).await;
             } else {
@@ -254,6 +301,7 @@ pub fn start(o: StartOpts) -> String {
                 let mut env = vec![];
                 if s.java { if let Some(j) = &o.jdk { env.push(("JAVA_HOME".to_string(), j.home.clone())); } }
                 env.extend(o.extra.env.iter().cloned()); // ex.: credencial do repositório de um plugin, também para o mvnw
+                env.extend(s.env.iter().cloned());
                 push(&r, &format!("[BlueScreen] $ {}\n", s.label));
                 if super::detect::which(&s.program).is_none() && !Path::new(&s.program).is_file() {
                     push(&r, &format!("[BlueScreen] {} não encontrado. Instale ou adicione ao PATH.\n", s.program));
@@ -288,6 +336,16 @@ pub async fn stop(id: &str) -> bool {
     }
     true
 }
+/// texto digitado no console vai para a entrada do processo do passo atual (e aparece no console, como no IntelliJ)
+pub fn input(id: &str, text: &str) -> bool {
+    let r = { let rs = RUNS.lock(); rs.map.values().find(|r| r.lock().id == id).cloned() };
+    let Some(r) = r else { return false };
+    let Some(tx) = r.lock().input.clone() else { return false };
+    let line = format!("{}\n", text.trim_end_matches(['\r', '\n']));
+    if tx.send(if IS_WIN { line.replace('\n', "\r\n") } else { line.clone() }).is_err() { return false; }
+    push(&r, &line);
+    true
+}
 pub fn read(id: &str, from: usize) -> Option<Value> {
     let r = { let rs = RUNS.lock(); rs.map.values().find(|r| r.lock().id == id).cloned() }?;
     let g = r.lock();
@@ -295,7 +353,8 @@ pub fn read(id: &str, from: usize) -> Option<Value> {
     let start = (off - g.base).min(g.lines.len());
     let end = (start + 5000).min(g.lines.len());
     Some(json!({ "id": g.id, "title": g.title, "status": g.status, "step": g.step, "steps": g.steps, "started": g.started, "ended": g.ended, "exit": g.exit,
-        "from": off, "lines": &g.lines[start..end], "total": g.base + g.lines.len() }))
+        "from": off, "lines": &g.lines[start..end], "total": g.base + g.lines.len(),
+        "interactive": g.interactive, "input": g.input.is_some(), "prompt": &g.tail }))
 }
 pub fn list(dir: Option<&str>) -> Vec<Value> {
     let rs = RUNS.lock();

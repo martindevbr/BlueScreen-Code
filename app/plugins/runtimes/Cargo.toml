@@ -1,0 +1,28 @@
+[package]
+name = "bluescreen-runtimes"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../../LICENSE"
+publish = false
+description = "Runtimes e execução do BlueScreen: o que cada linguagem precisa instalado, a versão que o projeto pede e como executar os mains"
+
+[lib]
+name = "runtimes"
+path = "src/lib.rs"
+
+# servidor do plugin (o build.ps1 copia como server.exe)
+[[bin]]
+name = "bluescreen-runtimes"
+path = "src/bin/server.rs"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+server = ["dep:bluescreen-sdk", "dep:tokio"]
+
+[dependencies]
+bluescreen-sdk = { path = "../../sdk", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

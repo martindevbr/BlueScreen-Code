@@ -33,6 +33,7 @@ O objeto `bs` (também em `window.BS`):
 | `bs.dashboard.card({ id, order, wide, html(), bind(el) })` / `bs.dashboard.action({ label, icon, go })` | card e botão no resumo do projeto |
 | `bs.ui.panel(html)` | painel na área do editor, abaixo do código |
 | `bs.build.info()` / `selected()` / `run(task, cmd)` / `showLog(log)` / `current()` / `render()` | janela Build: estrutura, escolhas (Maven, JDK, repositório), rodar tarefa, mostrar um log de fora no console |
+| `bs.build.runSteps({ title, steps, jdk })` / `runFile()` | roda passos prontos no console (`{ program, args, cwd, env, java }`, ou `kind: "maven"` com os argumentos do mvn), com uma linha para a entrada do programa; `runFile()` é o "Executar arquivo" pela extensão |
 | `bs.terminal.open(pasta, shell)` / `run(comando, pasta)` / `shells()` | terminal |
 | `bs.lsp.tools()` / `clientFor(aba)` / `restart(ferramenta, raiz)` | servidores de linguagem: lista, cliente da aba (para pedidos LSP próprios) e reinício |
 | `bs.debug.start(aba)` / `stop()` / `session()` | depurador |
@@ -40,6 +41,8 @@ O objeto `bs` (também em `window.BS`):
 | `bs.hooks.filter(nome, fn)` | `tree:marks`, `menu:file`, `menu:tab`, `menu:project`, `menu:commit`, `build:path(rel, caminho)` |
 
 Funções do núcleo declaradas com `function` também podem ser trocadas: `window.renderTree = function () { ... }`.
+
+Na margem do editor, a faixa da esquerda (`glyphMargin: { position: monaco.editor.GlyphMarginLane.Left }`) é dos plugins (o ▶ do plugin runtimes); a do meio é dos breakpoints. Um clique numa decoração da faixa da esquerda não marca breakpoint.
 
 Exemplo, um item de menu na árvore:
 
@@ -70,7 +73,7 @@ p.run().await
 
 Toda pasta em `app/plugins/` com `Cargo.toml` entra sozinha no workspace; `build.ps1 -Plugin <id>` monta só aquele plugin.
 
-Para falar com o núcleo ou com outro plugin, chame o BlueScreen com o token (`bluescreen_sdk::plugin::core().get("outro/rota", ...)`). Um plugin pode publicar uma lib com o cliente das suas rotas para os outros usarem (como `bluescreen-ic`). Rotas internas (`r.internal_only()`) só respondem a chamadas com o token, nunca ao navegador nem à rede local.
+Para falar com o núcleo ou com outro plugin, chame o BlueScreen com o token (`bluescreen_sdk::plugin::core().get("outro/rota", ...)`). Rotas do núcleo úteis para plugins: `sdk/which` (POST `{ progs }`: onde está cada programa, pela busca da IDE), `sdk/jdks` e `sdk/mavens` (os achados, o escolhido primeiro), `sdk/default` e `sdk/path` (tornar uma instalação o padrão / pôr uma pasta no PATH de tudo o que a IDE abre) e `build/input` (POST `{ id, text }`: entrada para o programa do console). Um plugin pode publicar uma lib com o cliente das suas rotas para os outros usarem (como `bluescreen-ic`). Rotas internas (`r.internal_only()`) só respondem a chamadas com o token, nunca ao navegador nem à rede local.
 
 ## Ganchos do núcleo (`hooks` no `plugin.json`)
 

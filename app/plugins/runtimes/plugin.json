@@ -1,0 +1,9 @@
+{
+  "id": "runtimes",
+  "name": "Runtimes e execução",
+  "description": "Descobre o que cada linguagem precisa instalado (JDK, Node.js, Python, Go, .NET, Rust, compilador C/C++, Ruby, PHP...) e a versão que o projeto pede; oferece baixar pela IDE, escolher outra versão ou apontar uma pasta. Mostra ▶ na margem dos mains (public static void main, fun main, if __name__ == \"__main__\", func main...) para executar como no IntelliJ, pelo Maven, Gradle, Cargo, dotnet ou direto.",
+  "version": "0.1.0",
+  "author": "BlueScreen",
+  "icon": "icon.svg",
+  "order": 20
+}

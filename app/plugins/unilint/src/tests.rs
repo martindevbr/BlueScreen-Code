@@ -87,6 +87,43 @@ fn ruby_php_lua_bash_ps() {
 }
 
 #[test]
+fn focused_tests() {
+    has(Lang::JavaScript, "describe('a', () => {
+  it.only('b', () => {});
+  fit('c', () => {});
+});
+", &["focused-test@2", "focused-test@3"]);
+    has(Lang::TypeScript, "test.describe.only('a', () => {});
+it.only.each([1, 2])('n %d', (n: number) => {});
+fdescribe('x', () => {});
+", &["focused-test@1", "focused-test@2", "focused-test@3"]);
+    has(Lang::Ruby, "RSpec.describe A do
+  fit 'b' do
+  end
+  fcontext 'c' do
+  end
+end
+", &["focused-test@2", "focused-test@4"]);
+    // o que só parece: método `only` de outro objeto, `fit` como variável, testes normais
+    clean(Lang::JavaScript, "describe('a', () => { it('b', () => {}); test.skip('c', () => {}); });
+const r = query.only(1);
+const fit = 2; g(fit);
+");
+    clean(Lang::Ruby, "describe A do
+  it 'b' do
+  end
+end
+x.fit(1)
+");
+    clean(Lang::JavaScript, "it.only('b', () => {}); // eslint-disable-line jest/no-focused-tests
+");
+    // a correção tira só o foco
+    let fix = |lang, src: &str| { let d = crate::lint_source(lang, src, "t"); let e = &d[0].fixes[0].edits[0]; format!("{}{}{}", &src[..e.start], e.text, &src[e.end..]) };
+    assert_eq!(fix(Lang::JavaScript, "it.only('b', f);"), "it('b', f);");
+    assert_eq!(fix(Lang::JavaScript, "fdescribe('b', f);"), "describe('b', f);");
+}
+
+#[test]
 fn suppressions() {
     clean(Lang::Python, "import os  # noqa\n");
     clean(Lang::Python, "import os  # noqa: F401\n");

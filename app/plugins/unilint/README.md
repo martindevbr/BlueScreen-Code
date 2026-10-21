@@ -28,6 +28,7 @@ Ligado, o plugin atende o gancho `lint` do núcleo. Desligado (aba **Plugins**, 
 | `empty-block` | if vazio sem else | no-empty |
 | `duplicate-key` | chave repetida em objeto JS, dict Python, hash Ruby, tabela Lua | no-dupe-keys, F601 |
 | `debugger` | `debugger`, `breakpoint()`, `dbg!`, `var_dump` | no-debugger, T100, dbg_macro |
+| `focused-test` | teste focado esquecido: `it.only`, `test.only`, `describe.only`, `fit`, `fdescribe` (Jest, Mocha, Vitest, Cypress, Playwright) e `fit`, `fcontext` (RSpec); a correção tira o foco | jest/no-focused-tests, mocha/no-exclusive-tests, RSpec/Focus |
 | `long-function`, `too-many-params`, `complexity`, `deep-nesting` | métricas (info): 200 linhas, 7 parâmetros, complexidade 25, 5 níveis | max-lines-per-function, max-params, C901, max-depth |
 
 ### Supressão

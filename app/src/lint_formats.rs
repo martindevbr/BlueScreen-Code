@@ -3,7 +3,7 @@
 //!   decidem pelo começo do conteúdo;
 //! - linters próprios: TOML, INI, .env, CSV/TSV, JSON com comentários e JSON Lines, Dockerfile, Makefile, LaTeX,
 //!   VB/VBA, MANIFEST.MF, gettext (.po), diff/patch, legendas (SRT/VTT) e blocos de templates (Twig, Jinja,
-//!   Liquid, Handlebars, Go);
+//!   Liquid, Handlebars, Go) e Gherkin (.feature do Cucumber, Behave, SpecFlow);
 //! - `Code`: verificador de pares ()[]{} com strings e comentários de cada linguagem, para centenas de linguagens
 //!   sem linter embutido (shaders, Lisp, Haskell, Fortran, Pascal, Erlang, HCL, GraphQL, protobuf...).
 //! Tudo só olha o texto: serve ao lint ao salvar e ao lint ao vivo do editor.
@@ -618,10 +618,239 @@ pub fn go_template(txt: &str) -> Vec<Problem> {
     o
 }
 
+// ---------- Gherkin (.feature: Cucumber, Behave, SpecFlow/Reqnroll, pytest-bdd, Karate) ----------
+/// palavras-chave de um idioma (as do gherkin-languages.json do Cucumber); as dos passos sem o espaço do fim
+struct Dialect {
+    feature: &'static [&'static str], rule: &'static [&'static str], background: &'static [&'static str], scenario: &'static [&'static str],
+    outline: &'static [&'static str], examples: &'static [&'static str],
+    given: &'static [&'static str], when: &'static [&'static str], then: &'static [&'static str], and: &'static [&'static str], but: &'static [&'static str],
+}
+const GH_EN: Dialect = Dialect {
+    feature: &["Feature", "Business Need", "Ability"], rule: &["Rule"], background: &["Background"], scenario: &["Example", "Scenario"],
+    outline: &["Scenario Outline", "Scenario Template"], examples: &["Examples", "Scenarios"],
+    given: &["Given"], when: &["When"], then: &["Then"], and: &["And"], but: &["But"],
+};
+const GH_PT: Dialect = Dialect {
+    feature: &["Funcionalidade", "Característica", "Caracteristica"], rule: &["Regra"], background: &["Contexto", "Cenário de Fundo", "Cenario de Fundo", "Fundo"],
+    scenario: &["Exemplo", "Cenário", "Cenario"], outline: &["Esquema do Cenário", "Esquema do Cenario", "Delineação do Cenário", "Delineacao do Cenario"],
+    examples: &["Exemplos", "Cenários", "Cenarios"],
+    given: &["Dado", "Dada", "Dados", "Dadas"], when: &["Quando"], then: &["Então", "Entao"], and: &["E"], but: &["Mas"],
+};
+const GH_ES: Dialect = Dialect {
+    feature: &["Característica", "Necesidad del negocio", "Requisito"], rule: &["Regla", "Regla de negocio"], background: &["Antecedentes"],
+    scenario: &["Ejemplo", "Escenario"], outline: &["Esquema del escenario"], examples: &["Ejemplos"],
+    given: &["Dado", "Dada", "Dados", "Dadas"], when: &["Cuando"], then: &["Entonces"], and: &["Y", "E"], but: &["Pero"],
+};
+#[derive(Clone, Copy, PartialEq)]
+enum GhHead { Feature, Rule, Background, Scenario, Outline, Examples }
+/// E / Mas / * continuam o tipo do passo anterior
+#[derive(Clone, Copy, PartialEq)]
+enum GhStep { Given, When, Then, Cont }
+fn gh_head<'t>(d: &Dialect, t: &'t str) -> Option<(GhHead, &'t str)> {
+    use GhHead::*;
+    for (list, h) in [(d.feature, Feature), (d.rule, Rule), (d.background, Background), (d.outline, Outline), (d.scenario, Scenario), (d.examples, Examples)] {
+        for kw in list { if let Some(name) = t.strip_prefix(kw).and_then(|r| r.strip_prefix(':')) { return Some((h, name.trim())); } }
+    }
+    None
+}
+fn gh_step(d: &Dialect, t: &str) -> Option<(GhStep, &'static str)> {
+    use GhStep::*;
+    if t.starts_with("* ") { return Some((Cont, "*")); }
+    for (list, s) in [(d.given, Given), (d.when, When), (d.then, Then), (d.and, Cont), (d.but, Cont)] {
+        for kw in list { if t.strip_prefix(kw).is_some_and(|r| r.starts_with(' ')) { return Some((s, kw)); } }
+    }
+    None
+}
+/// células de uma linha de tabela (`| a | b \| c |`) e o que sobra depois do último '|'
+fn gh_cells(t: &str) -> (Vec<String>, String) {
+    let (mut cells, mut cur, mut esc) = (vec![], String::new(), false);
+    for ch in t.chars().skip(1) {
+        if esc { if ch != '|' && ch != '\\' { cur.push('\\'); } cur.push(ch); esc = false; }
+        else if ch == '\\' { esc = true; }
+        else if ch == '|' { cells.push(cur.trim().to_string()); cur.clear(); }
+        else { cur.push(ch); }
+    }
+    (cells, cur)
+}
+/// `<coluna>` usadas na linha (passo, título, tabela ou docstring de um Esquema do Cenário)
+fn gh_uses(l: &str, ln: usize, out: &mut Vec<(String, usize, usize)>) {
+    for m in re!(r"<([^<>\s][^<>]*)>").captures_iter(l) { out.push((m[1].to_string(), ln, l[..m.get(0).unwrap().start()].chars().count() + 1)); }
+}
+struct GhExamples { line: usize, col: usize, header: Option<Vec<String>>, rows: usize }
+struct GhScenario { line: usize, col: usize, bg: bool, outline: bool, steps: usize, uses: Vec<(String, usize, usize)>, examples: Vec<GhExamples> }
+fn gh_close(sc: Option<GhScenario>, o: &mut Vec<Problem>) {
+    let Some(sc) = sc else { return };
+    if sc.bg { if sc.steps == 0 { o.push(p(sc.line, sc.col, "warning", "Contexto (Background) sem passos", "no-empty-background")); } return; }
+    if sc.steps == 0 { o.push(p(sc.line, sc.col, "warning", "Cenário sem passos", "no-empty-scenario")); }
+    if sc.examples.is_empty() {
+        if sc.outline { o.push(p(sc.line, sc.col, "warning", "Esquema do Cenário sem Exemplos (Examples): não roda nenhuma vez", "gherkin")); }
+        else if let Some((n, l, c)) = sc.uses.first() { o.push(p(*l, *c, "info", format!("<{n}> só é trocado por valor num cenário com Exemplos (Examples)"), "gherkin")); }
+        return;
+    }
+    let mut cols: HashSet<&str> = HashSet::new();
+    for ex in &sc.examples {
+        match &ex.header {
+            None => o.push(p(ex.line, ex.col, "warning", "Exemplos (Examples) sem tabela", "gherkin")),
+            Some(h) => { if ex.rows == 0 { o.push(p(ex.line, ex.col, "warning", "Exemplos só com o cabeçalho: nenhuma linha para rodar", "gherkin")); } cols.extend(h.iter().map(String::as_str)); }
+        }
+    }
+    if cols.is_empty() { return; }
+    for (n, l, c) in &sc.uses { if !cols.contains(n.as_str()) { o.push(p(*l, *c, "warning", format!("<{n}> não é coluna dos Exemplos: fica no texto sem trocar"), "no-undefined-variables")); } }
+    let used: HashSet<&str> = sc.uses.iter().map(|u| u.0.as_str()).collect();
+    for ex in &sc.examples {
+        for c in ex.header.iter().flatten().filter(|c| !c.is_empty() && !used.contains(c.as_str())) {
+            o.push(p(ex.line, ex.col, "warning", format!("Coluna \"{c}\" dos Exemplos não é usada em nenhum passo"), "no-unused-variables"));
+        }
+    }
+}
+/// estrutura do Gherkin como o parser oficial do Cucumber cobra (uma Funcionalidade, Contexto antes dos Cenários,
+/// passos só dentro de Cenário/Contexto, tabelas com o mesmo número de células, docstrings fechadas, tags com @)
+/// e as regras mais usadas do gherkin-lint (cenários sem nome, repetidos, vazios, colunas dos Exemplos sem uso).
+/// Idiomas: en (padrão), pt e es pelo `# language:`; nos outros, só tabelas, docstrings e tags.
+pub fn gherkin(txt: &str) -> Vec<Problem> {
+    use GhHead::*;
+    let mut o = vec![];
+    let lang = lines(txt).take_while(|(_, l)| { let t = l.trim(); t.is_empty() || t.starts_with('#') })
+        .find_map(|(ln, l)| re!(r"^\s*#\s*language\s*:\s*([\w-]+)").captures(l).map(|m| (ln, m[1].to_lowercase())));
+    let d: Option<&Dialect> = match lang.as_ref().map(|x| x.1.as_str()) {
+        None | Some("en") => Some(&GH_EN),
+        Some("pt" | "pt-br" | "pt_br" | "pt-pt") => Some(&GH_PT),
+        Some("es") => Some(&GH_ES),
+        Some(x) => { o.push(p(lang.as_ref().map_or(1, |l| l.0), 1, "info", format!("Idioma \"{x}\" sem dicionário no lint embutido: só tabelas, docstrings e tags são conferidas"), "gherkin")); None }
+    };
+    let mut feature: Option<usize> = None;
+    let (mut scenarios, mut content, mut early) = (0usize, false, false);
+    let (mut bg_seen, mut sc_seen) = (false, false); // no escopo atual (Funcionalidade ou Regra)
+    let mut names: HashMap<String, usize> = HashMap::new();
+    let mut cur: Option<GhScenario> = None; // Cenário ou Contexto aberto
+    let mut in_examples = false;
+    let mut desc_ok = false; // texto livre (descrição) só logo depois de um cabeçalho
+    let mut arg = 0u8; // o que uma tabela pode ser aqui: 0 nada, 1 argumento do passo, 2 tabela dos Exemplos
+    let mut width: Option<(usize, usize)> = None; // tabela atual: (células, linha da primeira)
+    let mut doc: Option<(&str, usize, usize)> = None; // docstring aberta: (delimitador, linha, coluna)
+    let mut tags: Option<usize> = None; // linha das tags que esperam um cabeçalho
+    let mut last: Option<GhStep> = None;
+    for (ln, l) in lines(txt) {
+        if o.len() > 200 { break; }
+        let t = l.trim(); let col = l.chars().take_while(|c| c.is_whitespace()).count() + 1;
+        if let Some((delim, ..)) = doc {
+            if t == delim { doc = None; arg = 0; } else if let Some(sc) = cur.as_mut().filter(|s| !s.bg) { gh_uses(l, ln, &mut sc.uses); }
+            continue;
+        }
+        if t.is_empty() || t.starts_with('#') { continue; }
+        content = true;
+        if !t.starts_with('|') { width = None; }
+        if t.starts_with('@') {
+            let mut seen = HashSet::new();
+            for tok in t.split_whitespace() {
+                if tok.starts_with('#') { break; }
+                if !tok.starts_with('@') || tok.len() == 1 { o.push(p(ln, col, "error", format!("Tag inválida \"{tok}\": toda tag começa com @ e não tem espaço"), "gherkin")); break; }
+                if !seen.insert(tok) { o.push(p(ln, col, "warning", format!("Tag {tok} repetida"), "no-duplicate-tags")); }
+            }
+            tags.get_or_insert(ln); desc_ok = false; arg = 0;
+            continue;
+        }
+        let head = d.and_then(|d| gh_head(d, t));
+        if let Some(tl) = tags.take().filter(|_| d.is_some()) {
+            match head {
+                Some((Background, _)) => o.push(p(tl, 1, "error", "Contexto (Background) não aceita tags", "gherkin")),
+                Some(_) => {}
+                None => o.push(p(tl, 1, "error", "Tags sem Funcionalidade, Regra, Cenário ou Exemplos logo depois", "gherkin")),
+            }
+        }
+        if t.starts_with('|') {
+            desc_ok = false;
+            let (cells, rest) = gh_cells(t);
+            if !rest.trim().is_empty() { o.push(p(ln, col, "warning", "Texto depois do último '|' da tabela é ignorado", "gherkin")); }
+            if d.is_some() && arg == 0 { o.push(p(ln, col, "error", "Tabela fora de um passo ou de Exemplos (Examples)", "gherkin")); continue; }
+            match width {
+                None => width = Some((cells.len(), ln)),
+                Some((w, first)) if w != cells.len() => o.push(p(ln, col, "error", format!("Linha da tabela com {} células; a primeira (linha {first}) tem {w}", cells.len()), "gherkin")),
+                _ => {}
+            }
+            if arg == 2 { if let Some(ex) = cur.as_mut().and_then(|s| s.examples.last_mut()) { if ex.header.is_none() { ex.header = Some(cells); } else { ex.rows += 1; } } }
+            else if let Some(sc) = cur.as_mut().filter(|s| !s.bg) { gh_uses(l, ln, &mut sc.uses); }
+            continue;
+        }
+        if t.starts_with("\"\"\"") || t.starts_with("```") {
+            if d.is_some() && arg != 1 { o.push(p(ln, col, "error", "Docstring fora de um passo", "gherkin")); }
+            doc = Some((if t.starts_with("```") { "```" } else { "\"\"\"" }, ln, col)); desc_ok = false;
+            continue;
+        }
+        let Some(d) = d else { continue };
+        if let Some((h, name)) = head {
+            desc_ok = true; arg = 0; last = None; in_examples = false;
+            let kw = &t[..t.find(':').unwrap_or(0)];
+            if h == Feature {
+                match feature {
+                    Some(f) => o.push(p(ln, col, "error", format!("Só uma Funcionalidade (Feature) por arquivo: a primeira está na linha {f}"), "gherkin")),
+                    None => { feature = Some(ln); if name.is_empty() { o.push(p(ln, col, "warning", "Funcionalidade sem nome", "no-unnamed-features")); } }
+                }
+                gh_close(cur.take(), &mut o); bg_seen = false; sc_seen = false;
+                continue;
+            }
+            if feature.is_none() && !early { o.push(p(ln, col, "error", format!("\"{kw}\" antes da Funcionalidade (Feature)"), "gherkin")); early = true; }
+            match h {
+                Rule => { gh_close(cur.take(), &mut o); bg_seen = false; sc_seen = false; }
+                Background => {
+                    if sc_seen { o.push(p(ln, col, "error", "Contexto (Background) depois de um Cenário: ele vem antes de todos", "gherkin")); }
+                    else if bg_seen { o.push(p(ln, col, "error", "Mais de um Contexto (Background) na mesma Funcionalidade ou Regra", "gherkin")); }
+                    gh_close(cur.take(), &mut o); bg_seen = true;
+                    cur = Some(GhScenario { line: ln, col, bg: true, outline: false, steps: 0, uses: vec![], examples: vec![] });
+                }
+                Scenario | Outline => {
+                    gh_close(cur.take(), &mut o); sc_seen = true; scenarios += 1;
+                    if name.is_empty() { o.push(p(ln, col, "warning", "Cenário sem nome", "no-unnamed-scenarios")); }
+                    else if let Some(prev) = names.get(name) { o.push(p(ln, col, "warning", format!("Cenário \"{name}\" repetido (também na linha {prev})"), "no-dupe-scenario-names")); }
+                    else { names.insert(name.to_string(), ln); }
+                    let mut sc = GhScenario { line: ln, col, bg: false, outline: h == Outline, steps: 0, uses: vec![], examples: vec![] };
+                    gh_uses(l, ln, &mut sc.uses);
+                    cur = Some(sc);
+                }
+                Examples => match cur.as_mut().filter(|s| !s.bg) {
+                    Some(sc) => { sc.examples.push(GhExamples { line: ln, col, header: None, rows: 0 }); in_examples = true; arg = 2; }
+                    None => o.push(p(ln, col, "error", "Exemplos (Examples) fora de um Cenário", "gherkin")),
+                },
+                Feature => {}
+            }
+            continue;
+        }
+        if let Some((kind, kw)) = gh_step(d, t) {
+            desc_ok = false; arg = 1;
+            match cur.as_mut() {
+                None => o.push(p(ln, col, "error", "Passo fora de um Cenário ou Contexto (Scenario/Background)", "gherkin")),
+                Some(_) if in_examples => o.push(p(ln, col, "error", "Passo depois dos Exemplos: os passos vêm antes de Examples", "gherkin")),
+                Some(sc) => {
+                    sc.steps += 1;
+                    if !sc.bg { gh_uses(l, ln, &mut sc.uses); }
+                    if kind != GhStep::Cont && last == Some(kind) { o.push(p(ln, col, "info", format!("\"{kw}\" repetido: continue o passo anterior com \"{}\"", d.and[0]), "use-and")); }
+                    if kind != GhStep::Cont { last = Some(kind); }
+                }
+            }
+            continue;
+        }
+        if desc_ok { continue; }
+        if feature.is_none() { if !early { o.push(p(ln, col, "error", "Texto antes da Funcionalidade (Feature)", "gherkin")); early = true; } continue; }
+        o.push(p(ln, col, "error", format!("Linha não reconhecida: passo sem palavra-chave ({}/{}/{}/{}/{}) ou texto fora da descrição", d.given[0], d.when[0], d.then[0], d.and[0], d.but[0]), "gherkin"));
+    }
+    if let Some((_, l, c)) = doc { o.push(p(l, c, "error", "Docstring não fechada", "gherkin")); }
+    if let Some(tl) = tags.filter(|_| d.is_some()) { o.push(p(tl, 1, "error", "Tags sem nada depois", "gherkin")); }
+    gh_close(cur, &mut o);
+    if d.is_some() {
+        match feature {
+            None if content => { o.retain(|x| x.msg != "Texto antes da Funcionalidade (Feature)"); o.push(p(1, 1, "error", "Nenhuma Funcionalidade (Feature) no arquivo", "gherkin")); }
+            Some(f) if scenarios == 0 => o.push(p(f, 1, "warning", "Funcionalidade sem cenários", "no-files-without-scenarios")),
+            _ => {}
+        }
+    }
+    o.sort_by_key(|x| (x.line, x.col));
+    o
+}
+
 // ---------- catálogo ----------
 pub enum Kind {
     Html(&'static str), Xml, Json, Jsonc, Jsonl, Yaml, Toml, Ini(bool), Env, Properties, Csv(Option<u8>), Css(&'static str),
-    Sql, Markdown, Docker, Make, Latex, Vb, Manifest, Po, Diff, Subs(bool), GoTpl, Code(&'static Spec), Plain,
+    Sql, Markdown, Docker, Make, Latex, Vb, Manifest, Po, Diff, Subs(bool), GoTpl, Gherkin, Code(&'static Spec), Plain,
 }
 /// família do arquivo pelo nome (minúsculo), extensão e começo do conteúdo; None = não é formato de texto daqui
 pub fn classify(base: &str, ext: &str, head: &str) -> Option<Kind> {
@@ -695,6 +924,7 @@ pub fn classify(base: &str, ext: &str, head: &str) -> Option<Kind> {
         "diff" | "patch" | "rej" | "debdiff" => Diff,
         "srt" => Subs(false), "vtt" | "webvtt" => Subs(true),
         "mf" => Manifest,
+        "feature" | "gherkin" => Gherkin,
         // VB
         "vb" | "vbs" | "vba" | "bas" | "vbscript" | "wsf.vbs" | "dsr" | "ctl" | "pag" | "dob" | "vbe.txt" => Vb,
         "frm" if re!(r"(?i)^(VERSION|Begin VB|Attribute VB_)").is_match(h) => Vb,
@@ -728,7 +958,7 @@ pub fn classify(base: &str, ext: &str, head: &str) -> Option<Kind> {
         "f90" | "f95" | "f03" | "f08" | "f18" | "pf" | "fi" => Code(&FORTRAN),
         "pas" | "dpr" | "lpr" | "dpk" | "dfm" | "lfm" | "fmx" => Code(&PASCAL),
         "conf" | "nginx" | "nginxconf" | "vhost" | "hocon" | "caddy" | "pf.conf" | "haproxy" | "squid" | "zone.conf" => Code(&CONF),
-        "txt" | "text" | "log" | "out.txt" | "me" | "1st" | "nfo" | "diz" | "rst" | "rest" | "adoc" | "asciidoc" | "asc" | "org" | "textile" | "wiki" | "mediawiki" | "creole" | "pod" | "rdoc" | "man" | "roff" | "nroff" | "groff" | "ms" | "mom" | "texi" | "texinfo" | "lst" | "list" | "sub" | "lrc" | "sbv" | "gitignore" | "gitattributes" | "dockerignore" | "npmignore" | "lock" | "sum" | "mod.go" | "work" | "pem" | "crt" | "cer" | "csr" | "key" | "pub" | "asc.txt" | "sig.txt" | "gpg.txt" | "plantuml" | "puml" | "mmd" | "mermaid" | "dot" | "gv" | "http" | "rest.http" | "feature" | "story" | "gherkin" | "tu" | "ti" | "prd" | "hml" | "dnx" | "srt.txt" | "cue.txt" | "m3u" | "m3u8" | "pls" | "xspf.txt" | "tle" | "nmea" | "gcode" | "nc" | "ngc" | "tap" | "obj" | "mtl" | "ply" | "stl" | "off" | "x3d.txt" | "pgm" | "ppm" | "pbm" | "xpm" | "xbm" | "pcd" | "las.txt" | "fasta" | "fa" | "fastq" | "fq" | "gff" | "gtf" | "vcf" | "bed" | "sam" | "pdb" | "mol" | "sdf" | "xyz" | "cif" | "ics" | "ical" | "vcard" | "vcs" | "eml" | "mbox" | "msg.txt" | "url.txt" | "webloc.txt" | "desktop.txt" | "spec.txt" | "changes" | "news" | "authors" | "todo" | "install" | "copying" | "license" | "readme" | "ascii" | "ans" | "utf8" => Plain,
+        "txt" | "text" | "log" | "out.txt" | "me" | "1st" | "nfo" | "diz" | "rst" | "rest" | "adoc" | "asciidoc" | "asc" | "org" | "textile" | "wiki" | "mediawiki" | "creole" | "pod" | "rdoc" | "man" | "roff" | "nroff" | "groff" | "ms" | "mom" | "texi" | "texinfo" | "lst" | "list" | "sub" | "lrc" | "sbv" | "gitignore" | "gitattributes" | "dockerignore" | "npmignore" | "lock" | "sum" | "mod.go" | "work" | "pem" | "crt" | "cer" | "csr" | "key" | "pub" | "asc.txt" | "sig.txt" | "gpg.txt" | "plantuml" | "puml" | "mmd" | "mermaid" | "dot" | "gv" | "http" | "rest.http" | "story" | "tu" | "ti" | "prd" | "hml" | "dnx" | "srt.txt" | "cue.txt" | "m3u" | "m3u8" | "pls" | "xspf.txt" | "tle" | "nmea" | "gcode" | "nc" | "ngc" | "tap" | "obj" | "mtl" | "ply" | "stl" | "off" | "x3d.txt" | "pgm" | "ppm" | "pbm" | "xpm" | "xbm" | "pcd" | "las.txt" | "fasta" | "fa" | "fastq" | "fq" | "gff" | "gtf" | "vcf" | "bed" | "sam" | "pdb" | "mol" | "sdf" | "xyz" | "cif" | "ics" | "ical" | "vcard" | "vcs" | "eml" | "mbox" | "msg.txt" | "url.txt" | "webloc.txt" | "desktop.txt" | "spec.txt" | "changes" | "news" | "authors" | "todo" | "install" | "copying" | "license" | "readme" | "ascii" | "ans" | "utf8" => Plain,
         _ => return None,
     })
 }
@@ -739,7 +969,7 @@ pub fn tool(k: &Kind) -> &'static str {
         Kind::Yaml => "yaml", Kind::Toml => "toml", Kind::Ini(_) => "ini", Kind::Env => ".env", Kind::Properties => "properties", Kind::Csv(_) => "csv",
         Kind::Css(_) => "css", Kind::Sql => "sql", Kind::Markdown => "markdown", Kind::Docker => "dockerfile", Kind::Make => "makefile", Kind::Latex => "latex",
         Kind::Vb => "vb", Kind::Manifest => "manifest", Kind::Po => "gettext", Kind::Diff => "diff", Kind::Subs(v) => if *v { "webvtt" } else { "srt" },
-        Kind::GoTpl => "go template", Kind::Code(s) => s.name, Kind::Plain => "texto",
+        Kind::GoTpl => "go template", Kind::Gherkin => "gherkin", Kind::Code(s) => s.name, Kind::Plain => "texto",
     }
 }
 /// intérprete do shebang (#!/usr/bin/env python3 -> "py"), para arquivos sem extensão
@@ -818,6 +1048,38 @@ mod tests {
         assert_eq!(errs(template_blocks("{% if a %}{% for x in y %}{{ x }}{% endfor %}{% else %}{% endif %}{% set z = 1 %}{{#each l}}{{/each}}")), 0);
         assert_eq!(errs(template_blocks("{% if a %}{% for x in y %}{% endif %}{% endfor %}")), 2);
         assert_eq!(errs(go_template("{{define \"x\"}}{{if .A}}{{range .B}}{{end}}{{end}}{{end}}")), 0);
+    }
+    #[test]
+    fn gherkin_lint() {
+        let rules = |t: &str| gherkin(t).into_iter().map(|x| format!("{}@{}", x.rule, x.line)).collect::<Vec<_>>();
+        let en = "@smoke @login\nFeature: Login\n  As a user\n  I want to log in\n\n  Background:\n    Given the app is open\n\n  Rule: valid users\n\n  Scenario: ok\n    Given a user \"ana\"\n      | name | role  |\n      | ana  | admin |\n    When she logs in\n    And waits\n    Then she sees the home\n    But no errors\n\n  @wip\n  Scenario Outline: many <who>\n    Given a user <who> with:\n      \"\"\"json\n      {\"pass\": \"<pass>\"}\n      \"\"\"\n    * she logs in\n    Then the result is <result>\n\n    Examples: valid\n      | who | pass | result |\n      | ana | 1\\|2 | ok     |\n    @bad\n    Examples:\n      | who | pass | result |\n      | bob | x    | fail   |\n";
+        assert_eq!(rules(en), Vec::<String>::new());
+        let pt = "# language: pt\n# encoding: utf-8\nFuncionalidade: Saque\n  Contexto:\n    Dado que tenho R$ 100\n\n  Cenário: saque simples\n    Quando saco R$ 20\n    Então tenho R$ 80\n    E recebo o recibo\n\n  Esquema do Cenário: saque de <valor>\n    Quando saco <valor>\n    Então o saldo é <saldo>\n    Exemplos:\n      | valor | saldo |\n      | 10    | 90    |\n";
+        assert_eq!(rules(pt), Vec::<String>::new());
+        // erros do parser oficial
+        assert_eq!(rules("Given x\nFeature: a\n  Scenario: b\n    Given c\n"), ["gherkin@1"]);
+        assert_eq!(rules("Feature: a\n  Given solto\n  Scenario: b\n    Given c\n"), ["gherkin@2"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n    texto sem palavra-chave\n"), ["gherkin@4"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n  Background:\n    Given d\n"), ["gherkin@4"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n      | x | y |\n      | 1 |\n"), ["gherkin@5"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n      \"\"\"\n      aberto\n"), ["gherkin@4"]);
+        assert_eq!(rules("Feature: a\n  @tag errada\n  Scenario: b\n    Given c\n"), ["gherkin@2"]);
+        assert_eq!(rules("Feature: a\n  @t\n  Background:\n    Given x\n  Scenario: b\n    Given c\n"), ["gherkin@2"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\nFeature: d\n"), ["gherkin@4"]);
+        assert_eq!(rules("Feature: a\n  Scenario Outline: b\n    Given <x>\n    Examples:\n      | x |\n      | 1 |\n    Given depois\n"), ["gherkin@7"]);
+        assert_eq!(rules("só texto\n"), ["gherkin@1"]);
+        // regras do gherkin-lint
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n  Scenario: b\n    Given d\n"), ["no-dupe-scenario-names@4"]);
+        assert_eq!(rules("Feature:\n  Scenario:\n    Given c\n  Scenario: vazio\n"), ["no-unnamed-features@1", "no-unnamed-scenarios@2", "no-empty-scenario@4"]);
+        assert_eq!(rules("Feature: a\n  Scenario Outline: b\n    Given <x> and <y>\n    Examples:\n      | x | z |\n      | 1 | 2 |\n"), ["no-undefined-variables@3", "no-unused-variables@4"]);
+        assert_eq!(rules("Feature: a\n  Scenario Outline: b\n    Given <x>\n"), ["gherkin@2"]);
+        assert_eq!(rules("Feature: a\n  Scenario: b\n    Given c\n    Given d\n"), ["use-and@4"]);
+        assert_eq!(rules("Feature: a\n  Background:\n  Scenario: b\n    Given c\n"), ["no-empty-background@2"]);
+        assert_eq!(rules("Feature: a\n"), ["no-files-without-scenarios@1"]);
+        assert_eq!(rules("# só comentário\n"), Vec::<String>::new());
+        // idioma sem dicionário: só tabelas, docstrings e tags
+        assert_eq!(rules("# language: fr\nFonctionnalité: a\n  Scénario: b\n    Soit c\n      | x | y |\n      | 1 |\n"), ["gherkin@1", "gherkin@6"]);
+        assert!(matches!(classify("login.feature", "feature", ""), Some(Kind::Gherkin)));
     }
     /// varre arquivos reais (LINT_SCAN=pasta1;pasta2) e mostra, por família, os arquivos que acusaram algo: arquivos
     /// válidos de verdade não deveriam acusar nada. cargo test --release --bin bluescreen scan_real -- --ignored --nocapture

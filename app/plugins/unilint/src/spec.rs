@@ -62,6 +62,8 @@ pub struct Spec {
     pub debug_kinds: &'static [&'static str],
     /// nomes de chamadas de depuração (breakpoint, dbg!, var_dump)
     pub debug_calls: &'static [&'static str],
+    /// testes focados (`it.only`, `fit`): a suíte roda só eles; `.each` no fim também conta (`it.only.each`)
+    pub focus_calls: &'static [&'static str],
     pub ternaries: &'static [&'static str],
     pub cases: &'static [&'static str],
     /// declarações de variável local: (tipo do nó, campo do nome ou "" para o primeiro filho, tipo exigido do pai ou "")
@@ -79,7 +81,7 @@ pub struct Spec {
 const NONE: &[&str] = &[];
 const EMPTY: Spec = Spec {
     functions: NONE, ifs: NONE, elifs: NONE, elses: NONE, loops: NONE, catches: NONE, jumps: NONE, wrappers: NONE, blocks: NONE,
-    exempt: NONE, assigns: NONE, binaries: NONE, maps: NONE, comments: NONE, calls: NONE, debug_kinds: NONE, debug_calls: NONE,
+    exempt: NONE, assigns: NONE, binaries: NONE, maps: NONE, comments: NONE, calls: NONE, debug_kinds: NONE, debug_calls: NONE, focus_calls: NONE,
     ternaries: NONE, cases: NONE, vardecls: &[], imports: Imports::None, import_kinds: NONE, dynamic: NONE, attrs: NONE, pragmas: NONE,
 };
 
@@ -106,6 +108,9 @@ const PYTHON: Spec = Spec {
 };
 
 const JS_FUNCS: &[&str] = &["function_declaration", "function_expression", "arrow_function", "method_definition", "generator_function", "generator_function_declaration"];
+/// Jest, Jasmine, Mocha, Vitest, Cypress e Playwright
+const JS_FOCUS: &[&str] = &["it.only", "test.only", "describe.only", "context.only", "suite.only", "specify.only", "it.concurrent.only", "test.concurrent.only",
+    "describe.concurrent.only", "test.describe.only", "test.describe.parallel.only", "test.describe.serial.only", "fit", "fdescribe"];
 const JS_JUMPS: &[&str] = &["return_statement", "throw_statement", "break_statement", "continue_statement"];
 const JAVASCRIPT: Spec = Spec {
     functions: JS_FUNCS,
@@ -121,6 +126,7 @@ const JAVASCRIPT: Spec = Spec {
     comments: &["comment", "html_comment"],
     calls: &["call_expression"],
     debug_kinds: &["debugger_statement"],
+    focus_calls: JS_FOCUS,
     ternaries: &["ternary_expression"],
     cases: &["switch_case"],
     vardecls: &[("variable_declarator", "name", "")],
@@ -251,6 +257,8 @@ const RUBY: Spec = Spec {
     binaries: &["binary"],
     maps: &["hash"],
     comments: &["comment"],
+    calls: &["call"],
+    focus_calls: &["fit", "fdescribe", "fcontext", "fspecify", "fexample", "fscenario", "ffeature"],
     ternaries: &["conditional"],
     cases: &["when"],
     vardecls: &[("assignment", "left", "")],

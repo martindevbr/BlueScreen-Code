@@ -14,6 +14,7 @@ pub static EMPTY_CATCH: Rule = Rule { id: "empty-catch", severity: Warning, summ
 pub static BARE_EXCEPT: Rule = Rule { id: "bare-except", severity: Warning, summary: "except sem tipo captura até KeyboardInterrupt e SystemExit", equivalents: &["E722", "W0702", "bare-except", "PLW0702"] };
 pub static DUP_KEY: Rule = Rule { id: "duplicate-key", severity: Warning, summary: "Chave repetida no mesmo literal de objeto/dicionário", equivalents: &["no-dupe-keys", "F601", "W0109", "duplicate-key", "Lint/DuplicateHashKey", "DuplicateHashKey", "W314"] };
 pub static DEBUGGER: Rule = Rule { id: "debugger", severity: Warning, summary: "Comando de depuração esquecido no código", equivalents: &["no-debugger", "T100", "dbg_macro", "forgotten-debug-statement", "W1515", "Lint/Debugger"] };
+pub static FOCUSED_TEST: Rule = Rule { id: "focused-test", severity: Warning, summary: "Teste focado (.only, fit, fdescribe): a suíte roda só ele e pula os outros", equivalents: &["no-focused-tests", "no-focused-test", "no-exclusive-tests", "no-only-tests", "RSpec/Focus", "Focus"] };
 pub static UNUSED_VAR: Rule = Rule { id: "unused-variable", severity: Warning, summary: "Variável local declarada e nunca usada", equivalents: &["no-unused-vars", "F841", "W0612", "unused-variable", "unused_variables", "UNUSED_VARIABLE", "UnusedPrivateProperty", "UselessAssignment", "Lint/UselessAssignment", "CS0168", "CS0219", "IDE0059", "IDE0051", "UnusedLocalVariable", "unused-local", "W211", "PSUseDeclaredVarsMoreThanAssignments", "clang-diagnostic-unused-variable", "ineffassign", "unusedvariable"] };
 pub static UNUSED_IMPORT: Rule = Rule { id: "unused-import", severity: Warning, summary: "Import que o arquivo não usa", equivalents: &["no-unused-vars", "F401", "W0611", "unused-import", "unused_imports", "UnusedImports", "UnusedImport", "UNUSED_IMPORT", "IDE0005", "CS8019", "UnnecessaryImport"] };
 pub static LONG_FUNCTION: Rule = Rule { id: "long-function", severity: Info, summary: "Função com mais de 200 linhas", equivalents: &["max-lines-per-function", "too_many_lines", "R0915", "too-many-statements", "PLR0915", "LongMethod", "Metrics/MethodLength", "MethodLength", "funlen", "readability-function-size", "ExcessiveMethodLength", "NcssCount"] };
@@ -23,7 +24,7 @@ pub static DEEP_NESTING: Rule = Rule { id: "deep-nesting", severity: Info, summa
 
 pub static ALL: &[&Rule] = &[
     &SYNTAX, &UNREACHABLE, &SELF_ASSIGN, &SELF_COMPARE, &DUP_CONDITION, &IDENTICAL_BRANCHES, &CONSTANT_CONDITION, &EMPTY_BLOCK,
-    &EMPTY_CATCH, &BARE_EXCEPT, &DUP_KEY, &DEBUGGER, &UNUSED_VAR, &UNUSED_IMPORT, &LONG_FUNCTION, &TOO_MANY_PARAMS, &COMPLEXITY, &DEEP_NESTING,
+    &EMPTY_CATCH, &BARE_EXCEPT, &DUP_KEY, &DEBUGGER, &FOCUSED_TEST, &UNUSED_VAR, &UNUSED_IMPORT, &LONG_FUNCTION, &TOO_MANY_PARAMS, &COMPLEXITY, &DEEP_NESTING,
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Rule> { ALL.iter().copied().find(|r| r.id == id) }

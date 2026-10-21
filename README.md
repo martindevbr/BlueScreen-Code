@@ -34,7 +34,7 @@ BlueScreen.exe --doc dados.xlsx    # só o documento, numa janela leve (.csv, .t
 | `Alt+F7` | encontrar usos |
 | `Shift+F6` | renomear em todos os arquivos |
 | `Alt+Enter` | ações rápidas e refatorações |
-| `Ctrl+Shift+F10` | executar o arquivo aberto |
+| `Ctrl+Shift+F10` | executar o main mais perto do cursor (ou o arquivo aberto) |
 | `Shift+F9` | depurar (`F8` passa, `F7` entra, `F9` continua) |
 | `Ctrl+F8` | breakpoint (botão direito na margem: com condição) |
 | `Ctrl+Alt+L` | lint do arquivo |
@@ -72,8 +72,10 @@ Outra ferramenta ou outro caminho: liste em `~/.bluescreen/tools.json`.
 
 - **Git e SVN:** alterações, diff lado a lado editável, histórico, marcas na margem.
 - **Build:** o painel `Alt+6` reconhece Maven, Gradle, npm/Yarn/pnpm, Cargo, .NET, CMake, Go, Python (uv, Poetry...) e mais de 60 ferramentas, usando o wrapper do projeto (`mvnw`, `gradlew`).
+- **Runtimes e executar o main:** ao abrir um arquivo, a IDE confere se o runtime da linguagem está instalado (JDK, Node.js, Python, Go, .NET, Rust, compilador C/C++, Ruby, PHP e mais 20) e se atende à versão que o projeto pede (`pom.xml`, `build.gradle`, `.nvmrc`, `go.mod`, `global.json`...). Se faltar, oferece baixar pela IDE, escolher outra versão, apontar uma pasta já instalada ou instalar com winget. Cada `main` (`public static void main`, `fun main`, `if __name__ == "__main__"`, `func main`, `fn main`, `static void Main`...) ganha um ▶ na margem, como no IntelliJ. Ele executa pelo Maven, Gradle, Cargo, dotnet ou direto, com entrada para o programa no console (plugin [`runtimes`](app/plugins/runtimes/README.md)).
 - **Dependências:** se o `package.json`, o `requirements.txt`, o `.csproj` ou outro manifesto ainda não foi instalado, um aviso oferece o comando certo.
 - **Lint sem instalar nada:** 16 linguagens por árvore sintática (plugin [`unilint`](app/plugins/unilint/README.md)) e linters de formato (JSON, YAML, XML, CSS, SQL, Dockerfile...).
+- **BDD e testes automatizados:** `.feature` do Cucumber, Behave e SpecFlow com cores e lint ao vivo (estrutura que o parser do Cucumber cobra, tabelas, docstrings, tags, colunas dos Exemplos, cenários repetidos ou vazios; palavras-chave em inglês, português e espanhol pelo `# language:`). Nos testes, teste focado esquecido (`it.only`, `fit`, `fdescribe`, RSpec `fit`) vira aviso com correção.
 - **Terminal:** PowerShell, cmd, Git Bash, WSL e os prompts do Visual Studio; `arquivo:linha` na saída abre o arquivo.
 - **Arquivos gigantes:** logs e CSVs de vários GB abrem na hora, com busca no arquivo inteiro.
 - **Planilhas:** `.csv` e `.xlsx` abrem numa tabela editável, com fórmulas e formatação (plugin [`sheets`](app/plugins/sheets/README.md)). No Windows, o BlueScreen aparece no **Abrir com** desses arquivos e abre só o documento, numa janela leve, sem mexer na IDE aberta (`BlueScreen.exe --doc arquivo.xlsx`). Para ser o programa padrão, marque "Sempre usar este aplicativo".

@@ -5,6 +5,8 @@
      bs.build.info()            estrutura do build (info.plugins[id] traz os dados do gancho "build.info" do plugin)
      bs.build.selected()        Maven, JDK e repositório escolhidos
      bs.build.run(task, cmd)    roda uma tarefa (id) ou um comando Maven livre
+     bs.build.runSteps(o)       roda passos prontos no console: { title, steps: [{ program, args, cwd, env, java, label }], jdk }
+                                (ex.: o plugin runtimes executando um main); o console aceita entrada para o programa
      bs.build.showLog(log)      mostra um log de fora no console: { title, prefix, lines, status, started, ended, url, urlTitle }
      bs.build.current()         o que o console está mostrando agora
      bs.build.render()          redesenha a janela Build
@@ -31,6 +33,7 @@ bs.ui.panel(`<div id="buildCon" hidden>
     <button class="icon-btn" id="bcClose" title="Fechar">${I.x}</button></div>
   <div class="bc-sum" id="bcSum" hidden></div>
   <div class="bc-out" id="bcOut"></div>
+  <form class="bc-in" id="bcIn" hidden autocomplete="off"><span class="bc-in-ic">›</span><input id="bcInput" placeholder="Entrada do programa (Enter envia)" spellcheck="false"></form>
 </div>`);
 
 async function bcLoadInfo(fresh) {
@@ -128,6 +131,20 @@ async function bcRunFile() {
     bcOpenLocal(r.id, true);
   } catch (e) { toast(e.message); }
 }
+// passos prontos de um plugin (ex.: runtimes executando um main): rodam no console, com entrada para o programa
+async function bcRunSteps(o) {
+  if (!S.project) return;
+  if (BC.run && BC.run.kind === 'local' && BC.run.status === 'running') {
+    // o programa anterior ainda roda: como no IntelliJ, para e roda de novo
+    try { await api('build/stop', { id: BC.run.id }, { method: 'POST' }); } catch {}
+  }
+  try {
+    const r = await api('build/run', {}, { method: 'POST', body: JSON.stringify({ project: S.project.path, title: o.title, steps: o.steps, jdk: o.jdk || bcSelected().jdk }) });
+    BC.last = { steps: o.steps, title: o.title, jdk: o.jdk }; store.set('buildLast:' + S.project.path, BC.last);
+    bcOpenLocal(r.id, true);
+    return r.id;
+  } catch (e) { toast(e.message); }
+}
 function bcOpenLocal(id, fresh) {
   clearTimeout(BC.timer);
   BC.run = { kind: 'local', id, lines: [], next: 0, status: 'running', title: 'Build', fresh };
@@ -141,8 +158,8 @@ async function bcPoll() {
   if (r.from > run.next) run.lines.push('[BlueScreen] (' + (r.from - run.next) + ' linhas antigas descartadas)');
   run.lines.push(...r.lines); run.next = r.from + r.lines.length;
   const statusChanged = run.status !== r.status;
-  Object.assign(run, { status: r.status, title: r.title, step: r.step, steps: r.steps, started: r.started, ended: r.ended });
-  bcAppend(before); bcHeader();
+  Object.assign(run, { status: r.status, title: r.title, step: r.step, steps: r.steps, started: r.started, ended: r.ended, interactive: r.interactive, input: r.input, prompt: r.prompt || '' });
+  bcAppend(before); bcHeader(); bcInputRow();
   if (r.status === 'running' || r.lines.length >= 5000) BC.timer = setTimeout(bcPoll, r.lines.length ? 250 : 600);
   else if (statusChanged || before === 0) { bcSummary(); try { BC.runs = await api('build/runs', { project: S.project.path }); } catch {} if (S.tool === 'build') renderBuild(); if (r.status !== 'running' && run.fresh) toast(r.status === 'ok' ? 'Build concluído' : r.status === 'stopped' ? 'Build interrompido' : 'Build falhou'); }
   if (r.status === 'running' && S.tool === 'build' && before === 0) renderBuild();
@@ -165,7 +182,31 @@ async function bcCheckRefs(run) {
   try { run.exists = new Set(await api('build/exists', {}, { method: 'POST', body: JSON.stringify({ root: BC.info.root, paths: [...set] }) })); } catch { run.exists = new Set(); }
 }
 function bcShow() { $('#buildCon').hidden = false; bcRenderAll(); }
-function bcRenderAll() { bcHeader(); $('#bcOut').innerHTML = ''; bcAppend(0); bcSummary(); }
+function bcRenderAll() { bcHeader(); $('#bcOut').innerHTML = ''; bcAppend(0); bcSummary(); bcInputRow(); }
+// programa rodando que lê a entrada (Scanner, input()): a linha de baixo manda o texto; o que ele escreveu sem quebrar
+// a linha ("Digite seu nome: ") aparece no fim da saída
+function bcInputRow() {
+  const r = BC.run, row = $('#bcIn'), out = $('#bcOut'); if (!row || !out) return;
+  const on = !!(r && r.kind === 'local' && r.status === 'running' && r.interactive);
+  const had = !row.hidden; row.hidden = !on;
+  $('#bcInput').disabled = !(on && r.input);
+  let p = $('#bcPrompt');
+  const text = on ? r.prompt : '';
+  if (!text) { p?.remove(); }
+  else {
+    const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 30;
+    if (!p) { p = document.createElement('div'); p.id = 'bcPrompt'; p.className = 'bl prompt'; }
+    p.textContent = text; out.appendChild(p);
+    if (stick) out.scrollTop = out.scrollHeight;
+  }
+  if (on && !had && r.fresh) setTimeout(() => { const i = $('#bcInput'); if (i && !i.disabled && !document.activeElement?.closest?.('#mon')) i.focus(); }, 50);
+}
+$('#bcIn').addEventListener('submit', async (e) => {
+  e.preventDefault(); const r = BC.run, inp = $('#bcInput'); if (!r || r.kind !== 'local') return;
+  const text = inp.value; inp.value = '';
+  try { const x = await api('build/input', {}, { method: 'POST', body: JSON.stringify({ id: r.id, text }) }); if (!x.ok) toast('O programa não está lendo a entrada agora'); } catch (er) { toast(er.message); }
+  clearTimeout(BC.timer); bcPoll();
+});
 function bcHeader() {
   const r = BC.run; if (!r) return;
   const st = { running: '<span class="bst running"><span class="spin"></span>rodando</span>', ok: '<span class="bst ok">sucesso</span>', failed: '<span class="bst failed">falhou</span>', stopped: '<span class="bst stopped">interrompido</span>', loading: '<span class="bst running"><span class="spin"></span>carregando</span>' }[r.status] || '';
@@ -220,7 +261,7 @@ function bcAppend(from) {
   const start = Math.max(from, lines.length - 8000); // DOM: no máximo as últimas 8000 linhas
   if (from === 0 && start > 0) html += `<div class="bl bs">… ${start} linhas anteriores ocultas (use Copiar para ver tudo)</div>`;
   for (let k = start; k < lines.length; k++) { if (BC.view === 'issues' && !/err|warn|ok|step/.test(bcClass(lines[k]))) continue; html += bcLineHtml(lines[k], k); }
-  if (from === 0) out.innerHTML = html; else out.insertAdjacentHTML('beforeend', html);
+  if (from === 0) out.innerHTML = html; else { $('#bcPrompt')?.remove(); out.insertAdjacentHTML('beforeend', html); }
   if (stick || from === 0) out.scrollTop = out.scrollHeight;
 }
 // resumo do build: resultado, módulos, erros de compilação, dependências faltando, testes
@@ -258,7 +299,7 @@ document.addEventListener('click', (e) => {
 });
 $('#bcClose').onclick = () => { $('#buildCon').hidden = true; };
 $('#bcStop').onclick = async () => { const r = BC.run; if (r && r.kind === 'local') { try { await api('build/stop', { id: r.id }, { method: 'POST' }); } catch (e) { toast(e.message); } } };
-$('#bcRerun').onclick = () => { const l = BC.last || store.get('buildLast:' + (S.project && S.project.path), null); if (l && l.file) bcRunFile(); else if (l) bcRun(l.task, l.custom); };
+$('#bcRerun').onclick = () => { const l = BC.last || store.get('buildLast:' + (S.project && S.project.path), null); if (l && l.steps) bcRunSteps(l); else if (l && l.file) bcRunFile(); else if (l) bcRun(l.task, l.custom); };
 $('#bcCopy').onclick = () => BC.run && copyText(BC.run.lines.join('\n'));
 $('#bcSeg').querySelectorAll('button').forEach(b => b.onclick = () => { BC.view = b.dataset.v; $('#bcSeg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); bcAppend(0); });
 // altura do console: arrastar a borda de cima
@@ -273,6 +314,7 @@ $('#buildCon').style.height = store.get('bcH', 280) + 'px';
 function bcBuildShortcut() {
   if (!S.project) return;
   const l = BC.last || store.get('buildLast:' + S.project.path, null);
+  if (l && l.steps) return bcRunSteps(l);
   if (l && l.file) return bcRunFile();
   if (l) bcRun(l.task, l.custom);
   else { const i = BC.info; const t = i && (i.tasks.find(x => x.id === 'compile') || i.tasks.find(x => /^(Build|Compilar)$/.test(x.label))); if (t) bcRun(t.id); else openTool('build'); }
@@ -294,6 +336,8 @@ bs.build = {
   info: () => (BC.info && S.project && BC.infoFor === S.project.path ? BC.info : null),
   selected: bcSelected,
   run: (task, custom) => bcRun(task, custom),
+  runSteps: bcRunSteps,
+  runFile: () => bcRunFile(),
   showLog: bcShowLog,
   current: () => BC.run,
   render: () => { if (S.tool === 'build') renderBuild(); },

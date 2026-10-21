@@ -166,7 +166,7 @@ impl<'a, 't> Cx<'a, 't> {
             let fix = Fix { title: "Remover".into(), edits: vec![Edit { start: n.start_byte(), end: n.end_byte(), text: String::new() }], safe: true };
             self.push(&DEBUGGER, (n.start_byte(), n.start_position()), (n.end_byte(), n.end_position()), format!("`{}` esquecido no código", self.text(n).trim_end_matches(';')), vec![fix]);
         }
-        if f & k::CALL != 0 && !self.p.spec.debug_calls.is_empty() { self.debug_call(n); }
+        if f & k::CALL != 0 && !(self.p.spec.debug_calls.is_empty() && self.p.spec.focus_calls.is_empty()) { self.call(n); }
         if f & k::VARDECL != 0 && !self.frames.is_empty() { self.vardecl(n); }
         if f & k::IMPORT != 0 {
             if self.p.spec.imports == Imports::Python && self.anc.iter().any(|a| a.kind() == "try_statement") { self.guarded_imports.insert(n.id()); }
@@ -433,12 +433,27 @@ impl<'a, 't> Cx<'a, 't> {
         })
     }
 
-    fn debug_call(&mut self, n: Node<'t>) {
-        let Some(callee) = n.child_by_field_name("function").or_else(|| n.child_by_field_name("macro")) else { return };
-        let t = self.text(callee);
+    /// o que é chamado: campo function (ou macro no Rust); no Ruby, `receptor.metodo` ou só o método
+    fn callee(&self, n: Node<'t>) -> Option<(usize, &'a str)> {
+        if let Some(c) = n.child_by_field_name("function").or_else(|| n.child_by_field_name("macro")) { return Some((c.start_byte(), self.text(c))); }
+        let m = n.child_by_field_name("method")?;
+        Some((n.start_byte(), self.src.get(n.start_byte()..m.end_byte())?))
+    }
+    fn call(&mut self, n: Node<'t>) {
+        let Some((at, t)) = self.callee(n) else { return };
         if self.p.spec.debug_calls.contains(&t) {
             let shown = if n.kind() == "macro_invocation" { format!("{t}!") } else { format!("{t}()") };
             self.report(&DEBUGGER, n, format!("Chamada de depuração `{shown}` esquecida no código"));
+        }
+        // `it.only.each(tabela)(...)`: a chamada de dentro é `it.only.each`
+        let base = t.strip_suffix(".each").unwrap_or(t);
+        if self.p.spec.focus_calls.contains(&base) {
+            // tira o `.only` (it.only -> it) ou o `f` do começo (fit -> it, fdescribe -> describe)
+            let edit = match base.rfind(".only") { Some(i) => Edit { start: at + i, end: at + i + 5, text: String::new() }, None => Edit { start: at, end: at + 1, text: String::new() } };
+            let fix = Fix { title: "Desfocar o teste".into(), edits: vec![edit], safe: true };
+            let end = at + t.len();
+            let end_pt = Point { row: n.start_position().row, column: n.start_position().column + (end - n.start_byte()) };
+            self.push(&FOCUSED_TEST, (at, n.start_position()), (end, end_pt), format!("`{base}` roda só este teste: o resto da suíte é pulado em silêncio"), vec![fix]);
         }
     }
 
