@@ -1,25 +1,22 @@
 //! Servidor de plugins do BlueScreen: hospeda plugins com versões para as IDEs instalarem e atualizarem.
 //!
-//! Uso: bluescreen-plugin-server [--port 4900] [--dir ./plugin-store] [--token SEGREDO] [--name "Plugins da equipe"]
-//!      (ou PLUGIN_SERVER_PORT, PLUGIN_SERVER_DIR, PLUGIN_SERVER_TOKEN, PLUGIN_SERVER_NAME)
+//! Uso: bluescreen-plugin-server [--port 4900] [--dir ./plugin-store] [--name "Plugins da equipe"]
+//!      (ou PLUGIN_SERVER_PORT, PLUGIN_SERVER_DIR, PLUGIN_SERVER_NAME)
 //!
+//! Só de leitura: pela rede, as IDEs listam e baixam; nada é enviado nem apagado por ela.
 //! Pasta de dados: <dir>/<id>/<versão>/ com os arquivos do plugin (plugin.json, ui.js, style.css, server.exe...).
-//! Publicar uma versão nova:
-//!   - pela IDE: botão direito no plugin (aba Plugins) > "Publicar no servidor", com o token de publicação;
-//!   - pela API: POST /api/publish com o pacote e o cabeçalho `Authorization: Bearer <token>`;
-//!   - à mão: soltar a pasta do plugin (a que tem o plugin.json) direto em <dir>/. O servidor lê o id e a versão
-//!     do plugin.json e arquiva em <dir>/<id>/<versão>/ sozinho.
+//! Versão nova: quem administra a máquina solta a pasta do plugin (a que tem o plugin.json) direto em <dir>/;
+//! o servidor lê o id e a versão do plugin.json e arquiva em <dir>/<id>/<versão>/ sozinho.
 //! As IDEs que apontam para este servidor sempre recebem a maior versão e avisam que há atualização.
 //!
-//! Rotas: GET /api/index, GET /api/plugins/{id}[?version=], POST /api/publish[?force=1],
-//!        DELETE /api/plugins/{id}/{version}, GET / (página com a lista).
-use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, State};
+//! Rotas: GET /api/index, GET /api/plugins/{id}[?version=], GET / (página com a lista).
+use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use base64::Engine;
-use bluescreen_sdk::store::{bundle_hash, read_files, safe_rel, valid_id, valid_version, version_cmp};
+use bluescreen_sdk::store::{bundle_hash, read_files, valid_id, valid_version, version_cmp};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -32,7 +29,6 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 
 struct Store {
     dir: PathBuf,
-    token: String,
     name: String,
     /// versões publicadas não mudam: o hash de cada pasta é calculado uma vez
     hashes: Mutex<HashMap<PathBuf, (String, u64)>>,
@@ -125,7 +121,7 @@ async fn api_index(State(st): State<St>) -> Response {
 }
 
 #[derive(Deserialize)]
-struct VerQ { version: Option<String>, force: Option<String> }
+struct VerQ { version: Option<String> }
 
 async fn api_bundle(State(st): State<St>, UrlPath(id): UrlPath<String>, Query(q): Query<VerQ>) -> Response {
     tokio::task::spawn_blocking(move || {
@@ -143,59 +139,6 @@ async fn api_bundle(State(st): State<St>, UrlPath(id): UrlPath<String>, Query(q)
             "files": files.iter().map(|(p, d)| json!({ "path": p, "data": B64.encode(d) })).collect::<Vec<_>>(),
         })).into_response()
     }).await.unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-fn authorized(st: &Store, h: &HeaderMap) -> bool {
-    let given = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|s| s.strip_prefix("Bearer ")).map(str::trim)
-        .or_else(|| h.get("x-plugin-token").and_then(|v| v.to_str().ok()));
-    // comparação em tempo constante: o token não vaza pela demora da resposta
-    given.is_some_and(|g| g.len() == st.token.len() && g.bytes().zip(st.token.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0)
-}
-
-async fn api_publish(State(st): State<St>, Query(q): Query<VerQ>, h: HeaderMap, Json(b): Json<Value>) -> Response {
-    if !authorized(&st, &h) { return err(StatusCode::UNAUTHORIZED, "token de publicação inválido"); }
-    tokio::task::spawn_blocking(move || {
-        let mut files: Vec<(String, Vec<u8>)> = vec![];
-        for f in b["files"].as_array().into_iter().flatten() {
-            let p = f["path"].as_str().unwrap_or("");
-            if !safe_rel(p) || skip(p, false) { return err(StatusCode::BAD_REQUEST, format!("caminho inválido no pacote: {p}")); }
-            match B64.decode(f["data"].as_str().unwrap_or("")) { Ok(d) => files.push((p.to_string(), d)), Err(e) => return err(StatusCode::BAD_REQUEST, format!("{p}: base64 inválido ({e})")) }
-        }
-        if let Some(sha) = b["sha256"].as_str() { if sha != bundle_hash(&files) { return err(StatusCode::BAD_REQUEST, "o sha256 do pacote não confere (envio corrompido)"); } }
-        let Some(m) = files.iter().find(|f| f.0 == "plugin.json").and_then(|f| serde_json::from_slice::<Value>(f.1.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&f.1)).ok()) else {
-            return err(StatusCode::BAD_REQUEST, "o pacote precisa de um plugin.json válido");
-        };
-        let (id, ver) = (m["id"].as_str().unwrap_or("").trim().to_string(), m["version"].as_str().unwrap_or("").trim().to_string());
-        if !valid_id(&id) { return err(StatusCode::BAD_REQUEST, format!("id inválido no plugin.json: \"{id}\"")); }
-        if !valid_version(&ver) { return err(StatusCode::BAD_REQUEST, format!("versão inválida no plugin.json: \"{ver}\"")); }
-        let dest = st.dir.join(&id).join(&ver);
-        let force = q.force.as_deref() == Some("1");
-        if dest.exists() && !force { return err(StatusCode::CONFLICT, format!("{id} {ver} já está publicado: aumente o \"version\" do plugin.json")); }
-        let tmp = st.dir.join(format!(".tmp-{}", random_hex()));
-        let write = || -> std::io::Result<()> {
-            for (p, d) in &files { let to = tmp.join(p); if let Some(par) = to.parent() { std::fs::create_dir_all(par)?; } std::fs::write(to, d)?; }
-            std::fs::create_dir_all(st.dir.join(&id))?;
-            if dest.exists() { std::fs::remove_dir_all(&dest)?; }
-            std::fs::rename(&tmp, &dest)
-        };
-        if let Err(e) = write() { let _ = std::fs::remove_dir_all(&tmp); return err(StatusCode::INTERNAL_SERVER_ERROR, format!("não deu para gravar: {e}")); }
-        st.hashes.lock().unwrap().remove(&dest);
-        let latest = versions(&st, &id).first().cloned().unwrap_or_default();
-        log(format!("publicado {id} {ver}{} ({} arquivos)", if force { " (substituído)" } else { "" }, files.len()));
-        Json(json!({ "id": id, "version": ver, "latest": latest, "files": files.len() })).into_response()
-    }).await.unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-async fn api_delete(State(st): State<St>, UrlPath((id, ver)): UrlPath<(String, String)>, h: HeaderMap) -> Response {
-    if !authorized(&st, &h) { return err(StatusCode::UNAUTHORIZED, "token de publicação inválido"); }
-    if !valid_id(&id) || !valid_version(&ver) { return err(StatusCode::BAD_REQUEST, "id ou versão inválidos"); }
-    let dir = st.dir.join(&id).join(&ver);
-    if !dir.is_dir() { return err(StatusCode::NOT_FOUND, format!("{id} {ver} não existe")); }
-    if let Err(e) = std::fs::remove_dir_all(&dir) { return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()); }
-    st.hashes.lock().unwrap().remove(&dir);
-    let _ = std::fs::remove_dir(st.dir.join(&id)); // só sai se ficou vazia
-    log(format!("removido {id} {ver}"));
-    Json(json!({ "removed": true })).into_response()
 }
 
 fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;") }
@@ -221,7 +164,7 @@ th{{font-size:12px;color:var(--mut);font-weight:600}}.d{{color:var(--mut);font-s
 <main><h1>{name}</h1><p>Na IDE: aba <b>Plugins</b> (Alt+7) &rsaquo; <b>Servidores</b> &rsaquo; adicione <code>http://{host}</code>. As IDEs avisam quando sai versão nova.</p>
 {table}</main></html>"#,
         name = esc(&st.name), host = esc(host),
-        table = if rows.is_empty() { "<div class=empty>Nenhum plugin publicado ainda. Publique pela IDE (botão direito no plugin &rsaquo; Publicar no servidor) ou solte a pasta do plugin na pasta de dados do servidor.</div>".to_string() }
+        table = if rows.is_empty() { "<div class=empty>Nenhum plugin publicado ainda. Para publicar, solte a pasta do plugin (a que tem o plugin.json) na pasta de dados do servidor.</div>".to_string() }
                 else { format!("<table><tr><th>Plugin</th><th>id</th><th>Versão</th><th>Todas as versões</th></tr>{rows}</table>") }))
 }
 
@@ -233,20 +176,15 @@ fn arg(args: &[String], name: &str, env: &str) -> Option<String> {
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("bluescreen-plugin-server [--port 4900] [--dir ./plugin-store] [--token SEGREDO] [--name \"Plugins da equipe\"]");
+        println!("bluescreen-plugin-server [--port 4900] [--dir ./plugin-store] [--name \"Plugins da equipe\"]");
         return;
     }
     let port: u16 = arg(&args, "--port", "PLUGIN_SERVER_PORT").and_then(|p| p.parse().ok()).unwrap_or(4900);
     let dir = PathBuf::from(arg(&args, "--dir", "PLUGIN_SERVER_DIR").unwrap_or_else(|| "plugin-store".into()));
     if let Err(e) = std::fs::create_dir_all(&dir) { eprintln!("não deu para criar {}: {e}", dir.display()); std::process::exit(1); }
     let dir = if dir.is_absolute() { dir } else { std::env::current_dir().map(|c| c.join(&dir)).unwrap_or(dir) };
-    // token de publicação: o da linha de comando/ambiente ou um gerado na primeira vez e guardado na pasta de dados
-    let token = arg(&args, "--token", "PLUGIN_SERVER_TOKEN").unwrap_or_else(|| {
-        let f = dir.join(".token");
-        std::fs::read_to_string(&f).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| { let t = random_hex(); let _ = std::fs::write(&f, &t); t })
-    });
     let name = arg(&args, "--name", "PLUGIN_SERVER_NAME").unwrap_or_else(|| "Servidor de plugins BlueScreen".into());
-    let st: St = Arc::new(Store { dir: dir.clone(), token: token.clone(), name, hashes: Mutex::new(HashMap::new()) });
+    let st: St = Arc::new(Store { dir: dir.clone(), name, hashes: Mutex::new(HashMap::new()) });
 
     // pastas soltas na raiz são arquivadas mesmo sem ninguém pedir o índice
     tokio::spawn({ let st = st.clone(); async move { loop { let s = st.clone(); let _ = tokio::task::spawn_blocking(move || file_drops(&s)).await; tokio::time::sleep(Duration::from_secs(5)).await; } } });
@@ -255,9 +193,6 @@ async fn main() {
         .route("/", get(page))
         .route("/api/index", get(api_index))
         .route("/api/plugins/{id}", get(api_bundle))
-        .route("/api/plugins/{id}/{version}", delete(api_delete))
-        .route("/api/publish", post(api_publish))
-        .layer(DefaultBodyLimit::max(512 << 20))
         .with_state(st);
     let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
         Ok(l) => l,
@@ -266,7 +201,7 @@ async fn main() {
     println!("Servidor de plugins BlueScreen v{}", env!("CARGO_PKG_VERSION"));
     println!("  endereço:  http://localhost:{port}  (e o IP desta máquina na rede)");
     println!("  dados:     {}", dir.display());
-    println!("  token de publicação: {token}");
+    println!("  publicar:  solte a pasta do plugin (com o plugin.json) em {}", dir.display());
     println!("  na IDE: aba Plugins (Alt+7) > Servidores > adicionar o endereço");
     if let Err(e) = axum::serve(listener, app).await { eprintln!("{e}"); }
 }

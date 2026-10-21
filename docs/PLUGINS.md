@@ -83,7 +83,7 @@ O núcleo chama a rota indicada (POST, como chamada interna) e usa a resposta. G
 
 ## Servidor de plugins
 
-`app/plugin-server` é um programa à parte que hospeda plugins com versões. A IDE aponta para ele na aba **Plugins** › **Servidores de plugins** (endereço e, para publicar, o token). A lista fica em `~/.bluescreen/plugins.json` (`servers`).
+`app/plugin-server` é um programa à parte que hospeda plugins com versões. A IDE aponta para ele na aba **Plugins** › **Servidores de plugins** (só o endereço). O servidor é só de leitura: a IDE lista, instala e atualiza, mas não envia nada para ele. A lista fica em `~/.bluescreen/plugins.json` (`servers`).
 
 **Na IDE:**
 - **Instalar.** Os plugins do servidor aparecem em **Disponíveis nos servidores**, com o botão **Instalar**.
@@ -96,25 +96,21 @@ O núcleo chama a rota indicada (POST, como chamada interna) e usa a resposta. G
   - O pacote é conferido pelo sha256 antes.
   - Um plugin com `server.exe` é encerrado e trocado sem fechar a IDE.
   - A pasta ganha um `.origin.json` com o servidor e a versão.
-- **Publicar.** Clique com o botão direito no plugin › **Publicar no servidor**.
-  - Vão todos os arquivos da pasta, menos `src/`, `target/`, `Cargo.*` e os ocultos.
-  - Com o exe do cargo, em desenvolvimento, ele vai como `server.exe`.
-  - Para as IDEs receberem o aviso, aumente o `version` do `plugin.json`. Publicar a mesma versão pede confirmação para substituir.
 - **Desinstalar.** Botão direito no plugin › **Desinstalar**. Só vale para plugins da pasta do usuário. Se o app tiver o mesmo plugin, a versão do app volta a valer.
 
 **No servidor:**
 
 ```
 app\build.ps1 -PluginServer
-dist\PluginServer\bluescreen-plugin-server.exe --port 4900 --dir D:\plugins --token SEGREDO --name "Plugins da equipe"
+dist\PluginServer\bluescreen-plugin-server.exe --port 4900 --dir D:\plugins --name "Plugins da equipe"
 ```
 
 - **Pasta de dados:** `<dir>/<id>/<versão>/`. As IDEs sempre recebem a maior versão; as antigas ficam guardadas.
-- **Publicar sem a IDE:** solte a pasta do plugin, a que tem o `plugin.json`, direto em `<dir>/`. O servidor lê o id e a versão e arquiva sozinho.
+- **Publicar:** na máquina do servidor, solte a pasta do plugin, a que tem o `plugin.json`, direto em `<dir>/`. O servidor lê o id e a versão e arquiva sozinho. Para as IDEs receberem o aviso, aumente o `version` do `plugin.json`; uma versão que já está lá vai para `<dir>/_recusados/`.
+- **Tirar uma versão:** apague `<dir>/<id>/<versão>/`.
 - **Rotas:**
   - `GET /api/index`
   - `GET /api/plugins/<id>[?version=]`, que devolve o pacote `{ id, version, sha256, files: [{ path, data (base64) }] }`
-  - `POST /api/publish[?force=1]` e `DELETE /api/plugins/<id>/<versão>`, as duas com `Authorization: Bearer <token>`
   - `GET /`, uma página com a lista
-- **Token:** sem `--token`, o servidor gera um e o guarda em `<dir>/.token`.
+- **Só leitura:** não há rota para enviar nem apagar plugins pela rede.
 

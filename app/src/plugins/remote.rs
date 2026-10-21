@@ -1,13 +1,13 @@
 //! Servidores de plugins (app/plugin-server): a IDE aponta para um ou mais servidores, lista o que eles têm,
-//! instala e atualiza plugins na pasta do usuário e publica plugins locais (com o token do servidor).
-//! Os servidores ficam em ~/.bluescreen/plugins.json (`servers: [{ url, token }]`). Plugin instalado de um servidor
+//! instala e atualiza plugins na pasta do usuário. O servidor é só de leitura: nada é publicado pela IDE.
+//! Os servidores ficam em ~/.bluescreen/plugins.json (`servers: [{ url }]`). Plugin instalado de um servidor
 //! leva um `.origin.json` na pasta ({ server, version, sha256, installed }); a interface pergunta de tempos em
 //! tempos (`plugins/remote`) e mostra o aviso de atualização enquanto houver versão maior em algum servidor.
 use super::{RouteFn, ok, route_fn};
 use crate::server::host;
 use crate::util::*;
 use base64::Engine;
-use bluescreen_sdk::store::{bundle_hash, read_files, safe_rel, valid_id, version_cmp};
+use bluescreen_sdk::store::{bundle_hash, safe_rel, valid_id, version_cmp};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::cmp::Ordering;
@@ -20,11 +20,11 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STA
 /// última verificação: o painel e o aviso reaproveitam por um minuto (fresh=1 força)
 static LAST: LazyLock<Mutex<Option<(Instant, Value)>>> = LazyLock::new(|| Mutex::new(None));
 
-struct Server { url: String, token: String }
+struct Server { url: String }
 fn servers() -> Vec<Server> {
     super::config()["servers"].as_array().into_iter().flatten().filter_map(|s| {
         let url = s["url"].as_str().or_else(|| s.as_str())?.to_string();
-        Some(Server { url, token: s["token"].as_str().unwrap_or("").to_string() })
+        Some(Server { url })
     }).collect()
 }
 /// "meu-pc:4900" vira "http://meu-pc:4900"; sem barra no fim
@@ -65,7 +65,7 @@ async fn check() -> Value {
         match r {
             Ok(v) => {
                 let plugins = v["plugins"].as_array().cloned().unwrap_or_default();
-                out_servers.push(json!({ "url": s.url, "ok": true, "name": v["name"], "count": plugins.len(), "publish": !s.token.is_empty() }));
+                out_servers.push(json!({ "url": s.url, "ok": true, "name": v["name"], "count": plugins.len() }));
                 for mut p in plugins {
                     let Some(id) = p["id"].as_str().map(String::from).filter(|i| valid_id(i)) else { continue };
                     p["server"] = json!(s.url);
@@ -73,7 +73,7 @@ async fn check() -> Value {
                     if newer { best.insert(id, p); }
                 }
             }
-            Err(e) => out_servers.push(json!({ "url": s.url, "ok": false, "error": e, "publish": !s.token.is_empty() })),
+            Err(e) => out_servers.push(json!({ "url": s.url, "ok": false, "error": e })),
         }
     }
     let mut plugins: Vec<Value> = best.into_iter().map(|(id, mut p)| {
@@ -154,38 +154,6 @@ async fn install(server: &str, id: &str, version: Option<&str>) -> Result<Value,
     Ok(json!({ "id": id, "version": version }))
 }
 
-/// o que não viaja ao publicar: código-fonte e saída do cargo, arquivos ocultos, a origem e símbolos de depuração
-fn publish_skip(rel: &str, dir: bool) -> bool {
-    let top = !rel.contains('/');
-    rel.split('/').any(|c| c.starts_with('.')) || (top && dir && (rel == "src" || rel == "target"))
-        || (top && (rel == "Cargo.toml" || rel == "Cargo.lock")) || rel.ends_with(".pdb")
-}
-async fn publish(id: &str, server: &str, force: bool) -> Result<Value, String> {
-    let server = norm_url(server)?;
-    let token = servers().into_iter().find(|s| s.url == server).map(|s| s.token).filter(|t| !t.is_empty())
-        .ok_or("informe o token de publicação deste servidor (Servidores > editar)")?;
-    let p = host().get().list.iter().find(|p| p.id == id).cloned().ok_or(format!("plugin desconhecido: {id}"))?;
-    let dir = std::path::PathBuf::from(&p.path);
-    let (files, sha) = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let mut files = read_files(&dir, &publish_skip).map_err(|e| e.to_string())?;
-        // plugin com servidor em desenvolvimento: o exe está no target do cargo, não na pasta
-        if !files.iter().any(|f| f.0 == "server.exe" || f.0 == "server") {
-            if let Some(exe) = super::external::server_exe(&dir, &p.id) {
-                let name = if cfg!(windows) { "server.exe" } else { "server" };
-                files.push((name.into(), std::fs::read(&exe).map_err(|e| e.to_string())?));
-            }
-        }
-        let sha = bundle_hash(&files);
-        Ok((files, sha))
-    }).await.map_err(|e| e.to_string())??;
-    let body = json!({ "sha256": sha, "files": files.iter().map(|(p, d)| json!({ "path": p, "data": B64.encode(d) })).collect::<Vec<_>>() });
-    let url = format!("{server}/api/publish{}", if force { "?force=1" } else { "" });
-    let r = http(600)?.post(&url).bearer_auth(token).json(&body).send().await.map_err(|e| net_error(&server, e))?;
-    if !r.status().is_success() { return Err(server_error(r).await); }
-    *LAST.lock() = None;
-    r.json::<Value>().await.map_err(|e| e.to_string())
-}
-
 /// Remove da pasta do usuário um plugin instalado (o do app, se houver, volta a valer).
 fn uninstall(id: &str) -> Result<(), String> {
     let p = host().get().list.iter().find(|p| p.id == id).cloned().ok_or(format!("plugin desconhecido: {id}"))?;
@@ -204,23 +172,21 @@ fn uninstall(id: &str) -> Result<(), String> {
 
 pub fn routes() -> Vec<(&'static str, RouteFn)> {
     vec![
-        // GET: servidores (sem o token); POST { servers: [{ url, token? }] }: troca a lista (sem token: mantém o que havia)
+        // GET: servidores; POST { servers: [{ url }] }: troca a lista
         ("plugins/servers", route_fn(|r| async move {
             r.local_only()?;
             if r.is_post() {
                 let b: Value = r.body_json()?;
-                let old = servers();
-                let mut out: Vec<Value> = vec![];
+                        let mut out: Vec<Value> = vec![];
                 for s in b["servers"].as_array().into_iter().flatten() {
                     let url = norm_url(s["url"].as_str().unwrap_or("")).map_err(|e| fail(e, 400))?;
                     if out.iter().any(|o| o["url"] == json!(url)) { continue; }
-                    let token = match s["token"].as_str() { Some(t) => t.trim().to_string(), None => old.iter().find(|o| o.url == url).map(|o| o.token.clone()).unwrap_or_default() };
-                    out.push(json!({ "url": url, "token": token }));
+                    out.push(json!({ "url": url }));
                 }
                 super::save_config(|c| { c.insert("servers".into(), json!(out)); });
                 *LAST.lock() = None;
             }
-            ok(json!({ "servers": servers().iter().map(|s| json!({ "url": s.url, "publish": !s.token.is_empty() })).collect::<Vec<_>>() }))
+            ok(json!({ "servers": servers().iter().map(|s| json!({ "url": s.url })).collect::<Vec<_>>() }))
         })),
         // plugins dos servidores comparados com os instalados (fresh=1 ignora o último minuto)
         ("plugins/remote", route_fn(|r| async move {
@@ -236,12 +202,6 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             let b: Value = r.body_json()?;
             let (server, id) = (b["server"].as_str().unwrap_or(""), b["id"].as_str().unwrap_or(""));
             install(server, id, b["version"].as_str().filter(|v| !v.is_empty())).await.map_err(|e| fail(e, 502)).and_then(ok)
-        })),
-        // POST { id, server, force? }: publica o plugin instalado no servidor (precisa do token dele)
-        ("plugins/publish", route_fn(|r| async move {
-            r.local_only()?;
-            let b: Value = r.body_json()?;
-            publish(b["id"].as_str().unwrap_or(""), b["server"].as_str().unwrap_or(""), b["force"].as_bool().unwrap_or(false)).await.map_err(|e| fail(e, 502)).and_then(ok)
         })),
         // POST { id }: desinstala um plugin da pasta do usuário
         ("plugins/uninstall", route_fn(|r| async move {
@@ -262,10 +222,5 @@ mod tests {
         assert_eq!(norm_url("meu-pc:4900/").unwrap(), "http://meu-pc:4900");
         assert_eq!(norm_url(" https://x.com ").unwrap(), "https://x.com");
         assert!(norm_url("ftp://x").is_err() && norm_url("a b").is_err());
-    }
-    #[test]
-    fn skips() {
-        assert!(publish_skip("src", true) && publish_skip("target", true) && publish_skip("Cargo.toml", false) && publish_skip(".origin.json", false));
-        assert!(!publish_skip("ui.js", false) && !publish_skip("lib/src", true) && !publish_skip("server.exe", false));
     }
 }

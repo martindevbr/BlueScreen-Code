@@ -523,7 +523,7 @@ bs.hooks.filter('menu:file', (items, ctx) => [...items, '-', {
 | Plugin que vem junto | O que faz |
 |---|---|
 | [Linter Universal](app/plugins/unilint/README.md) (`unilint`) | lint de 16 linguagens por árvore sintática, sem baixar linters; analisa o projeto inteiro pelo `Shift` `Shift` |
-| [Planilhas](app/plugins/sheets/README.md) (`sheets`) | `.csv`, `.tsv` e `.xlsx` abrem numa tabela: abas, filtro, ordenação, fórmulas e datas do Excel |
+| [Planilhas](app/plugins/sheets/README.md) (`sheets`) | `.csv`, `.tsv` e `.xlsx` abrem numa tabela editável: células, fórmulas, seleção, copiar e colar com o Excel, cores e formatação, linhas e colunas, abas |
 
 **Servidor de plugins.** Uma equipe pode hospedar os próprios plugins num servidor ([app/plugin-server](app/plugin-server/README.md)). Na aba Plugins, em **Servidores de plugins**, você adiciona o endereço. A partir daí os plugins dele aparecem para instalar, e sempre que sai uma versão nova de um plugin instalado aparecem o selo no topo e o botão **Atualizar**.
 

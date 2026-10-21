@@ -460,13 +460,11 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 .pl-srv .icon-btn { flex: none; width: 24px; height: 24px; }
 .pl-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .pl-dot.ok { background: var(--add); } .pl-dot.err { background: var(--del); }
-.pl-add, .pl-tok { display: flex; gap: 6px; margin: 8px 12px 0 16px; flex-wrap: wrap; }
-.pl-add input, .pl-tok input { flex: 1 1 200px; min-width: 0; height: 28px; }
-.pl-add input[name=token] { flex: 0 1 200px; }
-.pl-add .chip, .pl-tok .chip { height: 28px; border: 1px solid var(--line-2); }
+.pl-add { display: flex; gap: 6px; margin: 8px 12px 0 16px; flex-wrap: wrap; }
+.pl-add input { flex: 1 1 200px; min-width: 0; height: 28px; }
+.pl-add .chip { height: 28px; border: 1px solid var(--line-2); }
 .pl-hint { margin: 8px 12px 12px 16px; font-size: 11.5px; color: var(--muted); }
-.pl-hint code, .pl-dlg code { font: 11px var(--mono); background: var(--hover); padding: 1px 5px; border-radius: 4px; }
-.pl-dlg { font-size: 12.5px; color: var(--fg-2); line-height: 1.55; margin: 4px 0 14px; }
+.pl-hint code { font: 11px var(--mono); background: var(--hover); padding: 1px 5px; border-radius: 4px; }
 #plugPill { gap: 6px; height: 26px; padding: 0 10px 0 9px; border-radius: 13px; font-size: 12px; font-weight: 600; color: var(--on-accent) !important; background: var(--accent); }
 #plugPill:hover { background: var(--accent-2); }
 #plugPill[hidden] { display: none; }

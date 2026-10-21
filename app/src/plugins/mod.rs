@@ -70,7 +70,7 @@ pub struct Registry {
 
 pub fn dirs() -> Vec<PathBuf> { vec![app_dir().join("plugins"), user_dir().join("plugins")] }
 pub fn config_file() -> PathBuf { user_dir().join("plugins.json") }
-/// ~/.bluescreen/plugins.json: { disabled: [ids], servers: [{ url, token }] }
+/// ~/.bluescreen/plugins.json: { disabled: [ids], servers: [{ url }] }
 pub fn config() -> Value { match read_json(&config_file()) { v @ Value::Object(_) => v, _ => json!({}) } }
 pub fn save_config(f: impl FnOnce(&mut serde_json::Map<String, Value>)) {
     let mut v = config();
