@@ -30,6 +30,7 @@ const toast = (m, kind, key) => {
 // erro inesperado de script: aparece na tela em vez de sumir no console
 window.addEventListener('error', (e) => { try { toast('Erro na interface: ' + (e.message || e.error), 'err'); } catch {} });
 window.addEventListener('unhandledrejection', (e) => { const m = e.reason && e.reason.message; if (m && m !== 'login' && m !== 'Canceled') try { toast('Erro na interface: ' + m, 'err'); } catch {} });
+const DOC = new URLSearchParams(location.search).get('doc'); // janela de documento (docMode)
 const store = { get: (k, d) => { try { return JSON.parse(localStorage.getItem('bs.' + k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem('bs.' + k, JSON.stringify(v)); } catch {} } };
 
 const S = {
@@ -54,7 +55,7 @@ function syncUnsaved() {
   document.querySelectorAll('#treeRoot .trow[data-p]').forEach(r => r.classList.toggle('unsaved', u.has(r.dataset.p)));
   const any = S.tabs.some(t => t.dirty); const act = S.active && S.active.dirty;
   $('#stDirty').hidden = !act; $('#stDirty').className = 's dirty';
-  document.title = (any ? '● ' : '') + 'BlueScreen' + (S.project ? ' · ' + S.project.name : '');
+  document.title = (any ? '● ' : '') + (DOC ? DOC.split(/[\\/]/).pop() + ' - BlueScreen' : 'BlueScreen' + (S.project ? ' · ' + S.project.name : ''));
 }
 
 // cores dos tokens semânticos (vindos do servidor de linguagem, com prefixo "s-"; ver lsp.js). O que não tem regra aqui
@@ -165,6 +166,7 @@ async function start() {
   await BS.plugins.load(cfg.plugins); // plugins antes de tudo: eles registram painéis, atalhos e cards
   const reopen = store.get('reopenTool', null);
   if (reopen) { store.set('reopenTool', null); if (BS.tools.get(reopen)) S.tool = reopen; }
+  if (DOC) return docMode(DOC);
   renderStrip();
   splash('Lendo os projetos…');
   // a abertura não espera o resumo Git de cada projeto: ele chega depois e atualiza a lista
@@ -177,6 +179,20 @@ async function start() {
   else if (S.projects.length === 1) await selectProject(S.projects[0].path);
   renderTool(); renderDashboard();
   welcomeMode(!S.project);
+}
+// ===== Janela de documento (BlueScreen.exe --doc, o "Abrir com" do Windows) =====
+// Só o arquivo, na tela inteira: sem projetos, árvore, painéis nem abas. A pasta do arquivo faz o papel de projeto
+// (sem Git, sem índice), e fechar o documento fecha a janela, perguntando antes se há alterações não salvas.
+function docMode(file) {
+  document.body.classList.add('doc-mode');
+  const i = file.search(/[\\/][^\\/]*$/), name = file.slice(i + 1);
+  const dir = /^[A-Za-z]:$/.test(file.slice(0, i)) ? file.slice(0, i + 1) : file.slice(0, i); // C:\planilha.csv: a pasta é C:\, não C:
+  S.project = { path: dir, name: dir.split(/[\\/]/).pop() || dir, vcs: null };
+  $('#projName').textContent = name; $('#projChip').title = file;
+  welcomeMode(false); syncUnsaved();
+  // sem nada a perder, a janela fecha direto (até no meio da leitura do arquivo, quando a aba ainda nem terminou de abrir)
+  window.BS_DOC_CLOSE = () => S.tabs.some(losesWork) ? askClose(S.tabs.slice()) : desktop({ type: 'close' });
+  return openFile(name);
 }
 function showLogin() { $('#login').hidden = false; $('#loginPin').focus(); }
 $('#loginBtn').onclick = async () => {
@@ -466,9 +482,9 @@ function tabMenu(e, t) {
     { label: t.mode === 'diff' ? 'Abrir como editor' : 'Ver diff', icon: t.mode === 'diff' ? I.edit : I.diff, action: () => openFile(t.path, t.mode === 'diff' ? 'editor' : 'diff') },
     { label: 'Apresentar', icon: I.present, k: 'F11', action: () => { activate(t); present(true); } },
     '-',
-    { label: 'Fechar', icon: I.x, k: 'Ctrl+W', action: () => closeTab(t) },
-    { label: 'Fechar outras', action: () => S.tabs.filter(x => x !== t).forEach(closeTab) },
-    { label: 'Fechar todas', action: () => S.tabs.slice().forEach(closeTab) },
+    { label: 'Fechar', icon: I.x, k: 'Ctrl+W', action: () => askClose(t) },
+    { label: 'Fechar outras', action: () => askClose(S.tabs.filter(x => x !== t)) },
+    { label: 'Fechar todas', action: () => askClose(S.tabs.slice()) },
     '-',
     { label: 'Mostrar no Explorer', icon: I.explorer, action: () => reveal(t.project + '\\' + t.path.replace(/\//g, '\\')) },
     { label: 'Copiar caminho', icon: I.copy, action: () => copyText(t.project + '\\' + t.path.replace(/\//g, '\\')) },
@@ -1170,9 +1186,9 @@ function renderTabs() {
   $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''}" data-k="${esc(t.key)}" title="${esc(t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? 'EXTERNO' : t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(el => {
     const t = S.tabs.find(x => x.key === el.dataset.k);
-    el.onclick = (e) => e.shiftKey ? closeTab(t) : activate(t);
-    el.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeTab(t); };
-    el.onauxclick = (e) => { if (e.button === 1) closeTab(t); };
+    el.onclick = (e) => e.shiftKey ? askClose(t) : activate(t);
+    el.querySelector('.x').onclick = (e) => { e.stopPropagation(); askClose(t); };
+    el.onauxclick = (e) => { if (e.button === 1) askClose(t); };
     el.oncontextmenu = (e) => tabMenu(e, t);
     // arrastar para reordenar
     el.ondragstart = (e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/bs-tab', t.key); el.classList.add('drag'); };
@@ -1197,6 +1213,36 @@ function closeTab(t) {
   t.original?.dispose();
   if (S.active === t) { const n = S.tabs[i] || S.tabs[i - 1]; if (n) activate(n); else { S.active = null; viewer = null; $('#welcome').hidden = false; $('#ed').style.display = 'none'; $('#dd').style.display = 'none'; $('#vw').style.display = 'none'; $('#diffInfo').hidden = true; $('#stLang').textContent = ''; $('#stPos').textContent = ''; renderTabs(); renderCrumbs(); renderDashboard(); } }
   else renderTabs();
+  if (DOC && !S.tabs.length) desktop({ type: 'close' }); // janela de documento: sem o documento, a janela fecha
+}
+// fechar pelo usuário (X, Ctrl+W, menu): se alguma aba perderia alterações, pergunta antes.
+// Com o salvamento automático, fechar já salva; só pergunta quando ele não pode gravar (conflito, arquivo apagado).
+const losesWork = (t) => t.dirty && !t.owner && !(S.autoSave && !t.conflict && !t.gone);
+function askClose(list) {
+  list = [].concat(list).filter(t => t && S.tabs.includes(t));
+  const risky = list.filter(losesWork);
+  if (!risky.length) return list.forEach(t => S.tabs.includes(t) && closeTab(t));
+  const one = risky.length === 1, name = one ? risky[0].path.split('/').pop() : '';
+  dialog('closeDlg', `<div class="dlg-hd"><span class="dlg-ic warn">${SAVE_ICO}</span><div><h3>${one ? `Fechar "${esc(name)}" sem salvar?` : `Fechar ${risky.length} arquivos sem salvar?`}</h3><p>${one ? esc(risky[0].path) : risky.map(t => esc(t.path.split('/').pop())).join(', ')}</p></div></div>
+    <p class="del-msg">${one ? 'O arquivo tem alterações que ainda não foram salvas.' : 'Esses arquivos têm alterações que ainda não foram salvas.'} Se fechar sem salvar, elas serão perdidas.</p>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><span class="spacer"></span><button class="chip danger" id="clsDrop">Fechar sem salvar</button><button class="chip primary" id="clsSave">Salvar e fechar</button></div>`, (el) => {
+    const go = $('#clsSave'), drop = $('#clsDrop');
+    go.focus();
+    el.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); el.hidden = true; } };
+    go.onclick = async () => {
+      go.disabled = drop.disabled = true;
+      for (const t of risky) if (S.tabs.includes(t)) await saveTab(t);
+      el.hidden = true;
+      const left = risky.filter(t => S.tabs.includes(t) && t.dirty); // não gravou (erro, conflito): fica aberta
+      list.filter(t => !left.includes(t) && S.tabs.includes(t)).forEach(closeTab);
+      if (left.length) activate(left[0]);
+    };
+    drop.onclick = async () => {
+      go.disabled = drop.disabled = true; el.hidden = true;
+      for (const t of risky) { await BS.fileViewer.custom[t.kind]?.discard?.(t); t.dirty = false; } // arquivo grande: o núcleo guarda as edições, descarta lá também
+      list.filter(t => S.tabs.includes(t)).forEach(closeTab);
+    };
+  });
 }
 function renderCrumbs() {
   const el = $('#crumbPath');
@@ -1412,7 +1458,7 @@ if (window.BS_DESKTOP) {
   const free = (e) => e.button === 0 && !e.target.closest('button, input, a, select, .chip, #seBtn, .winctl');
   $('#top').addEventListener('mousedown', (e) => { if (free(e) && e.detail === 1) desktop({ type: 'drag' }); });
   $('#top').addEventListener('dblclick', (e) => { if (free(e)) desktop({ type: 'max' }); });
-  $('#winCtl').querySelectorAll('button').forEach(b => b.onclick = () => desktop({ type: b.dataset.w }));
+  $('#winCtl').querySelectorAll('button').forEach(b => b.onclick = () => DOC && b.dataset.w === 'close' ? BS_DOC_CLOSE() : desktop({ type: b.dataset.w }));
   document.querySelectorAll('.rz').forEach(r => r.addEventListener('mousedown', (e) => { e.preventDefault(); desktop({ type: 'resize', dir: r.dataset.r }); }));
   window.BS_WIN = { max(on) { document.documentElement.classList.toggle('maxed', !!on); const b = $('#winCtl [data-w="max"]'); if (b) b.title = on ? 'Restaurar' : 'Maximizar'; } };
   BS_WIN.max(window.BS_MAX);
@@ -1786,6 +1832,7 @@ const BS = window.BS = {
   },
 };
 BS.define = BS.plugins.define;
+BS.doc = DOC; // janela de documento: os módulos deixam de lado o que é só da IDE (atualização, servidores, dependências)
 
 // abre outro projeto/pasta (ex.: a raiz do checkout) e vai ao arquivo e linha; não espera o Git/SVN da pasta nova
 async function openOutside(root, rel, line) {
@@ -1809,18 +1856,43 @@ function renderPlugins() {
   $('#toolActions').innerHTML = `<button class="icon-btn" id="plDir" title="Abrir a pasta dos seus plugins">${I.explorer}</button><button class="icon-btn" id="plReload" title="Recarregar plugins">${I.refresh}</button>`;
   $('#plReload').onclick = () => pluginsPost({ reload: true });
   $('#plDir').onclick = () => reveal(BS.plugins.dirs[1] || BS.plugins.dirs[0]);
-  // uma linha por plugin: interruptor, nome e o começo da descrição (o texto inteiro fica no tooltip)
-  body.innerHTML = list.map(p => `<div class="plug ${p.enabled ? '' : 'off'}" data-id="${esc(p.id)}" title="${esc([p.description, p.requires && p.requires.length ? 'Precisa de: ' + p.requires.join(', ') : ''].filter(Boolean).join(' · '))}">
-      <label class="toggle ${p.enabled ? 'on' : ''}" title="${p.enabled ? 'Desligar' : 'Ligar'}"><span class="sw"></span></label>
-      <div class="tx"><div class="nm">${esc(p.name)}</div><div class="ds">${esc(p.description || '')}</div>${p.error ? `<div class="er">${esc(p.error)}</div>` : ''}</div></div>`).join('') || '<div class="empty">Nenhum plugin instalado.</div>';
+  // um cartão por plugin: ícone, nome, descrição (duas linhas; "mais" abre o resto) e o interruptor à direita
+  body.innerHTML = list.length ? `<div class="plugs">${list.map(p => `<div class="plug ${p.enabled ? '' : 'off'} ${p.error ? 'bad' : ''}" data-id="${esc(p.id)}">
+      ${plugIcon(p)}
+      <div class="tx"><div class="nm"><span class="pl-name">${esc(p.name)}</span></div>
+        ${p.description ? `<div class="ds">${esc(p.description)}</div><button class="pl-more" hidden>mais</button>` : ''}
+        ${p.requires && p.requires.length ? `<div class="pl-req">Precisa de: ${p.requires.map(esc).join(', ')}</div>` : ''}
+        ${p.error ? `<div class="er">${esc(p.error)}</div>` : ''}</div>
+      <button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>';
   body.querySelectorAll('.plug').forEach(el => {
-    const p = list.find(x => x.id === el.dataset.id);
-    el.querySelector('.toggle').onclick = () => pluginsPost({ id: p.id, enabled: !p.enabled });
+    const p = list.find(x => x.id === el.dataset.id), sw = el.querySelector('.sw2');
+    sw.onclick = () => { if (sw.disabled) return; sw.disabled = true; sw.classList.toggle('on'); sw.classList.add('busy'); sw.setAttribute('aria-checked', String(!p.enabled)); setTimeout(() => pluginsPost({ id: p.id, enabled: !p.enabled }), 180); };
+    const more = el.querySelector('.pl-more');
+    if (more) more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'menos' : 'mais'; };
     el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
   });
+  plugClamp(body);
   // servidores de plugins (plugstore.js): atualizações, catálogo e a lista de servidores
   if (BS.pluginStore) BS.pluginStore.decorate(body);
 }
+// ícone do plugin: a imagem do plugin.json ou, sem ela, um padrão com as iniciais numa cor tirada do id
+function plugIcon(p, cls = '') {
+  if (typeof p.icon === 'string' && /^data:image\/(svg\+xml|png|jpeg|webp);base64,/.test(p.icon)) return `<span class="pl-icon ${cls}"><img src="${esc(p.icon)}" alt="" draggable="false"></span>`;
+  let h = 0; for (const c of String(p.id || p.name || '')) h = (h * 31 + c.codePointAt(0)) >>> 0;
+  const words = String(p.name || p.id || '').replace(/\(.*?\)/g, ' ').split(/[\s_-]+/).filter(w => /^[\p{L}\p{N}]/u.test(w));
+  const ini = (words.length > 1 ? [...words[0]][0] + [...words[1]][0] : [...(words[0] || '?')][0]).toUpperCase();
+  return `<span class="pl-icon def ${cls}" style="--h:${h % 360}">${esc(ini)}</span>`;
+}
+// descrição em duas linhas: o "mais" só aparece quando o texto não cabe (e é refeito quando o painel muda de largura)
+function plugClamp(body) {
+  const fit = () => body.querySelectorAll('.plug').forEach(el => {
+    const ds = el.querySelector('.ds'), more = el.querySelector('.pl-more'); if (!ds || !more || el.classList.contains('open')) return;
+    more.hidden = ds.scrollHeight <= ds.clientHeight + 1;
+  });
+  fit();
+  if (!body._plugRO && window.ResizeObserver) { body._plugRO = new ResizeObserver(() => { if (S.tool === 'plugins') fit(); }); body._plugRO.observe(body); }
+}
+BS.plugIcon = plugIcon;
 async function pluginsPost(body) {
   // a janela recarrega para aplicar o plugin; volta direto para a aba Plugins
   try { await api('plugins', {}, { method: 'POST', body: JSON.stringify(body) }); store.set('reopenTool', 'plugins'); toast('Recarregando…'); setTimeout(() => location.reload(), 150); }
@@ -1970,7 +2042,7 @@ BS.keys.add('Ctrl+=', () => codeFont(S.fontSize + 1)); BS.keys.add('Ctrl++', () 
 BS.keys.add('Ctrl+-', () => codeFont(S.fontSize - 1)); BS.keys.add('Ctrl+0', () => codeFont(FONT.def));
 BS.keys.add('Escape', () => { $('#keysBack').hidden = true; seClose(); if ($('#app').classList.contains('present')) present(false); $('#netPop').hidden = true; const pp = $('#ppal'); if (pp) pp.hidden = true; document.querySelectorAll('.dlg').forEach(d => { d.hidden = true; }); closeMenu(); BS.hooks.run('escape'); return false; });
 BS.keys.add('Alt+P', () => quickProject());
-BS.keys.add('Ctrl+W', () => { if (!S.active) return false; closeTab(S.active); });
+BS.keys.add('Ctrl+W', () => { if (!S.active) return false; askClose(S.active); });
 BS.keys.add('Alt+ArrowDown', () => goDiff('next'));
 BS.keys.add('Alt+ArrowUp', () => goDiff('previous'));
 BS.keys.add('Alt+ArrowRight', () => { stepFile(1); });

@@ -599,6 +599,7 @@ if errorlevel 2 exit /b 0
 del /q "$lnkDesk" 2>nul
 del /q "$lnkMenu" 2>nul
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\BlueScreen" /f >nul 2>&1
+"%DIR%\BlueScreen.exe" --unregister >nul 2>&1
 cd /d "%TEMP%"
 echo BlueScreen removido.
 timeout /t 2 >nul 2>&1

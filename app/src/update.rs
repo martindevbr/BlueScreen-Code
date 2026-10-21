@@ -427,7 +427,7 @@ fn plugin_ui(src: &Path, dst: &Path) {
     for e in rd.flatten() {
         let to = dst.join(e.file_name());
         if !to.is_dir() { continue; }
-        for f in ["plugin.json", "ui.js", "style.css"] { if e.path().join(f).is_file() { let _ = std::fs::copy(e.path().join(f), to.join(f)); } }
+        for f in ["plugin.json", "ui.js", "style.css", "icon.svg", "icon.png"] { if e.path().join(f).is_file() { let _ = std::fs::copy(e.path().join(f), to.join(f)); } }
     }
 }
 

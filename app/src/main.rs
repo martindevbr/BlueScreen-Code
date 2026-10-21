@@ -1,9 +1,12 @@
 //! BlueScreen: IDE leve para mostrar código e alterações (Git/SVN), estilo IntelliJ, com plugins.
 //!   bluescreen [pasta] [--lan] [--web] [--no-open] [--devtools]
+//!   bluescreen --doc <arquivo>    janela leve só com o documento (o "Abrir com" do Windows, assoc.rs)
+//!   bluescreen --unregister       tira o BlueScreen do "Abrir com" (os desinstaladores chamam)
 //! O núcleo (servidor, Git/SVN, árvore, busca, lint, rede local) é Rust; a interface é a página em wwwroot/,
 //! mostrada numa janela nativa com WebView2 (ou no navegador com --web).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod assoc;
 mod bigfile;
 mod deps;
 mod build;
@@ -63,6 +66,24 @@ async fn take_over(port: u16, want_window: bool, replace: bool) -> Result<bool, 
     Err(format!("Não foi possível liberar a porta {port}. Feche a outra instância ou use BLUESCREEN_PORT."))
 }
 
+/// Documento aberto pelo Windows ("Abrir com", dois cliques): um processo à parte, numa porta livre qualquer, sem
+/// mexer na IDE que estiver aberta. A pasta do arquivo vira o projeto; os plugins com servidor próprio não sobem
+/// (a planilha roda só na página), então a janela fica pronta quase tão rápido quanto o WebView2 abre.
+fn run_doc(file: PathBuf, devtools: bool) -> ! {
+    if !file.is_file() { fatal(&format!("Arquivo não encontrado: {}", file.display())); }
+    plugins::LIGHT.store(true, std::sync::atomic::Ordering::Relaxed);
+    let dir = file.parent().map(PathBuf::from).unwrap_or_default();
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_name("bluescreen-doc").build().expect("tokio");
+    let listener = rt.block_on(tokio::net::TcpListener::bind(("127.0.0.1", 0))).unwrap_or_else(|e| fatal(&format!("Não foi possível abrir o documento: {e}")));
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    let _ = server::create(dir, port, 0);
+    log(format!("documento: {}  ▸  http://127.0.0.1:{port}", file.display()));
+    rt.spawn(async move { let _ = axum::serve(listener, server::router(false)).await; });
+    let _rt = Box::leak(Box::new(rt));
+    let url = format!("http://127.0.0.1:{port}/?doc={}", urlencoding::encode(&file.to_string_lossy()));
+    desktop::run(url, devtools, Some(file))
+}
+
 fn main() {
     #[cfg(windows)]
     unsafe { windows_sys::Win32::System::Console::AttachConsole(windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS); }
@@ -73,6 +94,11 @@ fn main() {
     unsafe { std::env::remove_var("BLUESCREEN_REPLACE"); }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
+    if has("--unregister") { assoc::unregister(); return; }
+    // --doc <arquivo>, ou um arquivo (não pasta) passado direto, como "Abrir com" e arrastar para o exe fazem
+    let doc = args.iter().position(|a| a == "--doc").and_then(|i| args.get(i + 1)).cloned()
+        .or_else(|| args.iter().find(|a| !a.starts_with("--")).filter(|a| PathBuf::from(a).is_file()).cloned());
+    if let Some(f) = doc { run_doc(util::absolute(&PathBuf::from(f)), has("--devtools")) }
     let env_port = |k: &str, d: u16| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let port = env_port("BLUESCREEN_PORT", 4747);
     let lan_port = env_port("BLUESCREEN_LAN_PORT", 4748);
@@ -99,6 +125,7 @@ fn main() {
     let _ = server::create(root.clone(), port, lan_port);
     // sobras de uma atualização (exe/dll antigos renomeados porque estavam em uso)
     std::thread::spawn(update::cleanup);
+    std::thread::spawn(assoc::register);
     let addr = format!("http://127.0.0.1:{port}");
     println!();
     log(format!("BlueScreen {} (Rust)  ▸  {addr}", server::VERSION));
@@ -116,5 +143,5 @@ fn main() {
     if web { util::open_url(&addr); rt.block_on(std::future::pending::<()>()); }
     // a janela precisa da thread principal; o servidor segue nas threads do tokio
     let _rt = Box::leak(Box::new(rt));
-    desktop::run(addr + "/", has("--devtools"))
+    desktop::run(addr + "/", has("--devtools"), None)
 }

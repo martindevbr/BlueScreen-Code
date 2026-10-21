@@ -86,10 +86,21 @@ fn file_drops(st: &Store) {
         if !valid_version(&ver) { reject(format!("versão inválida \"{ver}\" no plugin.json")); continue; }
         let dest = st.dir.join(&id).join(&ver);
         if dest.exists() { reject(format!("{id} {ver} já está publicado (aumente o version do plugin.json)")); continue; }
+        // pasta com o mesmo nome do id (o caso comum: "sheets/"): não dá para movê-la para dentro dela mesma, então
+        // ela passa antes por um nome temporário (com ".", que a listagem ignora)
+        let mut from = e.path();
+        if name == id {
+            let tmp = st.dir.join(format!(".{id}-{}", random_hex().get(..8).unwrap_or("x")));
+            if let Err(er) = std::fs::rename(&from, &tmp) { log(format!("não deu para arquivar {name}: {er} (tento de novo em instantes)")); continue; }
+            from = tmp;
+        }
         let _ = std::fs::create_dir_all(st.dir.join(&id));
-        match std::fs::rename(e.path(), &dest) {
+        match std::fs::rename(&from, &dest) {
             Ok(()) => log(format!("publicado {id} {ver} (pasta solta em {})", st.dir.display())),
-            Err(er) => log(format!("não deu para arquivar {name}: {er} (tento de novo em instantes)")),
+            Err(er) => {
+                if from != e.path() { let _ = std::fs::rename(&from, e.path()); } // volta ao nome solto para tentar de novo
+                log(format!("não deu para arquivar {name}: {er} (tento de novo em instantes)"));
+            }
         }
     }
 }
@@ -105,6 +116,7 @@ fn entry(st: &Store, id: &str) -> Option<Value> {
         "id": id, "version": last, "versions": vs, "sha256": sha, "size": size, "updated": updated,
         "name": m["name"].as_str().unwrap_or(id), "description": m["description"].as_str().unwrap_or(""),
         "author": m["author"].as_str().unwrap_or(""), "requires": m["requires"].clone(),
+        "icon": bluescreen_sdk::store::icon_uri(&dir, &m),
     }))
 }
 fn index(st: &Store) -> Value {

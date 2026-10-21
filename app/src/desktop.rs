@@ -55,7 +55,9 @@ fn center(window: &Window, w: f64, h: f64) {
     }
 }
 
-pub fn run(url: String, devtools: bool) -> ! {
+/// `doc`: janela leve de um documento (main.rs, --doc): título do arquivo, tamanho próprio (window.json, "doc") e
+/// sem o modo de boas-vindas da IDE.
+pub fn run(url: String, devtools: bool, doc: Option<PathBuf>) -> ! {
     let event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let p2 = proxy.clone();
@@ -63,15 +65,19 @@ pub fn run(url: String, devtools: bool) -> ! {
 
     let saved = read_json(&state_file());
     // a última sessão terminou sem projeto aberto: já nasce no tamanho de boas-vindas (sem piscar grande)
-    let mut welcome = saved["welcome"].as_bool().unwrap_or(false);
-    let (w, h) = if welcome { WELCOME } else { (saved["w"].as_f64().unwrap_or(1500.0).max(640.0), saved["h"].as_f64().unwrap_or(920.0).max(420.0)) };
-    let mut wb = WindowBuilder::new().with_title("BlueScreen").with_inner_size(LogicalSize::new(w, h)).with_min_inner_size(LogicalSize::new(640.0, 420.0))
+    let is_doc = doc.is_some();
+    let mut welcome = !is_doc && saved["welcome"].as_bool().unwrap_or(false);
+    let sd = &saved["doc"];
+    let (w, h) = if welcome { WELCOME } else if is_doc { (sd["w"].as_f64().unwrap_or(1180.0).max(640.0), sd["h"].as_f64().unwrap_or(760.0).max(420.0)) }
+        else { (saved["w"].as_f64().unwrap_or(1500.0).max(640.0), saved["h"].as_f64().unwrap_or(920.0).max(420.0)) };
+    let title = doc.as_ref().and_then(|f| f.file_name()).map(|n| format!("{} - BlueScreen", n.to_string_lossy())).unwrap_or_else(|| "BlueScreen".into());
+    let mut wb = WindowBuilder::new().with_title(&title).with_inner_size(LogicalSize::new(w, h)).with_min_inner_size(LogicalSize::new(640.0, 420.0))
         // nasce escondida: aparece quando a página já pintou a tela de abertura (mensagem "shown"), sem o clarão
         // da janela vazia enquanto o WebView2 sobe
-        .with_maximized(!welcome && saved["max"].as_bool().unwrap_or(false)).with_visible(false)
+        .with_maximized(!welcome && if is_doc { sd["max"].as_bool().unwrap_or(false) } else { saved["max"].as_bool().unwrap_or(false) }).with_visible(false)
         // sem a barra de título do Windows: a barra de cima do BlueScreen faz esse papel (arrastar, botões, bordas)
         .with_decorations(false);
-    if let (false, Some(x), Some(y)) = (welcome, saved["x"].as_i64(), saved["y"].as_i64()) { wb = wb.with_position(PhysicalPosition::new(x as i32, y as i32)); }
+    if let (false, false, Some(x), Some(y)) = (welcome, is_doc, saved["x"].as_i64(), saved["y"].as_i64()) { wb = wb.with_position(PhysicalPosition::new(x as i32, y as i32)); }
     #[cfg(windows)]
     {
         use tao::platform::windows::IconExtWindows;
@@ -81,6 +87,7 @@ pub fn run(url: String, devtools: bool) -> ! {
     }
     let window = wb.build(&event_loop).expect("janela");
     if welcome { center(&window, WELCOME.0, WELCOME.1); }
+    if is_doc && !window.is_maximized() { center(&window, w, h); } // vários documentos abertos: cada um no centro
     // se a página demorar (WebView2 lento na primeira vez), a janela aparece assim mesmo
     { let p = proxy.clone(); std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(1500)); let _ = p.send_event(Ev::Show); }); }
     let dark = saved["dark"].as_bool().unwrap_or(true);
@@ -100,7 +107,7 @@ pub fn run(url: String, devtools: bool) -> ! {
         .with_devtools(devtools)
         .with_hotkeys_zoom(false) // Ctrl+roda é o zoom da fonte do código; o tamanho da interface fica em Aparência
         .with_background_color(if dark { (15, 26, 46, 255) } else { (217, 227, 245, 255) })
-        .with_initialization_script(format!("window.BS_DESKTOP = true; window.BS_MAX = {}; window.BS_WELCOME = {};", window.is_maximized(), welcome))
+        .with_initialization_script(format!("window.BS_DESKTOP = true; window.BS_MAX = {}; window.BS_WELCOME = {}; window.BS_DOC = {};", window.is_maximized(), welcome, is_doc))
         .with_ipc_handler(move |req| { let _ = pi.send_event(Ev::Ipc(req.body().clone(), req.uri().to_string())); })
         .with_document_title_changed_handler(move |t| { let _ = pt.send_event(Ev::Title(t)); })
         // links para fora abrem no navegador; janelas do próprio app (páginas servidas pelo BlueScreen) abrem aqui
@@ -115,10 +122,18 @@ pub fn run(url: String, devtools: bool) -> ! {
     let webview = builder.build(&window).expect("WebView2 (instale o Microsoft Edge WebView2 Runtime)");
 
     // na tela de boas-vindas o tamanho da janela não é guardado: o que vale é o da IDE, restaurado ao abrir um projeto
-    let save_state = |window: &Window, dark: bool, caption: &str, welcome: bool| {
+    let save_state = move |window: &Window, dark: bool, caption: &str, welcome: bool| {
         let max = window.is_maximized();
         let mut j = read_json(&state_file());
         if !j.is_object() { j = json!({}); }
+        // janela de documento: guarda só o tamanho dela, sem mexer no da IDE
+        if is_doc {
+            let mut d = json!({ "max": max });
+            if max { d["w"] = j["doc"]["w"].clone(); d["h"] = j["doc"]["h"].clone(); }
+            else { let sz: LogicalSize<f64> = window.inner_size().to_logical(window.scale_factor()); d["w"] = json!(sz.width); d["h"] = json!(sz.height); }
+            j["doc"] = d; j["dark"] = json!(dark); j["caption"] = json!(caption);
+            let _ = write_atomic(&state_file(), &j.to_string()); return;
+        }
         j["welcome"] = json!(welcome);
         if welcome { j["dark"] = json!(dark); j["caption"] = json!(caption); let _ = write_atomic(&state_file(), &j.to_string()); return; }
         if !max {
@@ -176,7 +191,7 @@ pub fn run(url: String, devtools: bool) -> ! {
                     Some("zoom") => { let _ = webview.zoom(m["factor"].as_f64().unwrap_or(1.0).clamp(0.6, 2.0)); }
                     Some("min") => window.set_minimized(true),
                     Some("max") if !welcome => window.set_maximized(!window.is_maximized()),
-                    Some("welcome") => {
+                    Some("welcome") if !is_doc => {
                         let on = m["on"].as_bool().unwrap_or(false);
                         if on != welcome {
                             if on {
@@ -205,6 +220,8 @@ pub fn run(url: String, devtools: bool) -> ! {
                 }
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                // documento: a página fecha (e pergunta antes, se houver alteração não salva)
+                if is_doc { let _ = webview.evaluate_script("window.BS_DOC_CLOSE ? BS_DOC_CLOSE() : window.ipc.postMessage('{\"type\":\"close\"}')"); return; }
                 save_state(&window, dark, &caption, welcome);
                 if server::lan_enabled() {
                     // rede local ligada: o servidor continua; abrir o BlueScreen de novo mostra esta janela

@@ -13,7 +13,8 @@ Cada pasta tem:
 
 | Arquivo | |
 |---|---|
-| `plugin.json` | `{ "id", "name", "description", "version", "order", "requires": ["outro-plugin"], "hooks": { "build.info": "meu/build-info" } }` |
+| `plugin.json` | `{ "id", "name", "description", "version", "order", "icon": "icon.svg", "requires": ["outro-plugin"], "hooks": { "build.info": "meu/build-info" } }` |
+| `icon.svg` ou `icon.png` (opcional) | o ícone na aba Plugins e no servidor de plugins: SVG, PNG, JPG ou WebP, até 64 KB, de preferência quadrado. Sem o campo `icon`, vale o `icon.svg`/`icon.png` da pasta; sem nenhum, a IDE desenha um com as iniciais do nome |
 | `ui.js` (opcional) | roda na página dentro de `function (bs, plugin) { ... }` e enxerga tudo do núcleo (`S`, `api`, `$`, `esc`, `toast`, `store`, `I`, `TI`, `monaco`, `editor`, `openFile`, `openTool`...) |
 | `style.css` (opcional) | injetado junto com o `ui.js` |
 | `server.exe` (opcional) | o servidor do plugin, iniciado quando o plugin liga e encerrado quando desliga ou quando o BlueScreen fecha |

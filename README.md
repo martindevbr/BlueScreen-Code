@@ -22,6 +22,7 @@ A IDE instalada se atualiza sozinha ao abrir.
 BlueScreen.exe C:\meus\projetos    # outra pasta de projetos
 BlueScreen.exe --lan               # liga o acesso pela rede local (com PIN)
 BlueScreen.exe --web               # abre no navegador em vez da janela
+BlueScreen.exe --doc dados.xlsx    # só o documento, numa janela leve (.csv, .tsv, .xlsx)
 ```
 
 ## Atalhos
@@ -75,7 +76,7 @@ Outra ferramenta ou outro caminho: liste em `~/.bluescreen/tools.json`.
 - **Lint sem instalar nada:** 16 linguagens por árvore sintática (plugin [`unilint`](app/plugins/unilint/README.md)) e linters de formato (JSON, YAML, XML, CSS, SQL, Dockerfile...).
 - **Terminal:** PowerShell, cmd, Git Bash, WSL e os prompts do Visual Studio; `arquivo:linha` na saída abre o arquivo.
 - **Arquivos gigantes:** logs e CSVs de vários GB abrem na hora, com busca no arquivo inteiro.
-- **Planilhas:** `.csv` e `.xlsx` abrem numa tabela editável, com fórmulas e formatação (plugin [`sheets`](app/plugins/sheets/README.md)).
+- **Planilhas:** `.csv` e `.xlsx` abrem numa tabela editável, com fórmulas e formatação (plugin [`sheets`](app/plugins/sheets/README.md)). No Windows, o BlueScreen aparece no **Abrir com** desses arquivos e abre só o documento, numa janela leve, sem mexer na IDE aberta (`BlueScreen.exe --doc arquivo.xlsx`). Para ser o programa padrão, marque "Sempre usar este aplicativo".
 - **Mudanças feitas fora da IDE** (git pull, formatador, outro editor) entram na aba aberta; se você também mexeu, é feito merge de três vias.
 - **Rede local:** o ícone de wifi abre `http://<ip-do-pc>:4748` com PIN, para usar pelo celular. Build, terminal, depurador e plugins só funcionam no próprio PC.
 

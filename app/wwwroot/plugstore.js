@@ -65,7 +65,7 @@ function decorate(body) {
   body.querySelectorAll('.plug[data-id]').forEach(el => {
     const p = bs.plugins.list.find(x => x.id === el.dataset.id), o = rp.get(el.dataset.id); if (!p) return;
     const nm = el.querySelector('.nm');
-    nm.insertAdjacentHTML('beforeend', ` <span class="pl-ver">v${esc(p.version)}</span>${p.origin && p.origin.server ? `<span class="pl-src" title="Instalado de ${esc(p.origin.server)}">${IC.server}${esc(p.origin.server.replace(/^https?:\/\//, ''))}</span>` : ''}`);
+    nm.insertAdjacentHTML('beforeend', `<span class="pl-ver">v${esc(p.version)}</span>${p.origin && p.origin.server ? `<span class="pl-src" title="Instalado de ${esc(p.origin.server)}">${IC.server}${esc(p.origin.server.replace(/^https?:\/\//, ''))}</span>` : ''}`);
     if (o && o.update) {
       const b = document.createElement('button'); b.className = 'chip pl-upd'; b.disabled = P.busy.has(p.id);
       b.innerHTML = `${IC.up}${P.busy.has(p.id) ? 'Atualizando…' : 'Atualizar para v' + esc(o.version)}`;
@@ -83,8 +83,8 @@ function decorate(body) {
   const avail = ((r && r.plugins) || []).filter(p => !p.installed);
   let html = '';
   if (avail.length) html += `<div class="pl-sec">Disponíveis nos servidores</div>` + avail.map(p => `
-    <div class="plug pl-remote" data-rid="${esc(p.id)}" title="${esc(p.description || '')}"><span class="pl-ic">${IC.down}</span>
-      <div class="tx"><div class="nm">${esc(p.name)} <span class="pl-ver">v${esc(p.version)}</span><span class="pl-src">${IC.server}${esc(p.server.replace(/^https?:\/\//, ''))}</span></div><div class="ds">${esc(p.description || '')}</div>
+    <div class="plug pl-remote" data-rid="${esc(p.id)}" title="${esc(p.description || '')}">${bs.plugIcon(p)}
+      <div class="tx"><div class="nm"><span class="pl-name">${esc(p.name)}</span><span class="pl-ver">v${esc(p.version)}</span><span class="pl-src">${IC.server}${esc(p.server.replace(/^https?:\/\//, ''))}</span></div><div class="ds">${esc(p.description || '')}</div>
       <button class="chip pl-upd" data-inst ${P.busy.has(p.id) ? 'disabled' : ''}>${IC.down}${P.busy.has(p.id) ? 'Instalando…' : 'Instalar'}</button></div></div>`).join('');
   // servidores apontados
   html += `<div class="pl-sec">Servidores de plugins <button class="icon-btn" data-recheck title="Procurar atualizações agora">${bs.I.refresh}</button></div>`
@@ -123,8 +123,10 @@ function menu(p) {
 
 bs.pluginStore = { check, decorate, menu, install, get state() { return P.remote; } };
 // consulta logo depois de abrir, de meia em meia hora e ao voltar para a janela depois de um tempo
-setTimeout(() => check(false), 4000);
-setInterval(() => check(true), 30 * 60000);
-window.addEventListener('focus', () => { if (Date.now() - P.at > 10 * 60000) check(true); });
+if (!bs.doc) {
+  setTimeout(() => check(false), 4000);
+  setInterval(() => check(true), 30 * 60000);
+  window.addEventListener('focus', () => { if (Date.now() - P.at > 10 * 60000) check(true); });
+}
 bs.actions.add([{ label: 'Plugins: procurar atualizações nos servidores', icon: bs.I.plug, run: () => check(true, false) }]);
 })(window.BS);

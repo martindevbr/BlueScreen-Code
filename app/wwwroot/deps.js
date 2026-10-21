@@ -28,7 +28,7 @@ document.body.appendChild(el);
 
 // ----- verificar -----
 async function check(force) {
-  const p = bs.S.project; if (!p || D.busy) return;
+  const p = bs.S.project; if (!p || D.busy || bs.doc) return;
   if (!force && Date.now() - D.last < 4000 && D.project === p.path) return;
   D.busy = true; D.last = Date.now();
   try {

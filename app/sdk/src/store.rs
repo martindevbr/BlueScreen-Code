@@ -33,6 +33,24 @@ pub fn version_cmp(a: &str, b: &str) -> Ordering {
     match (pa, pb) { (None, None) => Ordering::Equal, (None, Some(_)) => Ordering::Greater, (Some(_), None) => Ordering::Less, (Some(x), Some(y)) => x.cmp(y) }
 }
 
+/// Ícone do plugin como `data:` URI, para a aba Plugins: o arquivo que o campo `icon` do plugin.json aponta
+/// (relativo à pasta) ou, sem o campo, `icon.svg` / `icon.png` da pasta. SVG, PNG, JPG ou WebP, até 64 KB.
+/// A página só o usa em `<img>`, onde um SVG não roda script.
+pub fn icon_uri(dir: &Path, manifest: &serde_json::Value) -> Option<String> {
+    use base64::Engine;
+    let named = manifest["icon"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let pick = match named {
+        Some(rel) if safe_rel(&rel.replace('\\', "/")) => Some(rel.replace('\\', "/")),
+        Some(_) => None,
+        None => ["icon.svg", "icon.png"].into_iter().find(|f| dir.join(f).is_file()).map(String::from),
+    }?;
+    let mime = match pick.rsplit('.').next()?.to_ascii_lowercase().as_str() {
+        "svg" => "image/svg+xml", "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", _ => return None,
+    };
+    let data = std::fs::read(dir.join(&pick)).ok().filter(|d| !d.is_empty() && d.len() <= 64 * 1024)?;
+    Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(data)))
+}
+
 /// Caminho relativo seguro dentro do pacote: sem `..`, sem raiz, sem unidade, separado por `/`.
 pub fn safe_rel(p: &str) -> bool {
     !p.is_empty() && p.len() <= 400 && !p.starts_with('/') && !p.contains('\\') && !p.contains(':')

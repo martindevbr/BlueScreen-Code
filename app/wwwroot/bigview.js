@@ -416,6 +416,8 @@ BS.fileViewer.custom.big = {
   show: (t) => { if (t.bv) requestAnimationFrame(() => { if (t.bv.seg) { t.bv.ed.layout(); bvSegHead(t); } else bvLayout(t); }); },
   // o arquivo mudou (log crescendo, ou o próprio salvar): o índice continua de onde parou
   reload: (t) => { if (t.bv && !t.bv.saving) bvInfo(t); },
+  // fechar sem salvar: joga fora o trecho aberto e as edições guardadas no núcleo
+  discard: async (t) => { const b = t.bv; if (!b) return; if (b.seg) { b.ed && b.ed.setModel(null); b.seg.model.dispose(); b.seg = null; } try { await bvApi(t, 'history', { a: 'discard' }, { method: 'POST' }); } catch {} },
   // fechar a aba: o trecho aberto é entregue (as edições continuam no núcleo até salvar ou descartar)
   close: (t) => { const b = t.bv; if (!b) return; clearTimeout(b.infoT); if (b.seg) { bvCommit(t); b.seg.model.dispose(); } b.ed && b.ed.dispose(); t.bv = null; },
   goto: (t, line) => { if (t.bv && t.bv.total >= line) bvGoto(t, line); else t.goLine = line; },

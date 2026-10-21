@@ -1,6 +1,7 @@
 //! Sistema de plugins.
 //! Um plugin é uma pasta em plugins/ (do app) ou em ~/.bluescreen/plugins/ (do usuário) com:
-//!   plugin.json  manifesto: { id, name, description, version, order, requires, hooks }
+//!   plugin.json  manifesto: { id, name, description, version, order, requires, hooks, icon }
+//!                `icon` é uma imagem da pasta (SVG, PNG, JPG ou WebP, até 64 KB); sem o campo, vale o icon.svg/icon.png da pasta.
 //!                `hooks` liga pontos de extensão do núcleo a rotas do plugin, ex.: { "build.info": "meu/build-info" }.
 //!                O núcleo chama a rota (POST, como chamada interna) e usa o que ela devolver; ele não conhece o plugin.
 //!   ui.js        opcional: roda na página, dentro de function (bs, plugin) { ... }; enxerga tudo do núcleo (S, api, $, esc...)
@@ -32,6 +33,8 @@ pub struct Manifest {
     pub author: String,
     /// ponto de extensão do núcleo -> rota do plugin
     pub hooks: BTreeMap<String, String>,
+    /// ícone como data: URI (bluescreen_sdk::store::icon_uri); sem ele, a página desenha um padrão
+    pub icon: Option<String>,
 }
 #[derive(Serialize, Clone)]
 pub struct PluginStatus {
@@ -55,6 +58,7 @@ pub struct PluginStatus {
     pub origin: Value,
     /// está na pasta do usuário (~/.bluescreen/plugins), que é onde os servidores de plugins instalam
     pub user: bool,
+    pub icon: Option<String>,
 }
 
 #[derive(Default)]
@@ -67,6 +71,9 @@ pub struct Registry {
     /// processos dos plugins com servidor próprio; saem quando o registro é trocado (recarregar/desligar)
     _procs: Vec<external::Running>,
 }
+
+/// Janela de documento (main.rs, --doc): os plugins com servidor próprio ficam de fora; só a interface carrega.
+pub static LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn dirs() -> Vec<PathBuf> { vec![app_dir().join("plugins"), user_dir().join("plugins")] }
 pub fn config_file() -> PathBuf { user_dir().join("plugins.json") }
@@ -95,6 +102,7 @@ fn norm_manifest(m: &Value, fallback: &str) -> anyhow::Result<Manifest> {
         author: m["author"].as_str().unwrap_or("").into(),
         hooks: m["hooks"].as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|r| (k.clone(), r.trim_start_matches('/').trim_start_matches("api/").to_string()))).collect()).unwrap_or_default(),
         id,
+        icon: None,
     })
 }
 fn discover() -> Vec<Entry> {
@@ -110,7 +118,7 @@ fn discover() -> Vec<Entry> {
             let name = e.file_name().to_string_lossy().to_string();
             let entry = match std::fs::read_to_string(&mf).map_err(anyhow::Error::from)
                 .and_then(|s| serde_json::from_str::<Value>(&s).map_err(|er| anyhow::anyhow!("plugin.json inválido: {er}")))
-                .and_then(|v| norm_manifest(&v, &name)) {
+                .and_then(|v| norm_manifest(&v, &name).map(|mut m| { m.icon = bluescreen_sdk::store::icon_uri(&e.path(), &v); m })) {
                 Ok(m) => Entry { manifest: m, path: e.path(), rank, broken: None },
                 // manifesto quebrado: aparece na lista com erro, para o usuário ver
                 Err(er) => Entry { manifest: Manifest { id: name.clone(), name: name.clone(), order: 999.0, ..Default::default() }, path: e.path(), rank, broken: Some(er.to_string()) },
@@ -154,8 +162,9 @@ impl Host {
                 id: m.id.clone(), name: m.name.clone(), version: m.version.clone(), description: m.description.clone(), author: m.author.clone(),
                 kind: if exe.is_some() { "process" } else { "ui" }, path: e.path.to_string_lossy().into(), enabled: !off.contains(&m.id),
                 error: None, ui: false, server: exe.is_some(), order: m.order, requires: m.requires.clone(), routes: vec![], hooks: m.hooks.clone(),
-                origin: read_json(&e.path.join(".origin.json")), user: e.rank == 1,
+                origin: read_json(&e.path.join(".origin.json")), user: e.rank == 1, icon: m.icon.clone(),
             };
+            if exe.is_some() && LIGHT.load(std::sync::atomic::Ordering::Relaxed) { st.enabled = false; }
             if !st.enabled { reg.list.push(st); continue; }
             if let Some(b) = &e.broken { st.error = Some(b.clone()); reg.list.push(st); continue; }
             let missing: Vec<&String> = m.requires.iter().filter(|r| !active.contains(*r)).collect();

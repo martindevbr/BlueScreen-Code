@@ -76,6 +76,10 @@ Name: "{autodesktop}\BlueScreen"; Filename: "{app}\BlueScreen.exe"; WorkingDir: 
 [Run]
 Filename: "{app}\BlueScreen.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; tira o BlueScreen do "Abrir com" do Windows (a IDE se registra sozinha ao abrir; veja app/src/assoc.rs)
+Filename: "{app}\BlueScreen.exe"; Parameters: "--unregister"; Flags: runhidden waituntilterminated; RunOnceId: "AbrirCom"
+
 [UninstallDelete]
 ; o que a IDE cria na pasta do programa: interface atualizada e exes antigos renomeados por uma atualização
 Type: filesandordirs; Name: "{app}\wwwroot"

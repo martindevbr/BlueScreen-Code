@@ -139,6 +139,6 @@ async function restart() {
 }
 
 bs.actions.add({ label: 'Procurar atualizações do BlueScreen', icon: IC.up, run: () => check(true, false) });
-setTimeout(() => check(false), 6000);
+if (!bs.doc) setTimeout(() => check(false), 6000);
 bs.update = { check, open: openDialog };
 })(window.BS);
