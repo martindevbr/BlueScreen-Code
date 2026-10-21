@@ -48,6 +48,17 @@
 .sh-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 1; }
 .sh-rz:hover { background: color-mix(in srgb, var(--accent) 50%, transparent); }
 .sh-body { flex: 1; min-height: 0; overflow: auto; position: relative; }
+/* barras de rolagem: trilho visível, alça arredondada que acende ao passar o mouse
+   (scrollbar-color só onde não há ::-webkit-scrollbar: no Chrome ele desligaria o resto) */
+@supports not selector(::-webkit-scrollbar) { .sh-body { scrollbar-color: color-mix(in srgb, var(--fg-2) 45%, transparent) var(--panel); } }
+.sh-body::-webkit-scrollbar { width: 14px; height: 14px; }
+.sh-body::-webkit-scrollbar-track { background: var(--panel); }
+.sh-body::-webkit-scrollbar-track:vertical { border-left: 1px solid var(--line); }
+.sh-body::-webkit-scrollbar-track:horizontal { border-top: 1px solid var(--line); }
+.sh-body::-webkit-scrollbar-thumb { min-width: 40px; min-height: 40px; border-radius: 8px; border: 3px solid transparent; background: color-mix(in srgb, var(--fg-2) 38%, transparent) padding-box; }
+.sh-body::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--fg-2) 60%, transparent); }
+.sh-body::-webkit-scrollbar-thumb:active { background-color: var(--accent); }
+.sh-body::-webkit-scrollbar-corner { background: var(--panel); }
 .sh-space { pointer-events: none; }
 .sh-rows { position: absolute; top: 0; left: 0; }
 .sh-r { position: absolute; left: 0; height: 24px; display: flex; border-bottom: 1px solid var(--line); }

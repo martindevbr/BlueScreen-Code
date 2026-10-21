@@ -15,5 +15,6 @@
 | Salvar | `Ctrl+S` (e o salvamento automático da IDE). O `.xlsx` regrava só as planilhas alteradas, os estilos e o workbook: gráficos, imagens e o resto voltam como estavam. O CSV mantém separador, codificação, BOM e fim de linha |
 | CSV | grava só valores: com formatação, o salvar pergunta se grava só os valores ou uma cópia **.xlsx** (também na barra: **Salvar como .xlsx**) |
 | Texto | **Editar como texto** na barra (CSV), e no menu do arquivo **Abrir como texto** / **Abrir como planilha** |
+| Arquivos grandes | leitura em pedaços, com o progresso na tela e sem travar a IDE: o CSV separa as linhas sem aspas de forma nativa; o `.xlsx` é descompactado e lido aos poucos, direto do texto do XML. A busca guarda o texto de cada linha (a primeira monta o índice, as seguintes são imediatas). Editar recalcula só as fórmulas que dependem da célula alterada (grafo de dependências), não a pasta inteira. Uma planilha de 200 mil linhas abre em ~1 s, e editar uma célula leva ~20 ms |
 
 Limites: `.xls` (formato binário antigo) e `.xlsx` acima de 4 GB (zip64) não abrem na tabela; arquivos acima de 200 MB também não. Células mescladas, formatação condicional e gráficos são preservados ao salvar, mas não aparecem na tabela. Funções que o motor não conhece mantêm o valor que o arquivo trouxe (o Excel recalcula ao abrir).

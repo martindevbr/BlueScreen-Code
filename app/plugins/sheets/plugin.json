@@ -2,7 +2,7 @@
   "id": "sheets",
   "name": "Planilhas (CSV e XLSX)",
   "description": "Abre e edita .csv, .tsv e .xlsx numa tabela: células, fórmulas, seleção de intervalos, copiar e colar com o Excel, cores, negrito, bordas, formatos de número, linhas e colunas, várias abas. Sem bibliotecas: tudo roda na página.",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "BlueScreen",
   "order": 40
 }

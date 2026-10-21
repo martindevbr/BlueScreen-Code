@@ -62,8 +62,9 @@ function sniff(text) {
   }
   return best;
 }
-function parseCSV(text, d) {
-  const rows = []; let row = [], f = '', i = 0, q = false; const n = text.length;
+// um registro a partir de i, caractere a caractere (aspas, separador e quebra de linha dentro das aspas)
+function csvRecord(text, i, d) {
+  const n = text.length, row = []; let f = '', q = false;
   while (i < n) {
     const c = text[i];
     if (q) {
@@ -73,12 +74,31 @@ function parseCSV(text, d) {
     }
     if (c === '"' && f === '') { q = true; i++; continue; }
     if (c === d) { row.push(f); f = ''; i++; continue; }
-    if (c === '\n' || c === '\r') { row.push(f); rows.push(row); row = []; f = ''; i += c === '\r' && text[i + 1] === '\n' ? 2 : 1; continue; }
+    if (c === '\n' || c === '\r') { row.push(f); return { row, next: i + (c === '\r' && text[i + 1] === '\n' ? 2 : 1) }; }
     f += c; i++;
   }
-  if (f !== '' || row.length) { row.push(f); rows.push(row); }
+  row.push(f); return { row, next: n };
+}
+// Leitor rápido: a linha sem aspas (quase todas, num CSV grande) vira um split nativo; só as linhas com aspas
+// passam pelo leitor caractere a caractere. De tempos em tempos devolve o progresso (0 a 1).
+function* csvRows(text, d, rows) {
+  const n = text.length, lf = text.indexOf('\n') >= 0; let i = 0;
+  while (i < n) {
+    const j = lf ? text.indexOf('\n', i) : -1, end = j < 0 ? n : j;
+    const stop = end > i && text.charCodeAt(end - 1) === 13 ? end - 1 : end, line = text.slice(i, stop);
+    if (lf && line.indexOf('"') < 0 && line.indexOf('\r') < 0) { rows.push(line.split(d)); i = end + 1; }
+    else { const r = csvRecord(text, i, d); rows.push(r.row); i = r.next; }
+    if ((rows.length & 8191) === 0) yield i / n;
+  }
+}
+function parseCSV(text, d) { const rows = []; for (const _ of csvRows(text, d, rows)); return rows; }
+async function parseCSVAsync(text, d, tick) {
+  const rows = []; let t0 = performance.now();
+  for (const p of csvRows(text, d, rows)) if (performance.now() - t0 > 60) { await tick(p); t0 = performance.now(); }
   return rows;
 }
+// devolve o controle à página (pinta o progresso, atende cliques) sem o atraso mínimo do setTimeout
+const breathe = () => new Promise(r => { const ch = new MessageChannel(); ch.port1.onmessage = () => r(); ch.port2.postMessage(0); });
 const csvField = (s, d) => s.includes('"') || s.includes(d) || s.includes('\n') || s.includes('\r') ? '"' + s.replace(/"/g, '""') + '"' : s;
 // texto de uma célula no CSV: o valor como foi digitado; fórmula volta com o "=" (o Excel calcula ao abrir)
 const csvText = (x) => x == null ? '' : typeof x === 'string' ? x : x.f != null ? '=' + x.f : x.v == null ? '' : typeof x.v === 'string' ? x.v : show(null, { v: x.v });
@@ -121,6 +141,54 @@ async function zipText(b, files, name) {
   else if (f.method !== 0) throw new Error('compressão do zip não suportada (' + f.method + ')');
   return new TextDecoder().decode(out);
 }
+// entrada do zip descompactada aos pedaços (uma planilha de 500 MB não precisa existir inteira na memória)
+async function* zipChunks(b, f) {
+  const raw = zipRaw(b, f);
+  if (f.method === 0) { yield raw; return; }
+  if (f.method !== 8) throw new Error('compressão do zip não suportada (' + f.method + ')');
+  const rd = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+  for (;;) { const { done, value } = await rd.read(); if (done) return; yield value; }
+}
+// Lê um XML grande aos pedaços, sem montar o DOM: chama each(atributos, conteúdo) para cada <name> (row, si)
+// e devolve o texto antes do primeiro deles (onde ficam <cols> e <pane> da planilha).
+const XATTR = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+const ENT = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+const unesc = (s) => s.indexOf('&') < 0 ? s : s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_, e) => e[0] === '#' ? String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : +e.slice(1)) : ENT[e]);
+const attrsOf = (s) => { const o = {}; XATTR.lastIndex = 0; let m; while ((m = XATTR.exec(s))) o[m[1]] = unesc(m[2] ?? m[3]); return o; };
+async function scanXml(b, f, name, each, tick) {
+  const open = new RegExp(`<(?:([\\w.-]+):)?${name}\\b([^>]*?)(/?)>`, 'g'), dec = new TextDecoder();
+  let buf = '', head = null, got = 0, t0 = performance.now();
+  const run = (last) => {
+    open.lastIndex = 0; let at = 0, m;
+    while ((m = open.exec(buf))) {
+      if (head === null) head = buf.slice(0, m.index);
+      if (m[3]) { each(m[2], ''); at = open.lastIndex; continue; }
+      const close = `</${m[1] ? m[1] + ':' : ''}${name}>`, e = buf.indexOf(close, open.lastIndex);
+      if (e < 0) { at = m.index; break; } // o fim dele ainda não chegou
+      each(m[2], buf.slice(open.lastIndex, e)); at = open.lastIndex = e + close.length;
+    }
+    if (!m) at = last ? buf.length : Math.max(at, buf.lastIndexOf('<') >= at ? buf.lastIndexOf('<') : buf.length);
+    if (head === null && !last) return; // ainda no começo: guarda tudo
+    buf = buf.slice(at);
+  };
+  for await (const chunk of zipChunks(b, f)) {
+    got += chunk.length; buf += dec.decode(chunk, { stream: true });
+    if (buf.length < 1 << 20) continue;
+    run(false);
+    if (tick && performance.now() - t0 > 60) { await tick(Math.min(1, got / (f.usize || 1))); t0 = performance.now(); }
+  }
+  buf += dec.decode(); const all = head === null ? buf : null; run(true);
+  return head ?? all ?? '';
+}
+// texto de um <si>/<is> já como string: todos os <t>, menos os da pronúncia (<rPh>)
+const RPH = /<(?:[\w.-]+:)?rPh\b[\s\S]*?<\/(?:[\w.-]+:)?rPh>/g, TXT = /<(?:[\w.-]+:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?t>/g;
+function richStr(s) {
+  if (s.indexOf('<r') >= 0) s = s.replace(RPH, '');
+  let out = '', m; TXT.lastIndex = 0;
+  while ((m = TXT.exec(s))) out += m[1];
+  out = unesc(out);
+  return out.indexOf('\r') < 0 ? out : out.replace(/\r\n?/g, '\n');
+}
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 function crc32(d) { let c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = CRC[(c ^ d[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
 // list: [{ name, bytes }] (compacta agora) ou [{ name, raw }] (entrada do zip original, copiada como está)
@@ -154,8 +222,6 @@ const DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n';
 const ser = (doc) => DECL + new XMLSerializer().serializeToString(doc).replace(/^<\?xml[^>]*\?>\s*/, '');
 const xesc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 const mk = (doc, name) => { const r = doc.documentElement; return doc.createElementNS(r.namespaceURI, r.prefix ? r.prefix + ':' + name : name); };
-// texto de um <si>/<is>: todos os <t>, menos os da pronúncia (<rPh>)
-const richText = (n) => [...tags(n, 't')].filter(t => !t.closest('rPh')).map(t => t.textContent).join('');
 const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const relId = (n) => n.getAttributeNS(NS_R, 'id') || [...n.attributes].find(a => a.localName === 'id' && a.prefix)?.value || n.getAttribute('r:id');
 const colNum = (ref) => { let n = 0; for (const ch of ref.toUpperCase()) { const c = ch.charCodeAt(0); if (c < 65 || c > 90) break; n = n * 26 + c - 64; } return n - 1; };
@@ -326,7 +392,7 @@ function readStyles(st, theme) {
   });
   return list.length ? list : [DEF_STYLE];
 }
-async function openBook(buf) {
+async function openBook(buf, tick) {
   const b = new Uint8Array(buf), files = zipIndex(b), text = (n) => zipText(b, files, n);
   const wbText = await text('xl/workbook.xml');
   if (!wbText) throw new Error('não achei xl/workbook.xml: não parece um .xlsx do Excel');
@@ -340,46 +406,54 @@ async function openBook(buf) {
   }
   const thText = types.theme && await text(types.theme);
   const theme = thText ? themeColors(xml(thText)) : null;
-  const ssText = await text(types.sharedStrings || 'xl/sharedStrings.xml');
-  const shared = ssText ? [...tags(xml(ssText), 'si')].map(richText) : [];
+  const ssFile = entry(files, types.sharedStrings || 'xl/sharedStrings.xml'), shared = [];
+  if (ssFile) await scanXml(b, ssFile, 'si', (a, inner) => { shared.push(richStr(inner)); }, ssFile.usize > 8e6 ? tick : null);
   const stPath = types.styles || 'xl/styles.xml', stText = await text(stPath);
   const styles = stText ? readStyles(xml(stText), theme) : [DEF_STYLE];
   const book = { b, files, d1904, shared, styles, stPath: stText ? stPath : null, renames: [] };
   book.sheets = [...tags(wb, 'sheet')].map(s => ({ name: s.getAttribute('name') || 'Planilha', rid: relId(s), hidden: (s.getAttribute('state') || 'visible') !== 'visible', path: rels[relId(s)], data: null }));
   // cada planilha é lida quando a aba dela é aberta
-  for (const s of book.sheets) s.load = async () => {
-    const t = s.path && await zipText(book.b, book.files, s.path);
-    return t ? readSheet(xml(t), book) : { rows: [], rowAttr: [] };
+  for (const s of book.sheets) s.load = async (tick) => {
+    const f = s.path && entry(book.files, s.path);
+    return f ? readSheet(book, f, tick) : { rows: [], rowAttr: [] };
   };
   return book;
 }
+const entry = (files, name) => files.get(name) || files.get(name.replace(/^\//, ''));
 const errOf = (code) => ERRS[code] || new E(code);
-function readSheet(doc, book) {
+// Planilha lida aos pedaços direto do texto do XML (sem DOM): cada <row> vira uma linha assim que chega.
+// Uma célula comum é <c r="B2" s="3" t="s"><v>12</v></c>; fórmula em <f>, texto inline em <is>.
+const CELL = /<(?:([\w.-]+):)?c\b([^>]*?)(\/?)>/g;
+const V_RE = /<(?:[\w.-]+:)?v(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?v>/, F_RE = /<(?:[\w.-]+:)?f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?f>)/, IS_RE = /<(?:[\w.-]+:)?is\b[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?is>/;
+async function readSheet(book, file, tick) {
   const rows = [], rowAttr = [], shared = {};
   let rn = 0;
-  for (const row of tags(doc, 'row')) {
-    rn = row.hasAttribute('r') ? +row.getAttribute('r') - 1 : rn;
-    const attrs = [...row.attributes].filter(a => a.name !== 'r' && a.name !== 'spans').map(a => [a.name, a.value]);
+  const row = (attrStr, body) => {
+    const a = attrsOf(attrStr);
+    if (a.r != null) rn = +a.r - 1;
+    const attrs = Object.entries(a).filter(([k]) => k !== 'r' && k !== 'spans');
     if (attrs.length) rowAttr[rn] = attrs;
-    const out = []; let cn = 0;
-    for (const c of row.children) {
-      if (c.localName !== 'c') continue;
-      const ref = c.getAttribute('r'); if (ref) cn = colNum(ref);
-      const t = c.getAttribute('t') || 'n', v = kid(c, 'v'), f = kid(c, 'f'), raw = v ? v.textContent : '';
-      const si = +(c.getAttribute('s') || 0);
+    const out = []; let cn = 0, m;
+    CELL.lastIndex = 0;
+    while ((m = CELL.exec(body))) {
+      const ca = attrsOf(m[2]); let inner = '';
+      if (!m[3]) { const close = `</${m[1] ? m[1] + ':' : ''}c>`, e = body.indexOf(close, CELL.lastIndex); inner = body.slice(CELL.lastIndex, e < 0 ? body.length : e); if (e >= 0) CELL.lastIndex = e + close.length; }
+      if (ca.r) cn = colNum(ca.r);
+      const t = ca.t || 'n', vm = inner && V_RE.exec(inner), raw = vm ? unesc(vm[1]) : '', si = +(ca.s || 0);
       const x = { v: null };
       if (t === 's') { x.v = book.shared[+raw] ?? ''; x.si = +raw; }
-      else if (t === 'inlineStr') { const is = kid(c, 'is'); x.v = is ? richText(is) : ''; }
+      else if (t === 'inlineStr') { const is = IS_RE.exec(inner); x.v = is ? richStr(is[1]) : ''; }
       else if (t === 'b') x.v = raw === '1';
       else if (t === 'e') x.v = errOf(raw);
       else if (t === 'str') x.v = raw;
       else if (t === 'd') x.v = raw.replace(/^(\d{4})-(\d\d)-(\d\d)T?/, '$3/$2/$1 ').trim();
       else if (raw !== '') x.v = isNaN(+raw) ? raw : +raw;
-      if (f) {
+      const fm = inner && inner.indexOf('<') >= 0 && F_RE.exec(inner);
+      if (fm) {
         // fórmula compartilhada: só a primeira célula tem o texto; as outras são ela deslocada
-        let text = f.textContent; const ft = f.getAttribute('t'), sid = f.getAttribute('si');
+        const fa = attrsOf(fm[1]), ft = fa.t, sid = fa.si; let text = unesc(fm[2] || '');
         if (ft === 'shared' && sid != null) { if (text) shared[sid] = { f: text, r: rn, c: cn }; else if (shared[sid]) text = moveFormula(shared[sid].f, rn - shared[sid].r, cn - shared[sid].c); }
-        if (text) { x.f = text; if (ft === 'array') x.fa = f.getAttribute('ref') || ref; }
+        if (text) { x.f = text; if (ft === 'array') x.fa = fa.ref || ca.r; }
       }
       if (si && book.styles[si]) x.s = book.styles[si];
       if (x.v !== null || x.f != null || x.s) out[cn] = x;
@@ -387,14 +461,16 @@ function readSheet(doc, book) {
     }
     if (out.length) rows[rn] = out;
     rn++;
+  };
+  const head = await scanXml(book.b, file, 'row', row, tick);
+  const colW = []; let m;
+  const COL = /<(?:[\w.-]+:)?col\b([^>]*?)\/?>/g;
+  while ((m = COL.exec(head))) {
+    const a = attrsOf(m[1]), w = +a.width; if (!w) continue;
+    for (let i = +a.min - 1; i < Math.min(+a.max, 1024); i++) colW[i] = a.hidden === '1' || a.hidden === 'true' ? 0 : Math.round(w * 7 + 5);
   }
-  const colW = [];
-  for (const col of tags(doc, 'col')) {
-    const w = +col.getAttribute('width'); if (!w) continue;
-    for (let i = +col.getAttribute('min') - 1; i < Math.min(+col.getAttribute('max'), 1024); i++) colW[i] = col.getAttribute('hidden') === '1' ? 0 : Math.round(w * 7 + 5);
-  }
-  const pane = tags(doc, 'pane')[0];
-  return { rows, rowAttr, colW, frozen: !!pane && pane.getAttribute('state') === 'frozen' && pane.getAttribute('ySplit') === '1' };
+  const pm = /<(?:[\w.-]+:)?pane\b([^>]*?)\/?>/.exec(head), pane = pm ? attrsOf(pm[1]) : null;
+  return { rows, rowAttr, colW, frozen: !!pane && pane.state === 'frozen' && pane.ySplit === '1' };
 }
 
 // pacote mínimo de um .xlsx: planilha nova (arquivo vazio) e "Salvar como .xlsx" de um CSV
@@ -783,7 +859,7 @@ function cellVal(sh, r, c, cx, x) {
   if (x === undefined) x = cellAt(sh, r, c);
   if (x == null) return null;
   if (typeof x === 'string') return sh.csv ? csvVal(x) : x;
-  if (x.f != null && cx) return calcCell(sh, r, c, x, cx);
+  if (x.f != null && cx && (!cx.only || cx.only.has(x))) return calcCell(sh, r, c, x, cx); // recálculo parcial: as outras já estão certas
   const v = x.v;
   return sh.csv && typeof v === 'string' ? csvVal(v) : v === '' ? null : v;
 }
@@ -805,14 +881,84 @@ function calcCell(sh, r, c, x, cx) {
   x.v = v; m.set(key, v);
   return v;
 }
-// recalcula as fórmulas das planilhas abertas
-function recalc(t) {
+// Recalcula as fórmulas das planilhas abertas. Com cells (as células que a edição mudou em sh), só as fórmulas
+// que dependem delas, em cadeia; sem cells, todas (mudança de estrutura, abrir o arquivo).
+function recalc(t, sh0, cells) {
   const book = t.sh.sheets, cx = { book, memo: new Map(), stack: new Set(), circ: false };
-  for (const s of book) {
-    const sh = s.data; if (!sh || !sh.hasF) continue;
-    for (let r = 0; r < sh.rows.length; r++) { const row = sh.rows[r]; if (!row) continue; for (let c = 0; c < row.length; c++) { const x = row[c]; if (x && typeof x === 'object' && x.f != null) calcCell(sh, r, c, x, { ...cx, sh }); } }
+  if (cells) {
+    const g = t.sh.graph || (t.sh.graph = depGraph(book)), only = new Set(), list = [], q = [];
+    const hit = (rec) => { if (rec.x !== cellAt(rec.sh, rec.r, rec.c) || only.has(rec.x)) return; only.add(rec.x); list.push(rec); q.push(rec); };
+    const visit = (sh, r, c) => {
+      const one = g.one.get(sh.uid + ':' + (r * MAXC + c)); if (one) one.forEach(hit);
+      const col = g.col.get(sh.uid + ':' + c); if (col) for (const e of col) if (r >= e.r1 && r <= e.r2) hit(e.rec);
+      for (const e of g.wide) if (e.sh === sh && r >= e.r1 && r <= e.r2 && c >= e.c1 && c <= e.c2) hit(e.rec);
+    };
+    for (const { r, c } of cells) { const x = cellAt(sh0, r, c); if (x && x.f != null) hit(addDep(g, book, sh0, r, c, x)); }
+    g.vol.forEach(hit); g.stale.forEach(hit); g.stale = [];
+    for (const { r, c } of cells) visit(sh0, r, c);
+    while (q.length) { const rec = q.pop(); visit(rec.sh, rec.r, rec.c); }
+    cx.only = only;
+    for (const rec of list) { calcCell(rec.sh, rec.r, rec.c, rec.x, { ...cx, sh: rec.sh }); if (rec.sh.txt) rec.sh.txt.delete(rec.sh.rows[rec.r]); }
+    if (g.recs > 2 * g.live + 5000) t.sh.graph = null; // muita fórmula trocada: refaz o grafo na próxima vez
+  } else {
+    t.sh.graph = null;
+    for (const s of book) {
+      const sh = s.data; if (!sh || !sh.hasF) continue;
+      sh.txt = null; sh.warm = false; // valores das fórmulas mudam: o índice da busca é refeito
+      for (let r = 0; r < sh.rows.length; r++) { const row = sh.rows[r]; if (!row) continue; for (let c = 0; c < row.length; c++) { const x = row[c]; if (x && typeof x === 'object' && x.f != null) calcCell(sh, r, c, x, { ...cx, sh }); } }
+    }
   }
   if (cx.circ) toast('Referência circular: uma fórmula depende dela mesma', '', 'sh-circ');
+}
+// Grafo de dependências: de cada célula, as fórmulas que a leem. Referência simples vai num mapa (célula -> fórmulas),
+// intervalo estreito fica listado por coluna, intervalo largo numa lista à parte. HOJE(), ALEATÓRIO(), INDIRETO(),
+// nomes e outras planilhas ainda não abertas não têm dependência conhecida: recalculam sempre.
+const VOLATILE = new Set(['TODAY', 'NOW', 'RAND', 'RANDBETWEEN', 'INDIRECT', 'OFFSET', 'CELL', 'INFO']);
+function* depBuild(book, g) {
+  for (const s of book) {
+    const sh = s.data; if (!sh || !sh.hasF) continue;
+    for (let r = 0; r < sh.rows.length; r++) {
+      const row = sh.rows[r]; if (!row) continue;
+      for (let c = 0; c < row.length; c++) { const x = row[c]; if (x && typeof x === 'object' && x.f != null) { const rec = addDep(g, book, sh, r, c, x); if (x.v == null) g.stale.push(rec); } }
+      if ((r & 1023) === 0) yield;
+    }
+  }
+  g.live = g.recs;
+}
+const newGraph = () => ({ one: new Map(), col: new Map(), wide: [], vol: [], stale: [], recs: 0, live: 0 });
+function depGraph(book) { const g = newGraph(); for (const _ of depBuild(book, g)); return g; }
+// logo depois de abrir: monta o grafo aos pedaços, para a primeira edição de um arquivo cheio de fórmulas já ser rápida.
+// Se algo mudar no meio (edição, outra aba), desiste: o recálculo monta o dele na hora.
+async function warmGraph(t) {
+  const book = t.sh && t.sh.sheets; if (!book || t.sh.graph || !book.some(s => s.data && s.data.hasF)) return;
+  const sig = () => t.sh && t.sh.sheets === book ? book.map(s => s.data ? s.data.uid + ':' + s.data.ver : '-').join() : 'fechou';
+  const before = sig(), g = newGraph(); let t0 = performance.now();
+  for (const _ of depBuild(book, g)) if (performance.now() - t0 > 30) { await breathe(); if (sig() !== before || t.sh.graph) return; t0 = performance.now(); }
+  if (sig() === before && !t.sh.graph) t.sh.graph = g;
+}
+function addDep(g, book, sh, r, c, x) {
+  const rec = { sh, r, c, x }, add = (m, k, v) => { const l = m.get(k); if (l) l.push(v); else m.set(k, [v]); };
+  g.recs++;
+  let ast; try { ast = astOf(x.f); } catch { return rec; } // fórmula que o motor não lê: fica o valor do arquivo
+  let vol = false;
+  const walk = (n) => {
+    if (!n || typeof n !== 'object' || vol) return;
+    if (n.k === 'ref') {
+      let s = sh;
+      if (n.sheet != null) { const o = book.find(b => b.name.toLowerCase() === n.sheet.toLowerCase()); if (!o || !o.data) { vol = true; return; } s = o.data; }
+      if (!n.b) { if (n.a.r != null && n.a.c != null) add(g.one, s.uid + ':' + (n.a.r * MAXC + n.a.c), rec); return; }
+      const r1 = Math.min(n.a.r ?? 0, n.b.r ?? 0), r2 = n.a.r == null || n.b.r == null ? Infinity : Math.max(n.a.r, n.b.r);
+      const c1 = Math.min(n.a.c ?? 0, n.b.c ?? 0), c2 = n.a.c == null || n.b.c == null ? MAXC - 1 : Math.max(n.a.c, n.b.c);
+      if (c2 - c1 < 64) for (let cc = c1; cc <= c2; cc++) add(g.col, s.uid + ':' + cc, { r1, r2, rec });
+      else g.wide.push({ sh: s, r1, r2, c1, c2, rec });
+      return;
+    }
+    if (n.k === 'name' || (n.k === 'fn' && (VOLATILE.has(n.n) || !FN[n.n]))) { vol = true; return; }
+    walk(n.a); walk(n.l); walk(n.r); if (n.args) n.args.forEach(walk);
+  };
+  walk(ast);
+  if (vol) g.vol.push(rec);
+  return rec;
 }
 // texto mostrado na célula
 function show(sh, x) {
@@ -872,7 +1018,30 @@ function put(sh, r, c, x) {
   let row = sh.rows[r];
   if (!row) { if (x === undefined) return; row = sh.rows[r] = []; }
   row[c] = x;
+  if (sh.txt) sh.txt.delete(row);
   if (x !== undefined) { if (c >= sh.ncol) sh.ncol = c + 1; if (x && x.f != null) sh.hasF = true; }
+}
+// Texto da linha, minúsculo, guardado para a busca: buscar de novo (ou outra palavra) é um indexOf por linha.
+// A chave é a própria linha (WeakMap): editar a célula (put) ou recalcular uma fórmula dela apaga.
+const SEP = '\u0001';
+function rowText(sh, i) {
+  const row = sh.rows[i]; if (!row) return '';
+  const m = sh.txt || (sh.txt = new WeakMap());
+  let s = m.get(row); if (s !== undefined) return s;
+  let plain = true;
+  for (let c = 0; c < row.length; c++) { const x = row[c]; if (x != null && typeof x !== 'string') { plain = false; break; } }
+  if (plain) s = row.join(SEP).toLowerCase(); // CSV sem formatação: tudo nativo
+  else { s = ''; for (let c = 0; c < row.length; c++) { const x = row[c]; s += (c ? SEP : '') + (x == null ? '' : show(sh, x)); } s = s.toLowerCase(); }
+  m.set(row, s);
+  return s;
+}
+// monta o índice da busca aos pedaços (na primeira busca de um arquivo grande), com o progresso
+async function warmIndex(sh, tick) {
+  let t0 = performance.now();
+  for (let i = 0; i < sh.rows.length; i++) {
+    rowText(sh, i);
+    if ((i & 4095) === 0 && performance.now() - t0 > 60) { await tick(i / sh.rows.length); t0 = performance.now(); }
+  }
 }
 
 // ===== tabela =====
@@ -912,7 +1081,7 @@ function apply(sh) {
   const start = sh.head ? 1 : 0;
   let v = []; for (let i = start; i < sh.rows.length; i++) v.push(i);
   const q = sh.filter.trim().toLowerCase();
-  if (q) v = v.filter(i => (sh.rows[i] || []).some(x => x != null && show(sh, x).toLowerCase().includes(q)));
+  if (q) v = v.filter(i => rowText(sh, i).indexOf(q) >= 0);
   if (sh.sort) {
     const { c, dir } = sh.sort, key = (i) => { const x = cellAt(sh, i, c); return x == null || show(sh, x) === '' ? null : typeof x === 'string' ? (NUM.test(x) ? numKey(x) : x) : typeof x.v === 'number' ? x.v : show(sh, x); };
     const keys = new Map(v.map(i => [i, key(i)]));
@@ -925,7 +1094,7 @@ function apply(sh) {
     });
   }
   if (!q && !sh.sort) { const end = Math.max(sh.rows.length, start); for (let i = 0; i < XR; i++) v.push(end + i); }
-  sh.view = v;
+  sh.view = v; sh.vrows = sh.rows.length; sh.vhead = sh.head;
   ensureCols(sh);
   sh.x = [0]; for (const w of sh.w) sh.x.push(sh.x[sh.x.length - 1] + w);
 }
@@ -983,7 +1152,17 @@ function build(t, el) {
   const body = $('[data-body]');
   body.addEventListener('scroll', () => draw(t), { passive: true });
   t.sh.ro = new ResizeObserver(() => draw(t)); t.sh.ro.observe(body);
-  let qt; $('[data-q]').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { const s = cur(t); if (!s) return; s.filter = e.target.value; apply(s); s.sel = { k: 0, c: s.sel.c, k2: 0, c2: s.sel.c }; body.scrollTop = 0; render(t); }, 160); };
+  let qt, qn = 0; $('[data-q]').oninput = (e) => { clearTimeout(qt); qt = setTimeout(async () => {
+    const s = cur(t), n = ++qn; if (!s) return;
+    // primeira busca num arquivo grande: monta o índice aos pedaços, sem travar a IDE
+    if (e.target.value.trim() && !s.warm && s.rows.length > 20000) {
+      const st = $('[data-stats]');
+      await warmIndex(s, async (p) => { st.textContent = `Preparando a busca… ${Math.round(p * 100)}%`; await breathe(); });
+      s.warm = true; st.textContent = '';
+      if (n !== qn || cur(t) !== s) return; // digitou de novo enquanto isso
+    }
+    s.filter = e.target.value; apply(s); s.sel = { k: 0, c: s.sel.c, k2: 0, c2: s.sel.c }; body.scrollTop = 0; render(t);
+  }, 160); };
   $('[data-head]').onchange = (e) => {
     const s = cur(t); if (!s) return; commitEdit(t); s.head = e.target.checked;
     const m = store.get('sheetHead', {}) || {}; m[t.path + (s.csv ? '' : '#' + s.name)] = s.head; store.set('sheetHead', m);
@@ -1023,7 +1202,8 @@ function build(t, el) {
   body.addEventListener('mousedown', (e) => down(t, e, 'cell'));
   $('[data-hin]').addEventListener('mousedown', (e) => down(t, e, e.target.closest('[data-rz]') ? 'rz' : 'col'));
   $('[data-corner]').addEventListener('mousedown', (e) => { e.preventDefault(); selectAll(t); g.focus(); });
-  body.addEventListener('dblclick', (e) => { if (e.target.closest('[data-c]') && !e.target.closest('.sh-rn')) startEdit(t, null); });
+  // a roda sobre o cabeçalho das colunas anda para os lados
+  $('[data-hin]').parentElement.addEventListener('wheel', (e) => { const d = e.deltaX || e.deltaY; if (d) { e.preventDefault(); body.scrollLeft += d; } }, { passive: false });
   $('[data-hin]').addEventListener('dblclick', (e) => { const z = e.target.closest('[data-rz]'); if (z) autoFit(t, +z.dataset.rz); });
   g.addEventListener('contextmenu', (e) => ctxMenu(t, e));
   g.addEventListener('keydown', (e) => key(t, e));
@@ -1038,45 +1218,69 @@ const grid0 = (t) => t.el.querySelector('[data-grid]');
 async function load(t) {
   const el = t.el, msg = (m) => { el.querySelector('[data-rows]').innerHTML = `<div class="vw-msg">${m}</div>`; el.querySelector('[data-space]').style.height = '0'; };
   msg('Lendo a planilha…');
+  const id = t.sh.loading = (t.sh.loading || 0) + 1, stale = () => t.sh.loading !== id || !t.el;
+  // arquivo grande: mostra quanto já foi (baixar, ler) e deixa a IDE respirar entre os pedaços
+  const step = (what) => async (p) => { if (!stale()) msg(`${what}… ${Math.round(p * 100)}%`); await breathe(); };
   try {
     const head = await fetch(FV.url(t, '&offset=0&len=0'));
     t.size = +head.headers.get('x-file-size');
     if (t.size > MAX) return msg(`Planilha grande demais para a tabela (${FV.size(t.size)}).`);
     const r = await fetch(FV.url(t));
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-    const buf = await r.arrayBuffer();
+    const buf = await download(r, t.size, step('Baixando'));
+    if (stale()) return;
     const keep = t.sh.sheets ? t.sh.sheets[t.sh.cur] && t.sh.sheets[t.sh.cur].name : null;
-    t.sh.undo = []; t.sh.redo = []; t.sh.edit = null;
+    let sheets, book = null, info;
     if (EXT[extOf(t.path)] === 'csv') {
       const { text, enc, bom } = decode(buf);
       const d = t.sh.delim || (extOf(t.path) === 'csv' ? sniff(text) : '\t');
+      const rows = text.length > 2e6 ? await parseCSVAsync(text, d, step('Lendo')) : parseCSV(text, d);
+      if (stale()) return;
       t.sh.csvOpt = { d, enc, bom, eol: /\r\n/.test(text.slice(0, 200000)) ? '\r\n' : '\n', trail: /[\r\n]$/.test(text) };
-      t.sh.book = null;
-      t.sh.sheets = [{ name: 'CSV', data: prepare(t, { rows: parseCSV(text, d) }, { csv: true, name: 'CSV' }) }];
-      t.sh.info = `${enc} · separador ${({ ',': 'vírgula', ';': 'ponto e vírgula', '\t': 'tabulação', '|': 'barra' })[d] || JSON.stringify(d)}`;
+      sheets = [{ name: 'CSV', data: prepare(t, { rows }, { csv: true, name: 'CSV' }) }];
+      info = `${enc} · separador ${({ ',': 'vírgula', ';': 'ponto e vírgula', '\t': 'tabulação', '|': 'barra' })[d] || JSON.stringify(d)}`;
     } else {
       // arquivo vazio (criado pela IDE): pasta de trabalho nova, gravada inteira ao salvar
-      const book = buf.byteLength ? await openBook(buf) : await blankBook();
-      t.sh.book = book; t.sh.sheets = book.sheets; t.sh.info = buf.byteLength ? '' : 'nova';
+      book = buf.byteLength ? await openBook(buf, step('Lendo os textos')) : await blankBook();
+      if (stale()) return;
       if (!buf.byteLength) book.fresh = true;
-      if (!t.sh.sheets.length) return msg('A pasta de trabalho não tem planilhas.');
+      sheets = book.sheets; info = buf.byteLength ? '' : 'nova';
+      if (!sheets.length) return msg('A pasta de trabalho não tem planilhas.');
     }
+    t.sh.undo = []; t.sh.redo = []; t.sh.edit = null; t.sh.graph = null;
+    t.sh.book = book; t.sh.sheets = sheets; t.sh.info = info;
+    if (!book && sheets[0].data.hasF) recalc(t); // fórmulas de um CSV chegam sem valor
     t.sh.clean = null; setDirty(t, false);
     const i = keep ? t.sh.sheets.findIndex(s => s.name === keep) : -1;
     await pick(t, i >= 0 ? i : Math.max(0, t.sh.sheets.findIndex(s => !s.hidden)));
   } catch (e) { msg(`Não deu para ler a planilha: ${esc(e.message)}`); }
 }
-async function ensure(t, s) {
+// corpo da resposta com o progresso (só vale a pena mostrar acima de alguns MB)
+async function download(r, size, tick) {
+  if (!r.body || !(size > 8e6)) return r.arrayBuffer();
+  const parts = [], rd = r.body.getReader(); let at = 0, t0 = performance.now();
+  for (;;) {
+    const { done, value } = await rd.read(); if (done) break;
+    parts.push(value); at += value.length;
+    if (performance.now() - t0 > 100) { await tick(Math.min(1, at / size)); t0 = performance.now(); }
+  }
+  return new Blob(parts).arrayBuffer();
+}
+async function ensure(t, s, tick) {
   if (s.data) return s.data;
-  s.data = prepare(t, await s.load(), { name: s.name, book: t.sh.book, d1904: t.sh.book.d1904 });
+  s.data = prepare(t, await s.load(tick), { name: s.name, book: t.sh.book, d1904: t.sh.book.d1904 });
+  t.sh.graph = null; // fórmulas novas entram no grafo de dependências
   return s.data;
 }
 async function pick(t, i) {
   commitEdit(t);
   const s = t.sh.sheets[i]; t.sh.cur = i;
   if (!s.data) {
-    t.el.querySelector('[data-rows]').innerHTML = '<div class="vw-msg">Lendo a planilha…</div>';
-    try { await ensure(t, s); } catch (e) { t.el.querySelector('[data-rows]').innerHTML = `<div class="vw-msg">Não deu para ler "${esc(s.name)}": ${esc(e.message)}</div>`; return; }
+    const box = t.el.querySelector('[data-rows]');
+    box.innerHTML = '<div class="vw-msg">Lendo a planilha…</div>';
+    const tick = async (p) => { box.innerHTML = `<div class="vw-msg">Lendo "${esc(s.name)}"… ${Math.round(p * 100)}%</div>`; await breathe(); };
+    try { await ensure(t, s, tick); } catch (e) { t.el.querySelector('[data-rows]').innerHTML = `<div class="vw-msg">Não deu para ler "${esc(s.name)}": ${esc(e.message)}</div>`; return; }
+    if (t.sh.sheets[t.sh.cur] !== s || !t.el) return; // trocou de aba enquanto lia
   }
   tabs(t);
   const sh = s.data;
@@ -1085,6 +1289,7 @@ async function pick(t, i) {
   t.el.querySelector('[data-body]').scrollTop = 0;
   render(t);
   if (t.goLine) { const n = t.goLine; t.goLine = 0; FV.custom.sheet.goto(t, n); }
+  warmGraph(t);
 }
 function tabs(t) {
   const el = t.el.querySelector('[data-tabs]'), csv = !t.sh.book;
@@ -1253,6 +1458,11 @@ function down(t, e, where) {
   };
   set(p, e.shiftKey);
   if (e.button !== 0) return;
+  // dois cliques na mesma célula: edita. Contado aqui porque o primeiro clique redesenha a linha
+  // e o dblclick do navegador acaba caindo no contêiner, não na célula.
+  const now = Date.now(), prev = t.sh.lastDown;
+  t.sh.lastDown = mode === 'cell' && !e.shiftKey ? { k: p.k, c: p.c, at: now } : null;
+  if (prev && t.sh.lastDown && prev.k === p.k && prev.c === p.c && now - prev.at < 500) { t.sh.lastDown = null; startEdit(t, null); return; }
   // arrastar: estende a seleção (e rola a tabela perto das bordas)
   let last = null, timer = null;
   const mv = (ev) => {
@@ -1356,11 +1566,14 @@ function setDirty(t, d) {
   if (!!t.dirty === d) return;
   t.dirty = d; renderTabs(); syncUnsaved();
 }
-function touched(t, sh) {
+// cells: as células que mudaram (só o que depende delas é recalculado); sem cells, mudou a estrutura
+function touched(t, sh, cells) {
   sh.ver++; sh.changed = true;
-  if (sh.hasF) recalc(t);
+  if (t.sh.sheets.some(s => s.data && s.data.hasF)) { recalc(t, sh, cells); if (!cells) setTimeout(() => warmGraph(t), 300); }
   ensureCols(sh);
-  if (!sh.filter && !sh.sort) apply(sh); else { sh.x = [0]; for (const w of sh.w) sh.x.push(sh.x[sh.x.length - 1] + w); }
+  // a lista de linhas só muda se o número de linhas mudou (refazê-la a cada edição pesa num arquivo enorme)
+  if (!sh.filter && !sh.sort && (!cells || sh.vrows !== sh.rows.length || sh.vhead !== sh.head)) apply(sh);
+  else { sh.x = [0]; for (const w of sh.w) sh.x.push(sh.x[sh.x.length - 1] + w); }
   setDirty(t, true);
   if (typeof autoSaveSoon === 'function') autoSaveSoon();
   render(t);
@@ -1370,7 +1583,7 @@ function push(t, op) { t.sh.undo.push(op); if (t.sh.undo.length > 200) t.sh.undo
 function change(t, list, label) {
   const sh = cur(t), si = t.sh.cur; if (!list.length) return;
   const before = list.map(({ r, c }) => ({ r, c, x: cellAt(sh, r, c) }));
-  const run = (arr) => { for (const { r, c, x } of arr) put(sh, r, c, x); touched(t, sh); };
+  const run = (arr) => { for (const { r, c, x } of arr) put(sh, r, c, x); touched(t, sh, arr); };
   run(list);
   push(t, { si, label, undo: () => run(before), redo: () => run(list) });
 }
@@ -1380,7 +1593,8 @@ function structural(t, label, fn) {
   const si = t.sh.cur;
   const restore = (list) => { for (const [d, s] of list) { d.rows = s.rows.map(r => r && r.slice()); d.rowAttr = s.rowAttr.slice(); d.w = s.w.slice(); d.ncol = s.ncol; d.ops = s.ops.slice(); d.colsChanged = s.colsChanged; d.wUser = new Set(s.wUser); d.changed = true; } };
   fn();
-  const after = t.sh.sheets.filter(s => s.data).map(s => { const d = s.data; return [d, { rows: d.rows.map(r => r && r.slice()), rowAttr: d.rowAttr.slice(), w: d.w.slice(), ncol: d.ncol, ops: d.ops.slice(), colsChanged: d.colsChanged, wUser: new Set(d.wUser || []) }]; });
+  for (const s of t.sh.sheets) if (s.data) { s.data.txt = null; s.data.warm = false; } // linhas e colunas mudaram de lugar: busca refaz o índice
+  const after =t.sh.sheets.filter(s => s.data).map(s => { const d = s.data; return [d, { rows: d.rows.map(r => r && r.slice()), rowAttr: d.rowAttr.slice(), w: d.w.slice(), ncol: d.ncol, ops: d.ops.slice(), colsChanged: d.colsChanged, wUser: new Set(d.wUser || []) }]; });
   for (const s of t.sh.sheets) if (s.data && s.data !== cur(t)) { s.data.ver++; }
   touched(t, cur(t));
   push(t, { si, label, undo: () => { restore(snap); touched(t, cur(t)); }, redo: () => { restore(after); touched(t, cur(t)); } });
@@ -1781,8 +1995,8 @@ function styleWriter(book, doc) {
     text() { if (!changed) return null; for (const b of [fonts, fills, borders, xfs]) b.setAttribute('count', b.children.length); return ser(doc); },
   };
 }
-function cellXml(x, r, c, st) {
-  const ref = colName(c) + (r + 1);
+function cellXml(x, r, c, st, col) {
+  const ref = (col || colName(c)) + (r + 1);
   if (typeof x === 'string') x = { v: x };
   const si = x.s ? st.idx(x.s) : 0, sa = si ? ` s="${si}"` : '';
   const v = x.v;
@@ -1812,6 +2026,9 @@ function shiftRefs(list, op) {
   }).filter(Boolean).join(' ');
 }
 function writeSheet(text, sh, st) {
+  // as linhas antigas (quase todo o arquivo) saem antes do DOM: só o resto (colunas, mesclas...) é lido como XML
+  const sm = /<((?:[\w.-]+:)?sheetData)\b[^>]*?(\/?)>/.exec(text);
+  if (sm && !sm[2]) { const e = text.lastIndexOf(`</${sm[1]}>`); if (e > sm.index) text = text.slice(0, sm.index + sm[0].length) + text.slice(e); }
   const doc = xml(text), root = doc.documentElement, el = (n) => mk(doc, n);
   const sd = tags(doc, 'sheetData')[0]; while (sd.firstChild) sd.removeChild(sd.firstChild);
   // dimensão
@@ -1847,11 +2064,11 @@ function writeSheet(text, sh, st) {
   for (const e of tags(doc, 'selection')) e.removeAttribute('activeCell');
   for (const name of ['mergeCells', 'conditionalFormatting', 'dataValidations', 'hyperlinks']) for (const e of [...tags(doc, name)]) if (!e.children.length && e.parentNode) e.parentNode.removeChild(e);
   for (const name of ['mergeCells', 'dataValidations']) for (const e of tags(doc, name)) e.setAttribute('count', e.children.length);
-  const parts = [], n = Math.max(sh.rows.length, sh.rowAttr.length);
+  const parts = [], n = Math.max(sh.rows.length, sh.rowAttr.length), names = [];
   for (let r = 0; r < n; r++) {
     const row = sh.rows[r], ra = sh.rowAttr[r];
     let cells = '';
-    if (row) for (let c = 0; c < row.length; c++) { const x = row[c]; if (x != null) cells += cellXml(x, r, c, st); }
+    if (row) for (let c = 0; c < row.length; c++) { const x = row[c]; if (x != null) cells += cellXml(x, r, c, st, names[c] || (names[c] = colName(c))); }
     if (!cells && !ra) continue;
     parts.push(`<row r="${r + 1}"${ra ? ra.map(([k, v]) => ` ${k}="${xesc(v)}"`).join('') : ''}>${cells}</row>`);
   }
