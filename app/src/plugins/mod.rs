@@ -8,6 +8,9 @@
 //!   style.css    opcional: injetado na página junto com o ui.js
 //!   server.exe   opcional: servidor do plugin, um programa à parte (veja `external` e o SDK). O BlueScreen o inicia
 //!                quando o plugin está ligado e encaminha as rotas dele; desligar o plugin encerra o processo.
+//!                Também vale um script (server.js, server.py, server.ps1) ou o campo `server` do plugin.json.
+//! Cada plugin tem uma pasta de dados em ~/.bluescreen/plugin-data/<id> (atributos, segredos, configurações e
+//! arquivos; veja `data`), e o núcleo oferece a eles rodar programas e fazer HTTP sem servidor próprio (`services`).
 //! Nenhum plugin é compilado no núcleo: trocar ou remover um plugin nunca exige recompilar o BlueScreen.
 //! A pasta do usuário ganha da pasta do app.
 use crate::util::*;
@@ -18,8 +21,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub mod data;
 mod external;
 pub mod remote;
+pub mod services;
+pub mod vault;
 pub use bluescreen_sdk::plugin::{Reply, Req, RouteFn, ok, path_str, project_of, route_fn};
 
 #[derive(Serialize, Clone, Default)]
@@ -35,6 +41,13 @@ pub struct Manifest {
     pub hooks: BTreeMap<String, String>,
     /// ícone como data: URI (bluescreen_sdk::store::icon_uri); sem ele, a página desenha um padrão
     pub icon: Option<String>,
+    /// configurações que o usuário preenche na aba Plugins: [{ key, label, type, default, options, help }]
+    pub settings: Value,
+    /// segredos do cofre que o plugin pede: [{ key, label, why, hosts, programs, reveal }]
+    pub vault: Value,
+    /// servidor: um arquivo da pasta ou { command, args } (sem o campo, server.exe/js/py/ps1)
+    #[serde(skip)]
+    pub server: Value,
 }
 #[derive(Serialize, Clone)]
 pub struct PluginStatus {
@@ -59,6 +72,10 @@ pub struct PluginStatus {
     /// está na pasta do usuário (~/.bluescreen/plugins), que é onde os servidores de plugins instalam
     pub user: bool,
     pub icon: Option<String>,
+    pub settings: Value,
+    /// ~/.bluescreen/plugin-data/<id>
+    pub data_dir: String,
+    pub vault: Value,
 }
 
 #[derive(Default)]
@@ -101,6 +118,9 @@ fn norm_manifest(m: &Value, fallback: &str) -> anyhow::Result<Manifest> {
         requires: m["requires"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(),
         author: m["author"].as_str().unwrap_or("").into(),
         hooks: m["hooks"].as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|r| (k.clone(), r.trim_start_matches('/').trim_start_matches("api/").to_string()))).collect()).unwrap_or_default(),
+        settings: m["settings"].as_array().map(|a| Value::Array(a.iter().filter(|f| f["key"].as_str().is_some_and(|k| !k.is_empty())).cloned().collect())).unwrap_or(json!([])),
+        vault: m["vault"].as_array().map(|a| Value::Array(a.iter().filter(|f| f["key"].as_str().is_some_and(|k| !k.is_empty())).cloned().collect())).unwrap_or(json!([])),
+        server: m["server"].clone(),
         id,
         icon: None,
     })
@@ -157,12 +177,13 @@ impl Host {
         for e in entries {
             let m = e.manifest.clone();
             if skip == Some(m.id.as_str()) { continue; }
-            let exe = external::server_exe(&e.path, &m.id);
+            let exe = external::server_cmd(&e.path, &m.id, &m.server);
             let mut st = PluginStatus {
                 id: m.id.clone(), name: m.name.clone(), version: m.version.clone(), description: m.description.clone(), author: m.author.clone(),
                 kind: if exe.is_some() { "process" } else { "ui" }, path: e.path.to_string_lossy().into(), enabled: !off.contains(&m.id),
                 error: None, ui: false, server: exe.is_some(), order: m.order, requires: m.requires.clone(), routes: vec![], hooks: m.hooks.clone(),
                 origin: read_json(&e.path.join(".origin.json")), user: e.rank == 1, icon: m.icon.clone(),
+                settings: m.settings.clone(), data_dir: data::dir(&m.id).to_string_lossy().into(), vault: m.vault.clone(),
             };
             if exe.is_some() && LIGHT.load(std::sync::atomic::Ordering::Relaxed) { st.enabled = false; }
             if !st.enabled { reg.list.push(st); continue; }
@@ -174,8 +195,8 @@ impl Host {
                 reg.list.push(st); continue;
             }
             // servidor próprio: inicia o programa e encaminha as rotas que ele anunciar
-            if let Some(exe) = &exe {
-                match external::start(&m.id, &e.path, exe) {
+            if let Some(launch) = &exe {
+                match external::start(&m.id, &e.path, launch) {
                     Ok(run) => {
                         for r in &run.routes { reg.routes.insert(r.clone(), external::proxy(m.id.clone(), run.port, r.clone())); }
                         st.routes = run.routes.clone();
@@ -197,6 +218,8 @@ impl Host {
             reg.list.push(st);
         }
         *self.current.write() = Arc::new(reg);
+        // processos abertos por plugins que foram desligados (plugin/proc) saem junto
+        services::reap(&active);
     }
     /// Plugins ativos inscritos num ponto de extensão: (id do plugin, rota).
     pub fn hooks(&self, name: &str) -> Vec<(String, String)> {

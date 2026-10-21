@@ -1,4 +1,6 @@
-//! Plugins com servidor próprio: um programa (`server.exe`) na pasta do plugin.
+//! Plugins com servidor próprio: um programa na pasta do plugin. Pode ser um `server.exe` compilado ou um script
+//! (`server.js`, `server.py`, `server.ps1`) que roda com o Node, o Python ou o PowerShell achados pela IDE; o campo
+//! `server` do plugin.json escolhe outro arquivo ou um comando inteiro.
 //! O núcleo inicia o programa, espera o aviso `BLUESCREEN-READY {"port":..,"routes":[..]}` na saída padrão e
 //! encaminha cada /api/<rota> do plugin para ele. Desligar o plugin (ou recarregar) encerra o processo.
 use super::{Reply, RouteFn, route_fn};
@@ -15,26 +17,89 @@ use std::sync::mpsc;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-pub struct Running { pub child: Child, pub port: u16, pub routes: Vec<String> }
+pub struct Running { pub child: Child, pub port: u16, pub routes: Vec<String>, token: String }
 impl Drop for Running {
-    fn drop(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); }
+    fn drop(&mut self) { TOKENS.lock().remove(&self.token); let _ = self.child.kill(); let _ = self.child.wait(); }
 }
 
-/// Executável do plugin: `server.exe` na pasta; em desenvolvimento, o binário `bluescreen-<id>` do cargo.
-pub fn server_exe(dir: &Path, id: &str) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "server.exe" } else { "server" };
-    let p = dir.join(name);
-    if p.is_file() { return Some(p); }
+/// Token próprio de cada processo de plugin (BLUESCREEN_PLUGIN_TOKEN) -> id do plugin. O BLUESCREEN_TOKEN é o mesmo
+/// para todos; este identifica quem chama (o cofre só entrega valores assim).
+static TOKENS: LazyLock<parking_lot::Mutex<std::collections::HashMap<String, String>>> = LazyLock::new(Default::default);
+pub fn token_owner(tok: &str) -> Option<String> { TOKENS.lock().get(tok).cloned() }
+
+/// Como iniciar o servidor do plugin: o programa (ou o motivo de não dar para iniciar) e os argumentos.
+pub struct Launch { pub program: Result<PathBuf, String>, pub args: Vec<String> }
+
+/// Runtime de um script pela extensão: (programas, do preferido ao último; argumentos antes do script; nome)
+fn runtime(ext: &str) -> Option<(&'static [&'static str], &'static [&'static str], &'static str)> {
+    Some(match ext {
+        "js" | "mjs" | "cjs" => (&["node"], &[], "Node.js"),
+        // -u: sem buffer na saída, para o aviso BLUESCREEN-READY chegar na hora
+        "py" => (&["python", "python3", "py"], &["-u"], "Python"),
+        "ps1" => (&["pwsh", "powershell"], &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"], "PowerShell"),
+        _ => return None,
+    })
+}
+fn script(dir: &Path, rel: &str) -> Launch {
+    let ext = Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let file = dir.join(rel);
+    if ext == "exe" || ext.is_empty() { return Launch { program: Ok(file), args: vec![] }; }
+    let Some((progs, pre, name)) = runtime(&ext) else {
+        return Launch { program: Err(format!("não sei rodar o servidor {rel} (use .exe, .js, .py ou .ps1, ou um comando no campo server)")), args: vec![] };
+    };
+    let program = progs.iter().find_map(|p| crate::build::detect::which(p)).ok_or_else(|| format!("o servidor do plugin ({rel}) precisa do {name}: instale na janela SDKs ou adicione ao PATH"));
+    Launch { program, args: pre.iter().map(|s| s.to_string()).chain(std::iter::once(file.to_string_lossy().into_owned())).collect() }
+}
+/// Servidor do plugin, se tiver: o campo `server` do plugin.json (um arquivo da pasta, ou `{ command, args }`); sem
+/// ele, `server.exe`, `server.js`, `server.mjs`, `server.py` ou `server.ps1` da pasta; em desenvolvimento, o binário
+/// `bluescreen-<id>` do cargo.
+pub fn server_cmd(dir: &Path, id: &str, decl: &Value) -> Option<Launch> {
+    if let Some(rel) = decl.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+        let rel = rel.replace('\\', "/");
+        if !bluescreen_sdk::store::safe_rel(&rel) { return Some(Launch { program: Err(format!("server inválido no plugin.json: {rel}")), args: vec![] }); }
+        if !dir.join(&rel).is_file() { return Some(Launch { program: Err(format!("o servidor {rel} não está na pasta do plugin")), args: vec![] }); }
+        return Some(script(dir, &rel));
+    }
+    if let Some(cmd) = decl["command"].as_str().filter(|s| !s.is_empty()) {
+        let args = decl["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+        // um programa da própria pasta (bin/srv.exe) ou um da busca da IDE (node, java, dotnet...)
+        let local = dir.join(cmd);
+        let program = if local.is_file() { Ok(local) } else { crate::build::detect::which(cmd).ok_or_else(|| format!("{cmd} não encontrado (servidor do plugin): instale ou adicione ao PATH")) };
+        return Some(Launch { program, args });
+    }
+    let exe = if cfg!(windows) { "server.exe" } else { "server" };
+    if let Some(f) = [exe, "server.js", "server.mjs", "server.py", "server.ps1"].into_iter().find(|f| dir.join(f).is_file()) { return Some(script(dir, f)); }
     let bin = format!("bluescreen-{id}{}", if cfg!(windows) { ".exe" } else { "" });
     ["release", "debug"].iter().map(|prof| app_dir().join("target").join(prof).join(&bin)).filter(|p| p.is_file())
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
+        .map(|p| Launch { program: Ok(p), args: vec![] })
+}
+
+/// Bibliotecas de apoio dos servidores em script (Node e Python), gravadas em ~/.bluescreen/sdk e passadas aos
+/// plugins em BLUESCREEN_SDK: `require(process.env.BLUESCREEN_SDK + "/bluescreen.js")`.
+pub fn sdk_dir() -> PathBuf {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    let d = user_dir().join("sdk");
+    DONE.call_once(|| {
+        let _ = std::fs::create_dir_all(&d);
+        for (name, text) in [("bluescreen.js", include_str!("../../sdk/scripts/bluescreen.js")), ("bluescreen_plugin.py", include_str!("../../sdk/scripts/bluescreen_plugin.py"))] {
+            let f = d.join(name);
+            if std::fs::read_to_string(&f).ok().as_deref() != Some(text) { let _ = write_atomic(&f, text); }
+        }
+    });
+    d
 }
 
 /// Inicia o programa do plugin e espera ele avisar a porta (até 15 s).
-pub fn start(id: &str, dir: &Path, exe: &Path) -> anyhow::Result<Running> {
+pub fn start(id: &str, dir: &Path, launch: &Launch) -> anyhow::Result<Running> {
+    let exe = launch.program.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
     let (url, token) = (bluescreen_sdk::plugin::core().url.clone(), bluescreen_sdk::plugin::core().token().to_string());
+    let own: String = (0..48).map(|_| format!("{:x}", rand::random_range(0..16u8))).collect();
+    let data = super::data::dir(id);
+    let _ = std::fs::create_dir_all(&data);
     let mut cmd = Command::new(exe);
-    cmd.current_dir(dir).env("BLUESCREEN_URL", url).env("BLUESCREEN_TOKEN", token).env("BLUESCREEN_PLUGIN", id).env("BLUESCREEN_PLUGIN_DIR", dir)
+    cmd.args(&launch.args).current_dir(dir).env("BLUESCREEN_URL", url).env("BLUESCREEN_TOKEN", token).env("BLUESCREEN_PLUGIN", id).env("BLUESCREEN_PLUGIN_DIR", dir)
+        .env("BLUESCREEN_PLUGIN_DATA", &data).env("BLUESCREEN_SDK", sdk_dir()).env("BLUESCREEN_PLUGIN_TOKEN", &own).env("PYTHONIOENCODING", "utf-8")
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -62,7 +127,8 @@ pub fn start(id: &str, dir: &Path, exe: &Path) -> anyhow::Result<Running> {
             let port = v["port"].as_u64().unwrap_or(0) as u16;
             if port == 0 { let _ = child.kill(); anyhow::bail!("o servidor do plugin não informou a porta"); }
             let routes = v["routes"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-            Ok(Running { child, port, routes })
+            TOKENS.lock().insert(own.clone(), id.to_string());
+            Ok(Running { child, port, routes, token: own })
         }
         Err(_) => {
             let code = child.try_wait().ok().flatten().map(|s| format!(" (saiu com código {})", s.code().unwrap_or(-1))).unwrap_or_default();
@@ -105,7 +171,7 @@ pub fn copy_headers(from: &reqwest::header::HeaderMap, to: &mut Response) {
 
 /// Windows: os processos dos plugins ficam num Job Object que morre junto com o BlueScreen (mesmo se ele travar).
 #[cfg(windows)]
-mod job {
+pub mod job {
     use std::os::windows::io::AsRawHandle;
     use std::sync::LazyLock;
     use windows_sys::Win32::System::JobObjects::*;
@@ -119,7 +185,8 @@ mod job {
         SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info as *const _ as _, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
         Job(h as isize)
     });
-    pub fn assign(child: &std::process::Child) { unsafe { AssignProcessToJobObject(JOB.0 as _, child.as_raw_handle() as _); } }
+    pub fn assign(child: &std::process::Child) { assign_raw(child.as_raw_handle()); }
+    pub fn assign_raw(h: std::os::windows::io::RawHandle) { unsafe { AssignProcessToJobObject(JOB.0 as _, h as _); } }
 }
 #[cfg(not(windows))]
-mod job { pub fn assign(_: &std::process::Child) {} }
+pub mod job { pub fn assign(_: &std::process::Child) {} }

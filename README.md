@@ -108,13 +108,15 @@ Cada push na `main` que mexe no app gera um Release `vX.Y.Z`. `X.Y` vem do `app/
 
 ## Plugins
 
-Um plugin é uma pasta em `app/plugins/<id>` ou `~/.bluescreen/plugins/<id>` com `plugin.json`, `ui.js` e, se precisar, um servidor próprio em qualquer linguagem. Liga e desliga em `Alt+7`. Guia: [docs/PLUGINS.md](docs/PLUGINS.md).
+Um plugin é uma pasta em `app/plugins/<id>` ou `~/.bluescreen/plugins/<id>` com `plugin.json`, `ui.js` e, se precisar, um servidor próprio (um script Node.js, Python ou PowerShell, ou um programa em qualquer linguagem). Liga e desliga em `Alt+7`. Cada plugin tem uma pasta de dados própria, configurações declaradas no `plugin.json` e acesso a rodar programas e fazer HTTP pelo núcleo. Guia: [docs/PLUGINS.md](docs/PLUGINS.md).
+
+**Cofre:** tokens (GitHub, OpenAI, Jira...) que você guarda uma vez em **Plugins › Cofre** e libera para os plugins que quiser. Ficam cifrados neste PC, e os plugins usam sem ver o valor, só nos sites e programas que você liberar. Cada liberação pede confirmação numa caixa do Windows. Detalhes: [docs/PLUGINS.md#cofre](docs/PLUGINS.md#cofre).
 
 Para distribuir plugins numa equipe, rode o [servidor de plugins](app/plugin-server/README.md) e adicione o endereço em **Plugins › Servidores de plugins**.
 
 ## Configurações
 
-Em `~/.bluescreen/`: `tools.json` (ferramentas próprias), `plugins.json` (plugins ligados e servidores), `plugins/` (seus plugins) e `bluescreen.log`.
+Em `~/.bluescreen/`: `tools.json` (ferramentas próprias), `plugins.json` (plugins ligados e servidores), `plugins/` (seus plugins), `plugin-data/` (dados de cada plugin), `vault.json` (o cofre, cifrado), `sdk/` (bibliotecas de apoio dos servidores em script) e `bluescreen.log`.
 
 ## Licença
 

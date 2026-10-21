@@ -16,7 +16,7 @@ pub struct Entry {
     /// nome para executar: classe da JVM (pacote.Classe$Interna), classe do .NET, módulo do Clojure; vazio = o arquivo
     #[serde(skip_serializing_if = "String::is_empty")]
     pub target: String,
-    /// Java: main de instância (Java 21+ com preview, padrão no 25)
+    /// Java: main de instância ou fora de classe (classe implícita): Java 21+ com preview, padrão no 25
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub instance: bool,
 }
@@ -151,8 +151,10 @@ pub fn find(lang: &str, file: &str, src: &str) -> Vec<Entry> {
                 // main de instância (Java 25 / JEP 512): sem static, mas não privado
                 if !is_static && (mods.contains("private") || lang == "groovy") { return; }
                 let (bin, shown) = jvm_name(stack);
-                let (bin, shown) = if bin.is_empty() { (stem(&name).to_string(), stem(&name).to_string()) } else { (bin, shown) };
-                out.push(Entry { line: n, label: format!("{shown}.main()"), target: join(&pkg, &bin), instance: !is_static });
+                // fora de qualquer classe é a classe implícita do arquivo (Java 21+, JEP 512), mesmo com static
+                let implicit = bin.is_empty();
+                let (bin, shown) = if implicit { (stem(&name).to_string(), stem(&name).to_string()) } else { (bin, shown) };
+                out.push(Entry { line: n, label: format!("{shown}.main()"), target: join(&pkg, &bin), instance: !is_static || implicit });
             });
             if lang == "groovy" && out.is_empty() && !re!(r"(?m)^\s*(?:abstract\s+|final\s+|public\s+)*(?:class|interface|trait|enum)\b").is_match(&cl) {
                 // script Groovy: roda o arquivo inteiro, a partir da primeira linha de código
@@ -290,6 +292,12 @@ mod tests {
         // Java 25: classe implícita e main de instância
         let e = find("java", "Hello.java", "void main() {\n  IO.println(\"oi\");\n}\n");
         assert_eq!(e, vec![Entry { line: 1, label: "Hello.main()".into(), target: "Hello".into(), instance: true }]);
+        // static, mas fora de classe: também é a classe implícita (não compila no Java 8)
+        let e = find("java", "Main.java", "public static void main(String[] args) {
+    System.out.println(\"Teste\");
+}
+");
+        assert_eq!(e, vec![Entry { line: 1, label: "Main.main()".into(), target: "Main".into(), instance: true }]);
         // método main que não é ponto de entrada
         assert!(find("java", "A.java", "class A { private void main() {} int main(int x) { return x; } }").is_empty());
     }

@@ -446,6 +446,7 @@ const I = {
   shield: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>',
   ext: '<svg class="i" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   plug: '<svg class="i" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></svg>',
+  gear: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
   changes: '<svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-6 4H8.5"/></svg>',
   problems: '<svg class="i" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></svg>',
 };
@@ -1872,13 +1873,154 @@ const BS = window.BS = {
       }
       for (const p of BS.plugins.list) {
         const fn = BS.plugins.defs.get(p.id); if (!fn || !p.enabled || p.error) continue;
+        Object.assign(p, pluginApi(p.id));
         try { fn(BS, p); p.loaded = true; } catch (e) { p.error = 'interface: ' + e.message; console.error('plugin ' + p.id, e); }
       }
     },
   },
 };
 BS.define = BS.plugins.define;
-BS.doc = DOC; // janela de documento: os módulos deixam de lado o que é só da IDE (atualização, servidores, dependências)
+BS.doc = DOC;
+
+// ----- o que cada plugin recebe em `plugin` (e em BS.plugin(id)): pasta de dados e serviços do núcleo -----
+// Sem servidor próprio, um plugin guarda atributos (data), tokens cifrados (secrets), configurações declaradas no
+// plugin.json (settings), arquivos (files), roda programas (exec/spawn) e faz HTTP de qualquer lugar (fetch).
+// Tudo fica em ~/.bluescreen/plugin-data/<id>, que sobrevive a atualizar e reinstalar o plugin.
+function pluginApi(id) {
+  const q = (extra) => ({ plugin: id, ...extra });
+  const post = (path, body, extra) => api(path, q(extra), { method: 'POST', body: JSON.stringify(body || {}) });
+  const fileUrl = (path) => '/api/plugin/files?plugin=' + encodeURIComponent(id) + '&path=' + encodeURIComponent(path);
+  const data = {
+    get: async (key, def) => { const v = (await api('plugin/data', q({ key }))).value; return v == null ? def : v; },
+    all: async () => (await api('plugin/data', q())).values,
+    set: (key, value) => post('plugin/data', { key, value: value === undefined ? null : value }),
+    merge: (values) => post('plugin/data', { values }),
+    remove: (key) => post('plugin/data', { key, value: null }),
+    clear: () => post('plugin/data', { clear: true }),
+  };
+  const secrets = {
+    get: async (key) => (await api('plugin/secrets', q({ key }))).value,
+    set: (key, value) => post('plugin/secrets', { key, value: value == null || value === '' ? null : String(value) }),
+    remove: (key) => post('plugin/secrets', { key, value: null }),
+    keys: async () => (await api('plugin/secrets', q())).keys,
+    has: async (key) => (await api('plugin/secrets', q())).keys.includes(key),
+  };
+  const settings = {
+    // valores das configurações (com os padrões do plugin.json); os campos secretos ficam em secrets.get(key)
+    get: async (key) => { const v = (await api('plugin/settings', q())).values; return key ? v[key] : v; },
+    set: async (values) => { const r = await post('plugin/settings', { values }); BS.hooks.run('plugin:settings:' + id, r.values); return r.values; },
+    open: () => pluginSettings(id),
+    onChange: (fn) => BS.hooks.on('plugin:settings:' + id, fn),
+  };
+  const files = {
+    // as: 'text' (padrão), 'json', 'blob' ou 'arrayBuffer'
+    async read(path, as = 'text') {
+      const r = await fetch(fileUrl(path)); if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+      return as === 'json' ? r.json() : as === 'blob' ? r.blob() : as === 'arrayBuffer' ? r.arrayBuffer() : r.text();
+    },
+    async write(path, content) {
+      const body = typeof content === 'string' || content instanceof Blob || content instanceof ArrayBuffer || ArrayBuffer.isView(content) ? content : JSON.stringify(content, null, 2);
+      return api('plugin/files', q({ path }), { method: 'POST', body });
+    },
+    list: async (path = '') => (await api('plugin/files', q({ path, list: 1 }))).entries,
+    remove: (path) => post('plugin/files', {}, { path, delete: 1 }),
+    exists: async (path) => { const parts = path.replace(/\\/g, '/').split('/'); const name = parts.pop(); try { return (await files.list(parts.join('/'))).some(e => e.name === name); } catch { return false; } },
+    url: fileUrl,
+  };
+  // rodar um programa e esperar: exec('git', ['status'], { cwd, env, stdin, timeout }) -> { ok, code, out, err }
+  const exec = (program, args = [], opt = {}) => post('plugin/exec', { program, args, ...opt });
+  // processo longo: spawn('npm', ['run', 'dev'], { cwd, onData(texto, 'out'|'err'), onExit(code) }) devolve
+  // { id, write(texto), close(), kill(), done } (done: Promise com o código de saída)
+  function spawn(program, args = [], opt = {}) { return post('plugin/proc', { action: 'start', program, args, cwd: opt.cwd, env: opt.env, label: opt.label }).then(r => follow(r.id, opt)); }
+  function follow(pid, opt = {}) {
+    let stop = false;
+    const h = {
+      id: pid,
+      write: (text) => post('plugin/proc', { action: 'input', id: pid, text }),
+      close: () => post('plugin/proc', { action: 'input', id: pid, text: '', close: true }),
+      kill: () => post('plugin/proc', { action: 'kill', id: pid }),
+      detach: () => { stop = true; },
+    };
+    h.done = (async () => {
+      let since = 0;
+      for (;;) {
+        if (stop) return null;
+        let r;
+        try { r = await fetch('/api/plugin/proc?' + new URLSearchParams({ plugin: id, id: pid, since, wait: 25000 })).then(x => x.json()); }
+        catch { await new Promise(ok => setTimeout(ok, 1000)); continue; }
+        if (r.error) throw new Error(r.error);
+        for (const c of r.chunks || []) { try { opt.onData && opt.onData(c.t, c.s); } catch (e) { console.error(e); } }
+        since = r.next;
+        if (r.done) { try { opt.onExit && opt.onExit(r.code); } catch (e) { console.error(e); } return r.code; }
+      }
+    })();
+    return h;
+  }
+  const procs = {
+    // os processos do plugin que ainda existem (inclusive os que a página perdeu ao recarregar)
+    list: async () => (await api('plugin/proc', q({ list: 1 }))).procs,
+    attach: (pid, opt) => follow(pid, opt),
+  };
+  // HTTP sem CORS: fetch(url, { method, headers, body | json, as: 'base64', timeout }); `{{secret:nome}}` em url,
+  // headers e corpo é trocado pelo segredo no núcleo. Devolve { status, ok, headers, body, json(), bodyBase64 }
+  async function http(url, opt = {}) {
+    const r = await post('plugin/fetch', { url, ...opt, json: opt.json === undefined ? undefined : opt.json });
+    r.text = () => r.body || ''; r.json = () => JSON.parse(r.body || 'null');
+    return r;
+  }
+  // cofre da IDE: o plugin usa {{vault:nome}} no fetch (só nos sites liberados) e nunca vê o valor
+  const vault = {
+    status: async () => (await api('vault/status', q())).items,
+    has: async (key) => (await api('vault/status', q())).items.some(i => i.key === key && i.exists && i.granted),
+    // abre o Cofre no pedido deste plugin (criar o segredo ou liberar)
+    request: (key) => BS.vault ? BS.vault.open({ plugin: id, key }) : toast('Cofre indisponível'),
+  };
+  const info = () => api('plugin/info', q());
+  const wipe = () => post('plugin/info', { wipe: true });
+  return { data, secrets, settings, files, exec, spawn, procs, fetch: http, vault, info, wipe };
+}
+BS.plugin = (id) => { const p = BS.plugins.list.find(x => x.id === id) || { id }; return Object.assign({}, p, pluginApi(id)); };
+
+// configurações que o plugin declara no plugin.json: um formulário na aba Plugins, sem o plugin desenhar nada
+async function pluginSettings(id) {
+  const p = BS.plugins.list.find(x => x.id === id) || { id, name: id };
+  let cur; try { cur = await api('plugin/settings', { plugin: id }); } catch (e) { return toast(e.message); }
+  const fields = cur.schema || [];
+  if (!fields.length) return toast(`${p.name} não tem configurações`);
+  const secret = (f) => f.type === 'secret' || f.type === 'password';
+  const field = (f, i) => {
+    const v = cur.values[f.key], nm = `name="f${i}"`, help = f.help ? `<small class="pl-help">${esc(f.help)}</small>` : '';
+    const label = esc(f.label || f.key);
+    if (f.type === 'bool' || f.type === 'boolean') return `<label class="fld pl-chk"><span><input type="checkbox" ${nm} ${v ? 'checked' : ''}> ${label}</span>${help}</label>`;
+    if (f.type === 'select') return `<label class="fld">${label}<select ${nm}>${(f.options || []).map(o => { const ov = typeof o === 'object' ? o.value : o, ol = typeof o === 'object' ? (o.label ?? o.value) : o; return `<option value="${esc(ov)}" ${String(ov) === String(v) ? 'selected' : ''}>${esc(ol)}</option>`; }).join('')}</select>${help}</label>`;
+    if (f.type === 'textarea') return `<label class="fld">${label}<textarea ${nm} rows="4" spellcheck="false" placeholder="${esc(f.placeholder || '')}">${esc(v ?? '')}</textarea>${help}</label>`;
+    if (secret(f)) {
+      const set = cur.secretSet && cur.secretSet[f.key];
+      return `<label class="fld">${label}<span class="line"><input type="password" ${nm} autocomplete="off" spellcheck="false" placeholder="${set ? '•••••••• (guardado; deixe vazio para manter)' : esc(f.placeholder || '')}">${set ? `<button type="button" class="chip" data-clear="${i}">Apagar</button>` : ''}</span>${help}</label>`;
+    }
+    return `<label class="fld">${label}<input type="${f.type === 'number' ? 'number' : 'text'}" ${nm} spellcheck="false" autocomplete="off" value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}">${help}</label>`;
+  };
+  dialog('plSet', `<div class="dlg-hd">${plugIcon(p, 'dlg-ic')}<div><h3>${esc(p.name)}</h3><p>Configurações do plugin. Tokens e senhas ficam cifrados neste PC.</p></div></div>
+    <form id="plSetF" class="pl-form">${fields.map(field).join('')}</form>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip primary" id="plSetOk">Salvar</button></div>`, (el) => {
+    const form = el.querySelector('#plSetF'), cleared = new Set();
+    el.querySelectorAll('[data-clear]').forEach(b => b.onclick = () => { cleared.add(+b.dataset.clear); const inp = form.elements['f' + b.dataset.clear]; inp.placeholder = 'será apagado ao salvar'; inp.value = ''; b.remove(); });
+    const go = async () => {
+      const values = {};
+      fields.forEach((f, i) => {
+        const inp = form.elements['f' + i]; if (!inp) return;
+        if (secret(f)) { if (inp.value) values[f.key] = inp.value; else if (cleared.has(i)) values[f.key] = null; return; }
+        values[f.key] = f.type === 'bool' || f.type === 'boolean' ? inp.checked : f.type === 'number' ? (inp.value === '' ? null : Number(inp.value)) : inp.value;
+      });
+      try { const r = await api('plugin/settings', { plugin: id }, { method: 'POST', body: JSON.stringify({ values }) }); el.hidden = true; toast('Configurações salvas', 'ok'); BS.hooks.run('plugin:settings:' + id, r.values); }
+      catch (e) { toast(e.message); }
+    };
+    el.querySelector('#plSetOk').onclick = go;
+    form.onsubmit = (e) => { e.preventDefault(); go(); };
+    form.querySelector('input,select,textarea')?.focus();
+  });
+}
+BS.pluginSettings = pluginSettings; // janela de documento: os módulos deixam de lado o que é só da IDE (atualização, servidores, dependências)
 
 // abre outro projeto/pasta (ex.: a raiz do checkout) e vai ao arquivo e linha; não espera o Git/SVN da pasta nova
 async function openOutside(root, rel, line) {
@@ -1899,8 +2041,9 @@ BS.tools.register({ id: 'plugins', title: 'Plugins', icon: I.plug, key: 'Alt+7',
 function renderPlugins() {
   const body = $('#toolBody'); const list = BS.plugins.list;
   $('#toolSub').textContent = `${list.filter(p => p.enabled && !p.error).length} de ${list.length}`;
-  $('#toolActions').innerHTML = `<button class="icon-btn" id="plDir" title="Abrir a pasta dos seus plugins">${I.explorer}</button><button class="icon-btn" id="plReload" title="Recarregar plugins">${I.refresh}</button>`;
+  $('#toolActions').innerHTML = `${BS.vault ? `<button class="icon-btn" id="plVault" title="Cofre: tokens dos plugins">${VAULT_ICON}</button>` : ''}<button class="icon-btn" id="plDir" title="Abrir a pasta dos seus plugins">${I.explorer}</button><button class="icon-btn" id="plReload" title="Recarregar plugins">${I.refresh}</button>`;
   $('#plReload').onclick = () => pluginsPost({ reload: true });
+  if (BS.vault) { $('#plVault').onclick = () => BS.vault.open(); BS.vault.refresh().catch(() => {}); }
   $('#plDir').onclick = () => reveal(BS.plugins.dirs[1] || BS.plugins.dirs[0]);
   // um cartão por plugin: ícone, nome, descrição (duas linhas; "mais" abre o resto) e o interruptor à direita
   body.innerHTML = list.length ? `<div class="plugs">${list.map(p => `<div class="plug ${p.enabled ? '' : 'off'} ${p.error ? 'bad' : ''}" data-id="${esc(p.id)}">
@@ -1909,13 +2052,18 @@ function renderPlugins() {
         ${p.description ? `<div class="ds">${esc(p.description)}</div><button class="pl-more" hidden>mais</button>` : ''}
         ${p.requires && p.requires.length ? `<div class="pl-req">Precisa de: ${p.requires.map(esc).join(', ')}</div>` : ''}
         ${p.error ? `<div class="er">${esc(p.error)}</div>` : ''}</div>
-      <button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>';
+      <div class="pl-side">${p.settings && p.settings.length ? `<button class="icon-btn pl-cfg" title="Configurações de ${esc(p.name)}">${I.gear}</button>` : ''}<button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>';
   body.querySelectorAll('.plug').forEach(el => {
     const p = list.find(x => x.id === el.dataset.id), sw = el.querySelector('.sw2');
     sw.onclick = () => { if (sw.disabled) return; sw.disabled = true; sw.classList.toggle('on'); sw.classList.add('busy'); sw.setAttribute('aria-checked', String(!p.enabled)); setTimeout(() => pluginsPost({ id: p.id, enabled: !p.enabled }), 180); };
+    const cfg = el.querySelector('.pl-cfg'); if (cfg) cfg.onclick = () => pluginSettings(p.id);
     const more = el.querySelector('.pl-more');
     if (more) more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'menos' : 'mais'; };
-    el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
+    el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) },
+      ...(p.settings && p.settings.length ? [{ label: 'Configurações…', icon: I.gear, action: () => pluginSettings(p.id) }] : []),
+      ...(BS.vault && p.vault && p.vault.length ? [{ label: 'Cofre…', icon: VAULT_ICON, action: () => BS.vault.open({ plugin: p.id, key: p.vault[0].key }) }] : []),
+      { label: 'Pasta de dados', icon: I.explorer, action: async () => { try { const i = await api('plugin/info', { plugin: p.id }, { method: 'POST', body: '{}' }); if (!i.exists) return toast(`${p.name} ainda não guardou nada`); reveal(i.dataDir); } catch (e) { toast(e.message); } } },
+      { label: 'Apagar dados do plugin…', icon: I.x, action: () => pluginWipe(p) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
   });
   plugClamp(body);
   // servidores de plugins (plugstore.js): atualizações, catálogo e a lista de servidores
@@ -1939,6 +2087,17 @@ function plugClamp(body) {
   if (!body._plugRO && window.ResizeObserver) { body._plugRO = new ResizeObserver(() => { if (S.tool === 'plugins') fit(); }); body._plugRO.observe(body); }
 }
 BS.plugIcon = plugIcon;
+const VAULT_ICON = '<svg class="i" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M14 9l2 2"/></svg>';
+// apaga ~/.bluescreen/plugin-data/<id>: atributos, tokens, configurações e arquivos
+function pluginWipe(p) {
+  dialog('plWipe', `<div class="dlg-hd"><span class="dlg-ic del">${I.x}</span><div><h3>Apagar os dados de ${esc(p.name)}?</h3><p>Atributos, tokens, configurações e arquivos que o plugin guardou. O plugin continua instalado.</p></div></div>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip danger" id="plWipeOk">Apagar</button></div>`, (el) => {
+    el.querySelector('#plWipeOk').onclick = async () => {
+      try { await api('plugin/info', { plugin: p.id }, { method: 'POST', body: JSON.stringify({ wipe: true }) }); el.hidden = true; toast('Dados apagados', 'ok'); BS.hooks.run('plugin:settings:' + p.id, {}); }
+      catch (e) { toast(e.message); }
+    };
+  });
+}
 async function pluginsPost(body) {
   // a janela recarrega para aplicar o plugin; volta direto para a aba Plugins
   try { await api('plugins', {}, { method: 'POST', body: JSON.stringify(body) }); store.set('reopenTool', 'plugins'); toast('Recarregando…'); setTimeout(() => location.reload(), 150); }

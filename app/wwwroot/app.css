@@ -460,6 +460,58 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 .pl-more[hidden] { display: none; }
 .plug .pl-req { margin-top: 4px; font-size: 11.5px; color: var(--muted); }
 .plug .er { font-size: 11.5px; color: var(--del); margin-top: 4px; white-space: normal; }
+.plug .pl-side { display: flex; align-items: flex-start; gap: 4px; }
+.plug .pl-cfg { margin-top: 3px; opacity: .7; } .plug .pl-cfg:hover { opacity: 1; }
+/* Cofre (vault.js) */
+#plVault { position: relative; }
+#plVault.dot::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
+.dlg-box.vt-box { width: 620px; }
+.vt-body { max-height: min(64vh, 640px); overflow-y: auto; overflow-x: hidden; margin: 4px -6px 0; padding: 0 6px 4px; }
+.vt-sub { margin: 16px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.vt-n { font: 600 10.5px var(--mono); color: var(--fg-2); background: color-mix(in srgb, var(--fg) 10%, transparent); padding: 1px 6px; border-radius: 8px; letter-spacing: 0; }
+.vt-req, .vt-ent, .vt-new { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: color-mix(in srgb, var(--panel-2) 50%, transparent); font-size: 12.5px; color: var(--fg-2); }
+.vt-req { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.vt-req.focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.vt-req b, .vt-ent b { color: var(--fg); font-weight: 600; }
+.vt-pi { width: 26px !important; height: 26px !important; border-radius: 7px !important; font-size: 11px !important; flex: none; }
+.vt-tx { min-width: 0; }
+.vt-why { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.45; }
+.vt-warn { color: var(--warn, #d9a441); font-size: 12px; margin-top: 4px; }
+.vt-row { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.vt-chip { font: 11.5px var(--mono); color: var(--fg-2); background: color-mix(in srgb, var(--fg) 8%, transparent); border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; }
+.vt-none { color: var(--muted); font-size: 12px; font-style: italic; }
+.vt-empty { padding: 4px 2px 8px; }
+.vt-hd { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+.vt-key { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: var(--accent-2); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.vt-key .i { width: 15px; height: 15px; }
+.vt-lbl { color: var(--muted); font-weight: 400; }
+.vt-meta { font: 11px var(--mono); color: var(--muted); margin-top: 2px; }
+.vt-grants { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 4px; }
+.vt-g { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.vt-g .vt-pi { width: 20px !important; height: 20px !important; border-radius: 5px !important; font-size: 9px !important; }
+.vt-gn { flex: 1; min-width: 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vt-g label { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-2); cursor: pointer; }
+.vt-add { margin-top: 4px; height: 28px; font-size: 12px; max-width: 260px; }
+.vt-form .fld, .vt-new .fld { margin-top: 8px; }
+.vt-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vt-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.vt-btns .chip .i { width: 14px; height: 14px; margin-right: 4px; }
+.vt-chk { font-size: 12px !important; }
+.vt-log { margin-top: 14px; font-size: 12px; color: var(--muted); }
+.vt-log summary { cursor: pointer; font-weight: 600; color: var(--fg-2); }
+.vt-log > div { display: flex; gap: 6px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.vt-log > div > span { width: 48px; flex: none; font: 11px var(--mono); }
+.vt-log > div.bad em { color: var(--del); font-style: normal; }
+.vt-file { font: 11px var(--mono); color: var(--muted); align-self: center; }
+@media (max-width: 560px) { .vt-2 { grid-template-columns: 1fr; } }
+/* configurações de um plugin (plugin.json › settings) */
+.dlg .pl-form { max-height: min(60vh, 520px); overflow: auto; padding: 0 2px 2px; }
+.dlg .pl-form select, .dlg .pl-form textarea { width: 100%; font: inherit; font-size: 12.5px; }
+.dlg .pl-form select { height: 32px; }
+.dlg .pl-form textarea { resize: vertical; min-height: 64px; font-family: var(--mono); }
+.dlg .pl-form .pl-chk > span { display: flex; align-items: center; gap: 8px; color: var(--fg); }
+.dlg .pl-form .pl-chk input { width: auto; height: auto; margin: 0; }
+.dlg .pl-help { font-size: 11.5px; font-weight: 400; color: var(--muted); line-height: 1.45; }
 .plug .pl-ver { font: 11px var(--mono); font-weight: 400; color: var(--muted); }
 /* interruptor: trilho com brilho, bolinha com sombra e um ✓ quando ligado; teclado e foco visíveis */
 .sw2 { position: relative; flex: none; width: 38px; height: 22px; margin-top: 7px; padding: 0; border: 1px solid var(--line-2); border-radius: 11px; cursor: pointer;
@@ -478,8 +530,10 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 @container (max-width: 300px) {
   .plug { grid-template-columns: auto minmax(0, 1fr); gap: 10px; padding: 10px; }
   .pl-icon { width: 28px; height: 28px; border-radius: 7px; } .pl-icon.def { font-size: 12px; }
-  .sw2 { position: absolute; top: 10px; right: 10px; margin: 0; }
+  .plug .pl-side { position: absolute; top: 10px; right: 10px; align-items: center; }
+  .plug .sw2, .plug .pl-cfg { margin: 0; }
   .plug .nm { padding-right: 46px; }
+  .plug:has(.pl-cfg) .nm { padding-right: 78px; }
 }
 .pl-store { container-type: inline-size; }
 .pl-store .plug { margin: 6px 8px; }

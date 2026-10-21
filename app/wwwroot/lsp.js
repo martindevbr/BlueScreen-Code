@@ -446,7 +446,16 @@ function lsStatus() {
   stEl.hidden = false;
   const tool = serverFor(lang);
   if (!tool && BUILTIN[lang]) { stEl.innerHTML = `<span class="lsp-dot ok"></span>${esc(BUILTIN[lang])}`; stEl.title = `${BUILTIN[lang]}: erros, autocompletar e navegação embutidos, sem instalar nada.\nClique para opções`; return; }
-  if (!tool) { stEl.innerHTML = '<span class="lsp-dot off"></span>sem análise'; stEl.title = `Nenhum servidor de linguagem para ${lang}. Clique para instalar.`; return; }
+  if (!tool) {
+    // instalado, mas sem o que ele precisa para rodar (o jdtls pede um JDK mais novo que os do PC): diz o quê
+    const blocked = known.find(x => x.sdk && x.needs);
+    if (blocked) {
+      stEl.innerHTML = `<span class="lsp-dot err"></span>sem análise · falta ${esc(bs.sdk ? bs.sdk.name(blocked.sdk) : blocked.sdk)}${blocked.sdk_min ? ' ' + blocked.sdk_min + '+' : ''}`;
+      stEl.title = `${blocked.name}: ${blocked.needs}.\nSem ele não há autocompletar, erros nem navegação de ${lang}.\nClique para baixar pela IDE (não muda o JDK do projeto).`;
+      return;
+    }
+    stEl.innerHTML = '<span class="lsp-dot off"></span>sem análise'; stEl.title = `Nenhum servidor de linguagem para ${lang}. Clique para instalar.`; return;
+  }
   const c = LS.clients.get(tool.id + '|' + keyOf(t.project));
   const busy = [...LS.progress.keys()].some(k => k.startsWith(tool.id));
   const errs = t.model ? monaco.editor.getModelMarkers({ resource: t.model.uri }).filter(m => m.owner.startsWith('lsp:') && m.severity === monaco.MarkerSeverity.Error).length : 0;

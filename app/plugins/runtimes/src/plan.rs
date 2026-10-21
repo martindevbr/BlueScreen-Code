@@ -351,6 +351,8 @@ fn jvm(env: &Env, root: &Path, file: &Path, dir: &Path, lang: &str, entry: &Entr
             }
             let sep = if WIN { ";" } else { ":" };
             let out = env.work.join(format!("java-{}", hash(&s(&srcroot)))).join("classes");
+            // o javac do JDK 8 não cria a pasta do -d ("directory not found")
+            let _ = std::fs::create_dir_all(&out);
             let mut jc = v(&["-encoding", "UTF-8", "-g", "-d"]);
             jc.push(s(&out));
             jc.extend(["-sourcepath".into(), s(&srcroot)]);

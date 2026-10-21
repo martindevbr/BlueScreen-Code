@@ -112,17 +112,7 @@ fn tool_status(t: &'static langs::Tool, pc: &Pc, root: &Path, dir: &Path) -> Sta
     let mut st = Status { id: t.id, name: t.name, status: "missing", ok: false, path: None, version: None, need: need.clone(), sdk: t.sdk, winget: t.winget, scoop: t.scoop, url: t.url, note: t.note, alts: vec![], jdks: vec![] };
     if t.id == "jdk" {
         st.jdks = pc.jdks.clone();
-        let min: u32 = need.as_ref().and_then(|n| n.version.parse().ok()).unwrap_or(0);
-        if let Some(j) = plan::pick_jdk(&pc.jdks, min) {
-            st.status = "ok";
-            st.path = Some(j.home.clone());
-            st.version = Some(if j.major > 0 { j.major.to_string() } else { j.name.clone() });
-        } else if let Some(j) = pc.jdks.first() {
-            st.status = "old";
-            st.path = Some(j.home.clone());
-            st.version = Some(j.major.to_string());
-        }
-        st.ok = st.status == "ok";
+        jdk_pick(&mut st, pc);
         return st;
     }
     let Some((prog, path)) = t.progs.iter().find_map(|p| pc.find(p).map(|x| (*p, x.to_string()))) else { return st };
@@ -141,6 +131,24 @@ fn tool_status(t: &'static langs::Tool, pc: &Pc, root: &Path, dir: &Path) -> Sta
     }
     st.ok = st.status == "ok";
     st
+}
+/// o JDK que atende ao `need` do status (o padrão primeiro), ou "old"/"missing"
+fn jdk_pick(st: &mut Status, pc: &Pc) {
+    let min: u32 = st.need.as_ref().and_then(|n| n.version.parse().ok()).unwrap_or(0);
+    if let Some(j) = plan::pick_jdk(&pc.jdks, min) {
+        st.status = "ok";
+        st.path = Some(j.home.clone());
+        st.version = Some(if j.major > 0 { j.major.to_string() } else { j.name.clone() });
+    } else if let Some(j) = pc.jdks.first() {
+        st.status = "old";
+        st.path = Some(j.home.clone());
+        st.version = Some(j.major.to_string());
+    } else {
+        st.status = "missing";
+        st.path = None;
+        st.version = None;
+    }
+    st.ok = st.status == "ok";
 }
 /// um requisito (lista de alternativas): a primeira que está ok; senão a sugerida, com as outras como opção
 fn requirement(alts: &[&str], pc: &Pc, root: &Path, dir: &Path) -> Status {
@@ -164,6 +172,16 @@ fn needs_of(lang: &langs::Lang, pc: &Pc, root: &Path, file: Option<&Path>) -> Ve
         _ => None,
     };
     if let Some(t) = tool { v.push(tool_status(t, pc, root, dir)); }
+    // main fora de classe ou de instância (classe implícita): o próprio arquivo pede Java 21+, mesmo sem pom/gradle
+    if let Some(f) = file.filter(|f| f.extension().is_some_and(|e| e.eq_ignore_ascii_case("java")))
+        && entries::find("java", &f.to_string_lossy(), &std::fs::read_to_string(f).unwrap_or_default()).iter().any(|e| e.instance) {
+        for st in v.iter_mut().filter(|s| s.id == "jdk") {
+            if st.need.as_ref().and_then(|n| n.version.parse::<u32>().ok()).unwrap_or(0) < 21 {
+                st.need = Some(require::Need { version: "21".into(), source: f.strip_prefix(root).unwrap_or(f).to_string_lossy().replace('\\', "/") + " (main fora de classe)" });
+                jdk_pick(st, pc);
+            }
+        }
+    }
     v
 }
 

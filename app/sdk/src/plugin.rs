@@ -23,6 +23,8 @@ use std::sync::{Arc, OnceLock};
 pub const H_TOKEN: &str = "x-bluescreen-token";
 pub const H_REMOTE: &str = "x-bluescreen-remote";
 pub const H_INTERNAL: &str = "x-bluescreen-internal";
+/// token próprio de cada processo de plugin (BLUESCREEN_PLUGIN_TOKEN): identifica quem chama
+pub const H_PLUGIN_TOKEN: &str = "x-bluescreen-plugin-token";
 
 // ---------- requisição e resposta das rotas ----------
 pub struct Req {
@@ -156,7 +158,9 @@ impl Core {
     }
     pub fn token(&self) -> &str { &self.token }
     fn req(&self, method: reqwest::Method, route: &str, query: &[(&str, &str)]) -> reqwest::RequestBuilder {
-        self.http.request(method, format!("{}/api/{}{}", self.url, route, query_string(query.iter().copied()))).header(H_TOKEN, &self.token)
+        let rb = self.http.request(method, format!("{}/api/{}{}", self.url, route, query_string(query.iter().copied()))).header(H_TOKEN, &self.token);
+        // o token próprio do processo identifica o plugin (o cofre só entrega valores assim)
+        match std::env::var("BLUESCREEN_PLUGIN_TOKEN") { Ok(t) if !t.is_empty() => rb.header(H_PLUGIN_TOKEN, t), _ => rb }
     }
     async fn send(rb: reqwest::RequestBuilder) -> ApiResult<reqwest::Response> {
         let r = rb.send().await.map_err(|e| fail(format!("BlueScreen não respondeu: {e}"), 502))?;
@@ -174,5 +178,27 @@ impl Core {
     }
     pub async fn post(&self, route: &str, query: &[(&str, &str)], body: &Value) -> ApiResult<Value> {
         Ok(Self::send(self.req(reqwest::Method::POST, route, query).json(body)).await?.json().await.map_err(|e| fail(e.to_string(), 502))?)
+    }
+}
+
+// ---------- pasta de dados do plugin (~/.bluescreen/plugin-data/<id>) ----------
+/// Pasta de dados deste plugin (BLUESCREEN_PLUGIN_DATA): o programa pode gravar o que quiser nela.
+pub fn data_dir() -> Option<PathBuf> { std::env::var_os("BLUESCREEN_PLUGIN_DATA").map(PathBuf::from) }
+fn self_id() -> String { std::env::var("BLUESCREEN_PLUGIN").unwrap_or_default() }
+impl Core {
+    /// Atributo guardado pelo plugin (store.json); `Null` quando não existe.
+    pub async fn data_get(&self, key: &str) -> ApiResult<Value> { Ok(self.get("plugin/data", &[("plugin", &self_id()), ("key", key)]).await?["value"].take()) }
+    /// Grava um atributo; `Value::Null` apaga.
+    pub async fn data_set(&self, key: &str, value: Value) -> ApiResult<()> { self.post("plugin/data", &[("plugin", &self_id())], &json!({ "key": key, "value": value })).await.map(|_| ()) }
+    /// Segredo do plugin, decifrado (token, senha); `None` quando não foi configurado.
+    pub async fn secret(&self, key: &str) -> ApiResult<Option<String>> {
+        Ok(self.get("plugin/secrets", &[("plugin", &self_id()), ("key", key)]).await?["value"].as_str().map(String::from))
+    }
+    /// Valores das configurações declaradas no plugin.json (`settings`), com os padrões; os segredos ficam em `secret`.
+    pub async fn settings(&self) -> ApiResult<Value> { Ok(self.get("plugin/settings", &[("plugin", &self_id())]).await?["values"].take()) }
+    /// Valor de um segredo do cofre da IDE: só se o usuário deixou este plugin ver o valor (Plugins › Cofre). Para só
+    /// usar, prefira `{{vault:nome}}` no `plugin/fetch`, que não entrega o valor ao plugin.
+    pub async fn vault_reveal(&self, key: &str) -> ApiResult<String> {
+        self.get("vault/reveal", &[("plugin", &self_id()), ("key", key)]).await?["value"].as_str().map(String::from).ok_or_else(|| fail("sem valor", 404))
     }
 }
