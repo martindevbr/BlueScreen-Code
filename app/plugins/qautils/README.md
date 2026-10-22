@@ -1,8 +1,8 @@
 # QAutils
 
-O kit do QA no BlueScreen: cenários em Gherkin (Cucumber), ferramentas do dia a dia, checklists e teste exploratório. É um plugin nativo e só tem interface: usa o índice e a busca do núcleo, a pasta de dados do plugin e o console de Build. Não sobe nenhum servidor.
+O kit do QA no BlueScreen: cenários em Gherkin (Cucumber), e ferramentas do dia a dia. É um plugin nativo e só tem interface: usa o índice e a busca do núcleo, a pasta de dados do plugin e o console de Build. Não sobe nenhum servidor.
 
-O painel **QAutils** (`Alt+9`, se nenhum outro plugin usar a tecla) tem quatro abas: **Cenários**, **Kit**, **Checklists** e **Sessão**. Toda ferramenta do kit também está no **Buscar em tudo** (`QA: Dados de teste`, `QA: JSON`…).
+O painel **QAutils** (`Alt+9`, se nenhum outro plugin usar a tecla) tem duas abas: **Cenários** e **Kit**. Toda ferramenta do kit também está no **Buscar em tudo** (`QA: Dados de teste`, `QA: JSON`…).
 
 ## Kit
 
@@ -27,14 +27,6 @@ Botões rápidos no topo: um clique gera e copia CPF, CNPJ, nome, e-mail, celula
 
 **Bug a partir de um cenário:** no status de um cenário (acima dele, no editor) há **Abrir relatório de bug deste cenário…**, com a pré-condição, os passos, o esperado, o chamado e as evidências já preenchidos.
 
-## Checklists
-
-Modelos prontos (**Smoke test**, **Formulário**, **Login e sessão**, **Regressão**, **Acessibilidade básica**, **Responsividade**, **API**) ou em branco. Marque os itens, acrescente outros (Enter), anote observações por item e copie ou salve em Markdown (`qa/checklists/`). Ficam guardadas por projeto, na pasta de dados do plugin.
-
-## Sessão (teste exploratório)
-
-Escreva a missão (o que explorar e com qual objetivo), a área, o tempo planejado e o ambiente, e comece. O cronômetro aparece no painel e na barra de status. Anote o que encontrar como **🐞 Bug**, **❓ Dúvida**, **💡 Ideia** ou **📝 Nota** (Ctrl+Enter anota como nota): cada anotação leva o horário. Uma anotação de bug abre o relatório de bug já preenchido. Dá para pausar. Ao encerrar, o relatório (resumo, anotações por tipo e linha do tempo) é salvo em `qa/sessoes/`.
-
 ---
 
 # Cenários (Gherkin / Cucumber)
@@ -43,7 +35,6 @@ Escreva a missão (o que explorar e com qual objetivo), a área, o tempo planeja
 
 - **Features:** as features por pasta (equipe, mês), com o **chamado** do nome do arquivo em destaque (`INC1753202`, `PRB0068833`, `SDIGBSID00-2429`), o número de cenários e uma barra com o andamento da execução. "Recentes" ordena pelo que foi mexido por último. A seta abre os cenários de cada feature.
 - **Busca:** texto (nome do arquivo, da funcionalidade, dos cenários e dos passos), `@tag` ou o número do chamado.
-- **Passos:** cada passo diferente do projeto e quantas vezes é usado. Os mais usados são os "padrões" que o autocompletar sugere. Clique para ver onde cada um aparece.
 - **Tags:** as tags com contagem. Clique para filtrar. Em projeto automatizado, ▶ roda a tag.
 - **Execução:** o percentual executado, ✓ passou, ✗ falhou, ⊘ bloqueado e ○ não executado, com as features com falha primeiro. Daqui saem o relatório de evidências e o CSV do que a busca encontrou.
 - Botão **+**: nova feature. Clique no chamado: abre o link (veja as configurações) ou copia o número.
@@ -62,7 +53,7 @@ No **+** do painel, no botão direito numa pasta (**Nova feature aqui…**) ou n
 
 ## No editor (`.feature`)
 
-- **Acima de cada cenário:** o status (**○ Não executado → ✓ Passou / ✗ Falhou / ⊘ Bloqueado**, com anotação), as **📷 Evidências** e **Copiar**, que copia o cenário em texto pronto para colar no chamado, com o resultado.
+- **Acima de cada cenário:** o status (**○ Não executado → ✓ Passou / ✗ Falhou / ⊘ Bloqueado**, com anotação), as **📷 Evidências** e **Copiar**, que copia o cenário em texto pronto para colar no chamado, com o resultado. Cenário executado ganha uma **faixa colorida na margem esquerda**, do título ao último passo: verde (passou), vermelha (falhou) ou amarela (bloqueado).
 - **Acima da funcionalidade:** o resumo da execução, o **Relatório de evidências** e o **Exportar CSV**.
 - **Autocompletar:**
   - palavras-chave no idioma do arquivo; num arquivo novo, no idioma da configuração ou das features do projeto (sem features: **português**);
@@ -111,9 +102,9 @@ Quando o projeto tem step definitions (Java, Kotlin, JS/TS, Ruby, Python/behave 
 
 | | |
 |---|---|
-| Seu nome | vai nos relatórios, nos bugs e nas sessões |
+| Seu nome | vai nos relatórios e nos bugs |
 | Ambientes | um por linha, `NOME=endereço`: o Kit abre com um clique e o relatório de bug oferece a lista |
-| Pasta dos relatórios de bug e das sessões | `qa` (bugs, sessões, massas e checklists salvos ficam em `qa/…`) |
+| Pasta dos relatórios de bug | `qa` (bugs e massas salvos ficam em `qa/…`) |
 | Modo | automático (documentação sem step definitions), documentação ou automação |
 | Idioma das features novas | o mesmo do projeto, português ou inglês |
 | Prefixo dos cenários | `CT` (CT001, CT002…) |

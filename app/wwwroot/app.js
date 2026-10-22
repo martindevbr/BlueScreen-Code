@@ -207,7 +207,7 @@ async function start() {
   splash('Carregando plugins…');
   await BS.plugins.load(cfg.plugins); // plugins antes de tudo: eles registram painéis, atalhos e cards
   const reopen = store.get('reopenTool', null);
-  if (reopen) { store.set('reopenTool', null); if (BS.tools.get(reopen)) S.tool = reopen; }
+  if (reopen) { store.set('reopenTool', null); if (BS.tools.get(reopen) && !BS.tools.get(reopen).toggle) S.tool = reopen; }
   if (DOC) return docMode(DOC);
   renderStrip();
   splash('Lendo os projetos…');
@@ -2120,7 +2120,7 @@ async function openOutside(root, rel, line) {
 BS.tools.register({ id: 'project', title: 'Projeto', icon: I.open, key: 'Alt+1', order: 10, render: renderProject });
 BS.tools.register({ id: 'changes', title: 'Alterações', icon: I.changes, key: 'Alt+2', order: 20, render: renderChanges });
 BS.tools.register({ id: 'history', title: 'Histórico', icon: I.hist, key: 'Alt+3', order: 30, render: renderHistory });
-BS.tools.register({ id: 'problems', title: 'Problemas', icon: I.problems, key: 'Alt+4', order: 80, render() {}, toggle(open) { $('#problems').hidden = open === true ? false : !$('#problems').hidden; } });
+BS.tools.register({ id: 'problems', title: 'Problemas', icon: I.problems, key: 'Alt+4', order: 80, bottom: true, render() {}, toggle(open) { $('#problems').hidden = open === true ? false : !$('#problems').hidden; } });
 BS.tools.register({ id: 'plugins', title: 'Plugins', icon: I.plug, key: 'Alt+7', order: 1000, bottom: true, render: renderPlugins });
 
 // ----- aba Plugins (Alt+7): ligar/desligar, erros, pastas -----

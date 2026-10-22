@@ -187,7 +187,7 @@ O objeto `bs` (também em `window.BS`):
 | `bs.status.add({ id, title, onclick })` | item na status bar (devolve o `<span>`) |
 | `bs.dashboard.card({ id, order, wide, html(), bind(el) })` / `bs.dashboard.action({ label, icon, go })` | card e botão no resumo do projeto |
 | `bs.ui.panel(html)` | painel na área do editor, abaixo do código |
-| `bs.build.info()` / `selected()` / `run(task, cmd)` / `showLog(log)` / `current()` / `render()` | janela Build: estrutura, escolhas (Maven, JDK, repositório), rodar tarefa, mostrar um log de fora no console |
+| `bs.build.info()` / `selected()` / `run(task, cmd)` / `showLog(log)` / `current()` / `render()` | painel Build (embaixo do editor): estrutura, escolhas (Maven, JDK, repositório), rodar tarefa, mostrar um log de fora no console |
 | `bs.build.runSteps({ title, steps, jdk })` / `runFile()` | roda passos prontos no console (`{ program, args, cwd, env, java }`, ou `kind: "maven"` com os argumentos do mvn), com uma linha para a entrada do programa; `runFile()` é o "Executar arquivo" pela extensão |
 | `bs.terminal.open(pasta, shell)` / `run(comando, pasta)` / `shells()` | terminal |
 | `bs.lsp.tools()` / `clientFor(aba)` / `restart(ferramenta, raiz)` | servidores de linguagem: lista, cliente da aba (para pedidos LSP próprios) e reinício |

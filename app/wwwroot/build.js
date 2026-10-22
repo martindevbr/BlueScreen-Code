@@ -1,6 +1,6 @@
-/* BlueScreen: Build nativo da IDE (painel Alt+6). Reconhece os sistemas de build do projeto (Maven, Gradle, npm/yarn/pnpm,
-   Cargo, Go, .NET, Python, CMake, Make e muitos outros), mostra as tarefas de cada um, executa o arquivo aberto
-   (Ctrl+Shift+F10) e mostra a saída num console embaixo do editor, com erros clicáveis. Usa a mesma API dos plugins
+/* BlueScreen: Build nativo da IDE (Alt+6). Painel embaixo do editor, como o Terminal e os Problemas: à esquerda as
+   tarefas dos sistemas de build do projeto (Maven, Gradle, npm/yarn/pnpm, Cargo, Go, .NET, Python, CMake, Make e muitos
+   outros), à direita a saída, com erros clicáveis. Executa o arquivo aberto (Ctrl+Shift+F10). Usa a mesma API dos plugins
    (bs = window.BS) e expõe bs.build para os plugins:
      bs.build.info()            estrutura do build (info.plugins[id] traz os dados do gancho "build.info" do plugin)
      bs.build.selected()        Maven, JDK e repositório escolhidos
@@ -9,8 +9,8 @@
                                 (ex.: o plugin runtimes executando um main); o console aceita entrada para o programa
      bs.build.showLog(log)      mostra um log de fora no console: { title, prefix, lines, status, started, ended, url, urlTitle }
      bs.build.current()         o que o console está mostrando agora
-     bs.build.render()          redesenha a janela Build
-   Ganchos: 'build:render' (body, info) depois de desenhar a janela; filtro 'build:path' (rel, caminho) para
+     bs.build.render()          redesenha as tarefas
+   Ganchos: 'build:render' (el, info) depois de desenhar as tarefas; filtro 'build:path' (rel, caminho) para
    ligar caminhos de logs de fora a arquivos do checkout. */
 (function (bs) {
 
@@ -21,36 +21,52 @@ const bcPref = () => (S.project ? store.get('buildPref:' + S.project.path, {}) :
 const bcSet = (k, v) => { const p = bcPref(); p[k] = v; store.set('buildPref:' + S.project.path, p); };
 const bcDur = (ms) => { if (!ms && ms !== 0) return ''; const s = Math.round(ms / 1000); return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + String(s % 60).padStart(2, '0') + ' s'; };
 
-// console embaixo do editor (painel do plugin dentro da área do editor)
+// painel embaixo do editor: tarefas (recolhíveis) à esquerda e o console à direita
+const SIDE = '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>';
 bs.ui.panel(`<div id="buildCon" hidden>
   <div id="bcResize" title="Arraste para ajustar a altura"></div>
-  <div class="head"><span class="ttl" id="bcTitle">Build</span><span id="bcState"></span><span class="sub" id="bcSub"></span><span class="spacer"></span>
+  <div class="head"><button class="icon-btn" id="bcSideBtn" title="Mostrar/esconder as tarefas">${SIDE}</button><span class="ttl" id="bcTitle">Build</span><span id="bcState"></span><span class="sub" id="bcSub"></span><span class="spacer"></span>
     <div class="seg" id="bcSeg"><button data-v="all" class="on">Tudo</button><button data-v="issues">Erros e avisos</button></div>
     <a class="icon-btn" id="bcLink" target="_blank" title="Abrir no navegador" hidden>${I.ext}</a>
     <button class="icon-btn" id="bcRerun" title="Rodar de novo (Ctrl+F9)">${I.refresh}</button>
     <button class="icon-btn" id="bcStop" title="Parar" hidden><svg class="i" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
     <button class="icon-btn" id="bcCopy" title="Copiar a saída inteira">${I.copy}</button>
     <button class="icon-btn" id="bcClose" title="Fechar">${I.x}</button></div>
-  <div class="bc-sum" id="bcSum" hidden></div>
-  <div class="bc-out" id="bcOut"></div>
-  <form class="bc-in" id="bcIn" hidden autocomplete="off"><span class="bc-in-ic">›</span><input id="bcInput" placeholder="Entrada do programa (Enter envia)" spellcheck="false"></form>
+  <div class="bc-main">
+    <aside class="bc-side" id="bcSide"></aside>
+    <div class="bc-con">
+      <div class="bc-sum" id="bcSum" hidden></div>
+      <div class="bc-out" id="bcOut"></div>
+      <div class="bc-empty" id="bcEmpty">${HAMMER}<b>Nada rodou ainda</b><span>Escolha uma tarefa à esquerda, ou <kbd>Ctrl+Shift+F10</kbd> para executar o arquivo aberto.</span></div>
+      <form class="bc-in" id="bcIn" hidden autocomplete="off"><span class="bc-in-ic">›</span><input id="bcInput" placeholder="Entrada do programa (Enter envia)" spellcheck="false"></form>
+    </div>
+  </div>
 </div>`);
+const bcOpen = () => !$('#buildCon').hidden;
+const bcStrip = () => document.querySelector('#strip [data-tool="build"]')?.classList.toggle('on', bcOpen());
+// abrir/fechar pela barra da esquerda (Alt+6)
+function bcToggle(on) {
+  const con = $('#buildCon'); con.hidden = !(on ?? con.hidden); bcStrip();
+  if (bcOpen()) { renderBuild(); if (BC.run) bcRenderAll(); else bcEmpty(); }
+}
+function bcEmpty() { $('#bcEmpty').hidden = !!BC.run; $('#bcOut').hidden = !BC.run; if (!BC.run) { $('#bcTitle').textContent = ''; $('#bcState').innerHTML = ''; $('#bcSub').textContent = ''; ['#bcStop', '#bcRerun', '#bcLink'].forEach(x => { $(x).hidden = true; }); } }
+const bcSideSet = (on) => { $('#buildCon').classList.toggle('noside', !on); store.set('bcSide', on); };
+bcSideSet(store.get('bcSide', true));
+$('#bcSideBtn').onclick = () => bcSideSet($('#buildCon').classList.contains('noside'));
 
 async function bcLoadInfo(fresh) {
   if (!S.project) return null;
   if (BC.info && BC.infoFor === S.project.path && !fresh) return BC.info;
-  const proj = S.project.path; BC.loading = true; BC.err = null; if (S.tool === 'build') renderBuild();
+  const proj = S.project.path; BC.loading = true; BC.err = null; if (bcOpen()) renderBuild();
   try { const i = await api('build/info', { project: proj, fresh: fresh ? '1' : null }); if (S.project && S.project.path === proj) { BC.info = i; BC.infoFor = proj; } }
   catch (e) { BC.err = e.message; }
   BC.loading = false;
   try { BC.runs = await api('build/runs', { project: proj }); } catch {}
-  if (S.tool === 'build') renderBuild();
+  if (bcOpen()) renderBuild();
   return BC.info;
 }
 function renderBuild() {
-  const body = $('#toolBody');
-  $('#toolActions').innerHTML = `<button class="icon-btn" id="bReload" title="Ler de novo">${I.refresh}</button>`;
-  $('#bReload').onclick = () => bcLoadInfo(true);
+  const body = $('#bcSide');
   if (!S.project) { body.innerHTML = '<div class="empty">Escolha um projeto.</div>'; return; }
   if (!BC.info || BC.infoFor !== S.project.path) {
     body.innerHTML = BC.err ? `<div class="errbox"><b>Não deu para ler o build.</b><div>${esc(BC.err)}</div></div>` : '<div class="empty"><span class="spin"></span> Lendo a estrutura do build…</div>';
@@ -75,7 +91,7 @@ function renderBuild() {
   const canFile = S.active && S.active.project === S.project.path;
   const runRow = (r) => `<div class="brun" data-run="${esc(r.id)}"><span class="st ${r.status}">${r.status === 'running' ? '<span class="spin"></span>' : r.status === 'ok' ? '✓' : r.status === 'stopped' ? '■' : '✕'}</span><span class="nm">${esc(r.title)}</span><span class="meta">${r.ended ? bcDur(r.ended - r.started) : ''} · ${esc(ago(r.started))}</span></div>`;
   body.innerHTML = `
-    <div class="bhead"><div class="t">${HAMMER}<span>${esc(i.root.split(/[\\/]/).pop())}</span>${i.aggregator ? `<code title="pom agregador">${esc(i.aggregator)}</code>` : ''}</div>
+    <div class="bhead"><div class="t">${HAMMER}<span>${esc(i.root.split(/[\\/]/).pop())}</span>${i.aggregator ? `<code title="pom agregador">${esc(i.aggregator)}</code>` : ''}<button class="icon-btn" id="bReload" title="Ler o build de novo">${I.refresh}</button></div>
       <div class="m">${i.rel ? `pasta aberta é o módulo <b>${esc(i.rel)}</b>; o build roda na raiz do checkout` : 'build na raiz do checkout'}</div></div>
     <div class="bquick"><button class="chip" id="bcFile" ${canFile ? '' : 'disabled'} title="Executa o arquivo aberto pela linguagem (Ctrl+Shift+F10)">${PLAY}Executar ${canFile ? esc(S.active.path.split('/').pop()) : 'arquivo'}</button>${i.tasks.length > 10 ? `<div class="bfilter"><input id="bcQ" placeholder="Filtrar tarefas" value="${esc(BC.q)}" spellcheck="false"></div>` : ''}</div>
     ${i.tasks.length ? '' : '<div class="empty">Nenhum sistema de build reconhecido nesta pasta (Maven, Gradle, npm, Cargo, Go, .NET, Python, CMake, Make...).</div>'}
@@ -89,6 +105,7 @@ function renderBuild() {
       <label class="chk"><input type="checkbox" id="bcOff" ${p.offline ? 'checked' : ''}>Offline (-o): só o que já está no ~/.m2</label>
     </div>` : ''}
     ${BC.runs.length ? `<div class="bsec">Execuções nesta sessão</div>${BC.runs.map(runRow).join('')}` : ''}`;
+  $('#bReload').onclick = () => bcLoadInfo(true);
   body.querySelectorAll('.btask').forEach(el => el.onclick = () => { if (running) return toast('Já tem um build rodando. Pare antes de iniciar outro.'); bcRun(el.dataset.task); });
   body.querySelectorAll('.bsys').forEach(el => el.onclick = () => { const k = el.dataset.sys; BC.fold.has(k) ? BC.fold.delete(k) : BC.fold.add(k); store.set('buildFold', [...BC.fold]); renderBuild(); });
   $('#bcFile')?.addEventListener('click', () => bcRunFile());
@@ -161,8 +178,8 @@ async function bcPoll() {
   Object.assign(run, { status: r.status, title: r.title, step: r.step, steps: r.steps, started: r.started, ended: r.ended, interactive: r.interactive, input: r.input, prompt: r.prompt || '' });
   bcAppend(before); bcHeader(); bcInputRow();
   if (r.status === 'running' || r.lines.length >= 5000) BC.timer = setTimeout(bcPoll, r.lines.length ? 250 : 600);
-  else if (statusChanged || before === 0) { bcSummary(); try { BC.runs = await api('build/runs', { project: S.project.path }); } catch {} if (S.tool === 'build') renderBuild(); if (r.status !== 'running' && run.fresh) toast(r.status === 'ok' ? 'Build concluído' : r.status === 'stopped' ? 'Build interrompido' : 'Build falhou'); }
-  if (r.status === 'running' && S.tool === 'build' && before === 0) renderBuild();
+  else if (statusChanged || before === 0) { bcSummary(); try { BC.runs = await api('build/runs', { project: S.project.path }); } catch {} if (bcOpen()) renderBuild(); if (r.status !== 'running' && run.fresh) toast(r.status === 'ok' ? 'Build concluído' : r.status === 'stopped' ? 'Build interrompido' : 'Build falhou'); }
+  if (r.status === 'running' && bcOpen() && before === 0) renderBuild();
 }
 // log que vem de fora (ex.: console de um servidor de build, trazido por um plugin): só leitura, mesmos recursos do console
 async function bcShowLog(log) {
@@ -181,8 +198,8 @@ async function bcCheckRefs(run) {
   for (const l of run.lines) { BC_FILE.lastIndex = 0; let m; while ((m = BC_FILE.exec(l))) { const t = bcMap(m[1]); if (t) set.add(t.rr); } }
   try { run.exists = new Set(await api('build/exists', {}, { method: 'POST', body: JSON.stringify({ root: BC.info.root, paths: [...set] }) })); } catch { run.exists = new Set(); }
 }
-function bcShow() { $('#buildCon').hidden = false; bcRenderAll(); }
-function bcRenderAll() { bcHeader(); $('#bcOut').innerHTML = ''; bcAppend(0); bcSummary(); bcInputRow(); }
+function bcShow() { const was = bcOpen(); $('#buildCon').hidden = false; bcStrip(); if (!was) renderBuild(); bcRenderAll(); }
+function bcRenderAll() { bcEmpty(); bcHeader(); $('#bcOut').innerHTML = ''; bcAppend(0); bcSummary(); bcInputRow(); }
 // programa rodando que lê a entrada (Scanner, input()): a linha de baixo manda o texto; o que ele escreveu sem quebrar
 // a linha ("Digite seu nome: ") aparece no fim da saída
 function bcInputRow() {
@@ -287,7 +304,7 @@ function bcSummary() {
 function bcDepsHint() {
   const sel = bcSelected(); const other = BC.info && (BC.info.repos || [])[0];
   if (sel.offline) return 'Desligue o modo offline para baixar.';
-  if (sel.repo === 'user' && other) return `Tente o repositório "${esc(other.label)}" na janela Build.`;
+  if (sel.repo === 'user' && other) return `Tente o repositório "${esc(other.label)}" nas tarefas do Build.`;
   return 'Confira a rede (VPN) e se o artefato existe no repositório escolhido.';
 }
 // cliques em arquivos do console
@@ -297,7 +314,7 @@ document.addEventListener('click', (e) => {
   if (a.dataset.rel) openFile(a.dataset.rel, 'editor', line);
   else if (a.dataset.root) openOutside(a.dataset.root, a.dataset.orel, line || 1);
 });
-$('#bcClose').onclick = () => { $('#buildCon').hidden = true; };
+$('#bcClose').onclick = () => { $('#buildCon').hidden = true; bcStrip(); };
 $('#bcStop').onclick = async () => { const r = BC.run; if (r && r.kind === 'local') { try { await api('build/stop', { id: r.id }, { method: 'POST' }); } catch (e) { toast(e.message); } } };
 $('#bcRerun').onclick = () => { const l = BC.last || store.get('buildLast:' + (S.project && S.project.path), null); if (l && l.steps) bcRunSteps(l); else if (l && l.file) bcRunFile(); else if (l) bcRun(l.task, l.custom); };
 $('#bcCopy').onclick = () => BC.run && copyText(BC.run.lines.join('\n'));
@@ -321,14 +338,14 @@ function bcBuildShortcut() {
 }
 
 // ----- registro no núcleo -----
-bs.tools.register({ id: 'build', title: 'Build', icon: HAMMER, key: 'Alt+6', order: 60, render: renderBuild });
+bs.tools.register({ id: 'build', title: 'Build', icon: HAMMER, key: 'Alt+6', order: 82, bottom: true, toggle: (on) => bcToggle(on) });
 bs.keys.add('Ctrl+F9', () => bcBuildShortcut());
 bs.keys.add('Ctrl+Shift+F10', () => bcRunFile());
 bs.actions.add([
   { label: 'Build: repetir o último', k: 'Ctrl+F9', run: () => bcBuildShortcut(), icon: HAMMER },
   { label: 'Build: compilar', k: '', run: () => bcRun('compile'), icon: HAMMER },
   { label: 'Executar o arquivo aberto', k: 'Ctrl+Shift+F10', run: () => bcRunFile(), icon: PLAY },
-  { label: 'Janela Build', k: 'Alt+6', run: () => openTool('build'), icon: HAMMER },
+  { label: 'Painel Build', k: 'Alt+6', run: () => openTool('build'), icon: HAMMER },
 ]);
 bs.hooks.on('sdk:installed', () => { if (BC.info) bcLoadInfo(true); });
 bs.hooks.on('project:select', () => { BC.info = null; BC.infoFor = null; BC.runs = []; BC.last = null; });
@@ -340,7 +357,7 @@ bs.build = {
   runFile: () => bcRunFile(),
   showLog: bcShowLog,
   current: () => BC.run,
-  render: () => { if (S.tool === 'build') renderBuild(); },
+  render: () => { if (bcOpen()) renderBuild(); },
   reload: () => { if (BC.info) bcLoadInfo(true); },
   icon: HAMMER,
 };

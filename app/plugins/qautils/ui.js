@@ -1,6 +1,6 @@
 // QAutils: o kit do QA (plugin nativo, só interface). Usa o índice e a busca do núcleo, a pasta de dados do plugin e o
-// console de Build; nada de servidor próprio. O painel QA (Alt+9) tem quatro abas:
-// - Cenários (Gherkin/Cucumber): features por pasta e por chamado, busca por texto, @tag ou chamado, passos do projeto,
+// console de Build; nada de servidor próprio. O painel QA (Alt+9) tem duas abas:
+// - Cenários (Gherkin/Cucumber): features por pasta e por chamado, busca por texto, @tag ou chamado,
 //   tags e o andamento da execução manual. No editor (.feature): autocompletar com os passos do projeto e as step
 //   definitions, aviso de passo parecido, Contexto automático, renumeração dos CTs, formatação (Shift+Alt+F); acima de
 //   cada cenário o status (Passou/Falhou/Bloqueado), as evidências coladas e "Copiar"; relatório de evidências (HTML)
@@ -8,8 +8,6 @@
 // - Kit: dados de teste (CPF, CNPJ, RG, PIS, CNH, título, Renavam, placa, CEP, telefone, cartão de teste...), massa de
 //   dados, validar documentos, valores limite, entradas especiais, JSON, Base64/URL/HTML/JWT, data e hora, texto,
 //   hash, regex, comparar textos, relatório de bug e ambientes
-// - Checklists: modelos (smoke, formulário, login, regressão, acessibilidade, responsividade, API) e as suas
-// - Sessão: teste exploratório com missão, cronômetro (também na status bar) e anotações com horário
 const { S, api, esc, toast, store, $ } = bs;
 // onde o mouse clicou por último: os menus abertos pelo editor (CodeLens) aparecem ali
 const mouse = { x: innerWidth / 2, y: innerHeight / 3 };
@@ -532,7 +530,22 @@ const isFeature = (t) => t && t.model && /\.feature$/i.test(t.path || '');
 const relOfModel = (m) => (m && m._tab && m._tab.project === proj()) ? m._tab.path : null;
 const hold = new WeakMap(); // modelo -> { doc, marks }
 const lensEmitter = { list: new Set(), fire() { this.list.forEach(f => { try { f(); } catch {} }); } };
-const fireLens = () => lensEmitter.fire();
+const fireLens = () => { lensEmitter.fire(); S.tabs.forEach(t => isFeature(t) && paint(t.model)); };
+// faixa colorida na margem esquerda de cada cenário executado (verde Passou, vermelho Falhou, amarelo Bloqueado)
+const painted = new WeakMap(); // modelo -> ids das decorações
+function paint(model, d) {
+  if (!model || model.isDisposed()) return;
+  const rel = relOfModel(model); d = d || parse(model.getValue());
+  const deco = [];
+  if (rel) for (const sc of d.scenarios) {
+    const st = statusOf(rel, sc); if (!st) continue;
+    // até o último passo/linha útil: linhas vazias, comentários e tags do cenário seguinte ficam de fora
+    let end = sc.end == null ? d.lines.length - 1 : sc.end;
+    while (end > sc.line && (!d.lines[end].trim() || /^[#@]/.test(d.lines[end].trim()))) end--;
+    deco.push({ range: { startLineNumber: sc.line + 1, startColumn: 1, endLineNumber: end + 1, endColumn: 1 }, options: { isWholeLine: true, linesDecorationsClassName: 'qa-ln qa-ln-' + st.s, overviewRuler: { color: { pass: '#2fa35c', fail: '#d94a4a', blocked: '#e0a526' }[st.s], position: 1 }, stickiness: 1 } });
+  }
+  painted.set(model, model.deltaDecorations(painted.get(model) || [], deco));
+}
 const watched = new WeakSet();
 function watch(tab) {
   if (!isFeature(tab) || watched.has(tab.model)) return;
@@ -543,7 +556,7 @@ function watch(tab) {
 }
 function diagnose(model) {
   const monaco = bs.monaco; if (!monaco || model.isDisposed()) return;
-  const d = parse(model.getValue());
+  const d = parse(model.getValue()); paint(model, d);
   const marks = []; const data = [];
   const auto = automation(); const sim = P.settings.similar !== false;
   const mk = (line, c1, c2, sev, msg, code, extra) => { marks.push({ startLineNumber: line + 1, startColumn: c1, endLineNumber: line + 1, endColumn: c2, severity: sev, message: msg, source: 'Cucumber', code }); data.push({ line, code, ...extra }); };
@@ -1010,7 +1023,8 @@ function setup() {
 }
 
 // ---------- painel QA (Alt+9) ----------
-const V = { view: store.get('qaView', 'features'), q: '', open: new Set(store.get('qaOpen', [])), openFeat: new Set(), sort: store.get('qaSort', 'name'), stepOpen: null };
+// uma tela só: busca, resumo da execução (filtra por status), tags e as features com os cenários
+const V = { q: '', st: null, shut: new Set(store.get('qaShut', [])), openFeat: new Set(store.get('qaOpenFeat', [])), sort: store.get('qaSort', 'name') };
 function matches(rel, f, q) {
   if (!q) return true;
   const ql = q.toLowerCase();
@@ -1024,109 +1038,158 @@ function counts(rel, d) {
   return o;
 }
 const bar = (c, total) => total ? `<span class="qa-bar">${['pass', 'fail', 'blocked'].map(k => c[k] ? `<i class="${k}" style="flex:${c[k]}"></i>` : '').join('')}<i class="none" style="flex:${c.none}"></i></span>` : '';
-// abas do painel: Cenários (Gherkin), Kit (ferramentas), Checklists e Sessão (teste exploratório)
-const TOPS = [['cen', 'Cenários'], ['kit', 'Kit'], ['chk', 'Checklists'], ['ses', 'Sessão']];
+// cenários que aparecem: a busca (na feature inteira ou só no cenário) e o filtro de status
+function visibleScs(rel, f) {
+  const q = V.q.toLowerCase();
+  const whole = !q || (q.startsWith('@') ? matches(rel, f, V.q) : rel.toLowerCase().includes(q) || (f.doc.feature && f.doc.feature.name.toLowerCase().includes(q)));
+  return f.doc.scenarios.filter(s => {
+    if (V.st) { const st = statusOf(rel, s); if ((st ? st.s : 'none') !== V.st) return false; }
+    return whole || s.name.toLowerCase().includes(q) || s.steps.some(x => x.text.toLowerCase().includes(q));
+  });
+}
+// anel de progresso: verde, vermelho e amarelo na proporção dos cenários
+function ring(c, total) {
+  const r = 21, C = 2 * Math.PI * r; let off = 0;
+  const segs = ['pass', 'fail', 'blocked'].map(k => { const len = total ? C * c[k] / total : 0; const s = len ? `<circle r="${r}" cx="26" cy="26" class="${k}" stroke-dasharray="${len} ${C}" stroke-dashoffset="${-off}"/>` : ''; off += len; return s; }).join('');
+  return `<svg class="qa-ring" viewBox="0 0 52 52"><circle r="${r}" cx="26" cy="26" class="bg"/><g transform="rotate(-90 26 26)">${segs}</g></svg>`;
+}
+const SFILTER = [['pass', 'Passou', '✓'], ['fail', 'Falhou', '✗'], ['blocked', 'Bloqueado', '⊘'], ['none', 'Pendente', '○']];
+// abas do painel: Cenários (Gherkin) e Kit (ferramentas)
+const TOPS = [['cen', 'Cenários', ICO.feat], ['kit', 'Kit', ICO.qa]];
 function render() {
   const body = $('#toolBody');
   if (!S.project) { body.innerHTML = '<div class="empty">Abra um projeto.</div>'; return; }
-  V.top = V.top || store.get('qaTop', 'cen');
-  body.innerHTML = `<div class="qa"><div class="qa-top"><div class="qa-tabs qa-main">${TOPS.map(([k, l]) => `<button class="${V.top === k ? 'on' : ''}" data-top="${k}">${l}${k === 'ses' && SES.cur && !SES.cur.end ? ' <i class="qa-rec"></i>' : ''}</button>`).join('')}</div><div class="qa-sub"></div></div><div class="qa-body"></div></div>`;
+  V.top = V.top || store.get('qaTop', 'cen'); if (!TOPS.some(t => t[0] === V.top)) V.top = 'cen';
+  body.innerHTML = `<div class="qa"><div class="qa-top"><div class="qa-seg">${TOPS.map(([k, l, ic]) => `<button class="${V.top === k ? 'on' : ''}" data-top="${k}">${ic}${l}</button>`).join('')}</div><div class="qa-sub"></div></div><div class="qa-body"></div></div>`;
   body.querySelectorAll('[data-top]').forEach(b => b.onclick = () => { V.top = b.dataset.top; store.set('qaTop', V.top); render(); });
   const sub = body.querySelector('.qa-sub'), el = body.querySelector('.qa-body');
   $('#toolActions').innerHTML = ''; $('#toolSub').textContent = '';
   if (V.top === 'kit') return renderKit(sub, el);
-  if (V.top === 'chk') return renderChecklists(sub, el);
-  if (V.top === 'ses') return renderSession(sub, el);
   renderScenarios(sub, el);
 }
 function renderScenarios(sub, el) {
   if (P.for !== proj() || (!P.at && !P.loading)) { el.innerHTML = '<div class="empty">Lendo as features…</div>'; index(); return; }
-  const files = [...P.files.entries()];
-  const nsc = files.reduce((n, [, f]) => n + f.doc.scenarios.length, 0);
-  $('#toolSub').textContent = `${files.length} features · ${nsc} cenários`;
-  $('#toolActions').innerHTML = `<button class="icon-btn" id="qaNewBtn" title="Nova feature">${ICO.plus}</button><button class="icon-btn" id="qaRef" title="Ler de novo">${bs.I.refresh}</button>`;
+  $('#toolSub').textContent = '';
+  $('#toolActions').innerHTML = `<button class="icon-btn" id="qaNewBtn" title="Nova feature">${ICO.plus}</button><button class="icon-btn" id="qaExp" title="Relatório e CSV">${ICO.doc}</button><button class="icon-btn" id="qaRef" title="Ler de novo">${bs.I.refresh}</button>`;
   $('#qaNewBtn').onclick = () => newFeature(); $('#qaRef').onclick = () => index(true);
-  const tabs = [['features', 'Features'], ['steps', 'Passos'], ['tags', 'Tags'], ['run', 'Execução']];
-  sub.innerHTML = `<input class="qa-q" placeholder="Buscar: texto, @tag ou chamado (INC...)" value="${esc(V.q)}" spellcheck="false">
-    <div class="qa-tabs">${tabs.map(([k, l]) => `<button class="${V.view === k ? 'on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>`;
+  $('#qaExp').onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); bs.showMenu({ preventDefault() {}, stopPropagation() {}, clientX: r.left, clientY: r.bottom + 4 }, [
+    { label: 'Relatório de evidências (HTML)', icon: ICO.doc, action: () => runScope('report') },
+    { label: 'Exportar casos de teste (CSV)', icon: ICO.csv, action: () => runScope('csv') },
+  ], V.q ? 'Do que a busca encontrou' : 'De todas as features'); };
+  sub.innerHTML = `<label class="qa-search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input class="qa-q" placeholder="Buscar cenário, @tag ou chamado" value="${esc(V.q)}" spellcheck="false">${V.q ? `<button class="qa-clr" title="Limpar">${bs.I.x}</button>` : ''}</label>`;
   const qi = sub.querySelector('.qa-q');
-  qi.oninput = () => { V.q = qi.value.trim(); draw(); };
-  sub.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { V.view = b.dataset.v; store.set('qaView', V.view); render(); });
-  const draw = () => { el.innerHTML = ({ features: viewFeatures, steps: viewSteps, tags: viewTags, run: viewRun })[V.view](); bindView(el); };
+  let tm = null;
+  qi.oninput = () => { V.q = qi.value.trim(); clearTimeout(tm); tm = setTimeout(draw, 120); };
+  qi.onkeydown = (e) => { if (e.key === 'Escape' && V.q) { V.q = ''; render(); } };
+  const clr = sub.querySelector('.qa-clr'); if (clr) clr.onclick = () => { V.q = ''; render(); };
+  const draw = () => { el.innerHTML = viewPanel(); bindView(el); const c = sub.querySelector('.qa-clr'); if (!!c !== !!V.q) { const pos = qi.selectionStart; render(); const n = $('#toolBody .qa-q'); n.focus(); n.setSelectionRange(pos, pos); } };
   draw();
 }
-function viewFeatures() {
-  const files = [...P.files.entries()].filter(([rel, f]) => matches(rel, f, V.q));
-  if (!files.length) return `<div class="empty">${P.files.size ? 'Nada encontrado.' : 'Nenhum arquivo .feature no projeto.'}<br><br><button class="chip primary" data-new>${ICO.plus} Nova feature</button></div>`;
-  if (V.sort === 'recent') files.sort((a, b) => (b[1].mtime || 0) - (a[1].mtime || 0));
-  const groups = new Map();
-  for (const [rel, f] of files) { const g = V.sort === 'recent' ? '' : dirOf(rel); if (!groups.has(g)) groups.set(g, []); groups.get(g).push([rel, f]); }
-  const forceOpen = !!V.q || V.sort === 'recent';
-  const sorted = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
-  return `<div class="qa-sort"><button class="${V.sort === 'name' ? 'on' : ''}" data-sort="name">Por pasta</button><button class="${V.sort === 'recent' ? 'on' : ''}" data-sort="recent">Recentes</button></div>` + sorted.map(g => {
-    const list = groups.get(g); const open = forceOpen || V.open.has(g) || sorted.length === 1;
-    const c = list.reduce((o, [rel, f]) => { const x = counts(rel, f.doc); for (const k in x) o[k] += x[k]; return o; }, { pass: 0, fail: 0, blocked: 0, none: 0 });
-    const total = c.pass + c.fail + c.blocked + c.none;
-    const head = V.sort === 'recent' ? '' : `<div class="qa-dir ${open ? 'open' : ''}" data-dir="${esc(g)}">${ICO.chev}${ICO.folder}<span class="qa-dn">${esc(g || '(raiz do projeto)')}</span><span class="qa-n">${list.length}</span>${bar(c, total)}</div>`;
-    return head + (open ? `<div class="qa-list">${list.sort((a, b) => V.sort === 'recent' ? 0 : a[0].localeCompare(b[0], 'pt-BR', { numeric: true })).map(([rel, f]) => featRow(rel, f)).join('')}</div>` : '');
-  }).join('');
-}
-function featRow(rel, f) {
-  const d = f.doc; const c = counts(rel, d); const tk = ticketsOf(rel); const op = V.openFeat.has(rel);
-  return `<div class="qa-feat ${op ? 'open' : ''}" data-rel="${esc(rel)}" title="${esc(rel)}">
-    <button class="qa-car" data-tog>${ICO.chev}</button>
-    <div class="qa-ft">${tk.map(t => `<span class="qa-tk" data-tk="${esc(t)}" title="${ticketLink(t) ? 'Abrir o chamado' : 'Copiar'}">${esc(t)}</span>`).join('')}<span class="qa-fn">${esc(titleOf(rel))}</span></div>
-    <span class="qa-n" title="cenários">${d.scenarios.length}</span>${bar(c, d.scenarios.length)}</div>` +
-    (op ? `<div class="qa-scs">${d.scenarios.map(s => { const st = statusOf(rel, s); return `<div class="qa-sc ${st ? st.s : ''}" data-rel="${esc(rel)}" data-line="${s.line}"><span class="qa-st">${st ? STATUS[st.s].sym : '○'}</span><span>${esc(s.name)}</span>${evidences(rel, s).length ? `<span class="qa-ev" title="evidências">📷${evidences(rel, s).length}</span>` : ''}</div>`; }).join('')}</div>` : '');
-}
-function viewSteps() {
-  const q = V.q.toLowerCase();
-  const list = [...P.steps.values()].filter(e => !q || e.text.toLowerCase().includes(q)).sort((a, b) => b.n - a.n).slice(0, 400);
-  const auto = automation() && P.defs.length;
-  const und = auto ? list.filter(e => !defsFor(e.text.replace(/<[^<>]+>/g, 'x')).length).length : 0;
-  return `<div class="qa-hint">${P.steps.size} passos diferentes${auto ? ` · <b>${und}</b> sem definição nesta lista` : ''}. Clique para ver onde é usado; os mais usados são os "padrões" que o autocompletar sugere.</div>` + list.map(e => {
-    const bad = auto && !defsFor(e.text.replace(/<[^<>]+>/g, 'x')).length;
-    const op = V.stepOpen === e.text;
-    return `<div class="qa-step ${bad ? 'bad' : ''} ${op ? 'open' : ''}" data-step="${esc(e.text)}"><span class="qa-n">${e.n}×</span><span class="qa-stt">${esc(e.text)}</span></div>` +
-      (op ? `<div class="qa-uses">${e.uses.map(u => `<div class="qa-use" data-rel="${esc(u.rel)}" data-line="${u.line}">${esc(u.kw)} · ${esc(titleOf(u.rel))}<span>:${u.line + 1}</span></div>`).join('')}</div>` : '');
-  }).join('');
-}
-function viewTags() {
-  const tags = [...P.tags.entries()].sort((a, b) => b[1] - a[1]);
-  const run = automation() && P.runner;
-  return tags.length ? `<div class="qa-hint">Clique numa tag para filtrar as features.${run ? ' ▶ roda os cenários da tag.' : ''}</div><div class="qa-tags">${tags.map(([t, n]) => `<span class="qa-tag" data-tag="${esc(t)}">${esc(t)}<em>${n}</em>${run ? `<button data-runtag="${esc(t)}" title="Executar ${esc(t)}">${ICO.play}</button>` : ''}</span>`).join('')}</div>`
-    : '<div class="empty">Nenhuma tag. Tags (@regressao, @INC123) ficam acima de Funcionalidade, Cenário ou Exemplos.</div>';
-}
-function viewRun() {
-  const files = [...P.files.entries()].filter(([rel, f]) => matches(rel, f, V.q));
+function viewPanel() {
+  if (!P.files.size) return `<div class="qa-empty">${ICO.feat}<b>Nenhuma feature ainda</b><span>Crie a primeira no padrão do time: <code>CHAMADO - Título.feature</code></span><button class="chip primary" data-new>${ICO.plus} Nova feature</button></div>`;
+  // resumo (do que a busca encontrou)
+  const all = [...P.files.entries()].filter(([rel, f]) => matches(rel, f, V.q));
   const tot = { pass: 0, fail: 0, blocked: 0, none: 0 };
-  const rows = files.map(([rel, f]) => { const c = counts(rel, f.doc); for (const k in c) tot[k] += c[k]; return { rel, c, n: f.doc.scenarios.length }; }).filter(r => r.n);
-  const total = tot.pass + tot.fail + tot.blocked + tot.none;
-  const pct = total ? Math.round((total - tot.none) * 100 / total) : 0;
-  return `<div class="qa-sum"><div class="qa-big">${pct}%<small>executado</small></div><div>✓ ${tot.pass} passou<br>✗ ${tot.fail} falhou<br>⊘ ${tot.blocked} bloqueado<br>○ ${tot.none} não executado</div></div>
-    <div class="qa-acts"><button class="chip" data-rep>${ICO.doc} Relatório de evidências</button><button class="chip" data-csv>${ICO.csv} Exportar CSV</button></div>
-    <div class="qa-hint">${V.q ? 'Só o que a busca encontrou. ' : ''}O status de cada cenário fica acima dele no editor (clique em "○ Não executado").</div>` +
-    rows.filter(r => r.c.fail || r.c.blocked).concat(rows.filter(r => !r.c.fail && !r.c.blocked)).map(r => `<div class="qa-feat" data-rel="${esc(r.rel)}"><div class="qa-ft"><span class="qa-fn">${esc(titleOf(r.rel))}</span></div><span class="qa-n">${r.n - r.c.none}/${r.n}</span>${bar(r.c, r.n)}</div>`).join('');
+  for (const [rel, f] of all) { const c = counts(rel, f.doc); for (const k in c) tot[k] += c[k]; }
+  const total = tot.pass + tot.fail + tot.blocked + tot.none; const done = total - tot.none;
+  // no centro do anel: aprovação (dos executados)
+  const rate = done ? Math.round(tot.pass * 100 / done) : 0;
+  const state = !total ? '' : tot.fail ? 'fail' : tot.blocked && !tot.none ? 'blocked' : done === total ? 'pass' : '';
+  const msg = !total ? 'Nenhum cenário' : tot.fail ? `${tot.fail} falh${tot.fail > 1 ? 'aram' : 'ou'}` : done === total ? (tot.blocked ? `${tot.blocked} bloqueado${tot.blocked > 1 ? 's' : ''}` : 'Tudo passou') : `${tot.none} pendente${tot.none > 1 ? 's' : ''}`;
+  const sum = `<div class="qa-hero ${state}">
+    <div class="qa-hero-r">
+      <div class="qa-ringw" title="${done ? rate + '% dos executados passaram' : 'Nada executado ainda'}">${ring(tot, total)}<span>${done ? `<em>${rate}<small>%</small></em>` : '–'}</span></div>
+      <div class="qa-hero-t"><b>${msg}</b><small>${done} de ${total} executado${done === 1 ? '' : 's'}</small></div>
+    </div>
+    <div class="qa-stats">${SFILTER.map(([k, l]) => `<button class="qa-stat p-${k} ${V.st === k ? 'on' : ''} ${tot[k] ? '' : 'zero'}" data-st="${k}" title="${V.st === k ? 'Mostrar todos' : 'Só ' + l.toLowerCase()}"><b>${tot[k]}</b><span>${k === 'blocked' ? 'Bloq.' : l}</span></button>`).join('')}</div>
+  </div>`;
+  // tags
+  const tags = [...P.tags.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
+  const run = automation() && P.runner;
+  const tagRow = tags.length ? `<div class="qa-tagrow">${tags.map(([t, n]) => `<span class="qa-tag ${V.q === t ? 'on' : ''}" data-tag="${esc(t)}" title="${n} ocorrência(s)${run ? ' · botão direito: executar' : ''}">${esc(t)}</span>`).join('')}</div>` : '';
+  // features
+  const files = all.map(([rel, f]) => [rel, f, visibleScs(rel, f)]).filter(([, f, scs]) => scs.length || (!V.st && !f.doc.scenarios.length));
+  if (V.sort === 'recent') files.sort((a, b) => (b[1].mtime || 0) - (a[1].mtime || 0));
+  else files.sort((a, b) => a[0].localeCompare(b[0], 'pt-BR', { numeric: true }));
+  const filtering = !!V.q || !!V.st;
+  const head = `<div class="qa-sec"><span>Features <em>${all.length}</em></span><button class="qa-sort" data-sort="${V.sort === 'recent' ? 'name' : 'recent'}" title="Ordenar">${V.sort === 'recent' ? 'Recentes' : 'Por pasta'} ${ICO.chev}</button></div>`;
+  if (!files.length) return sum + tagRow + head + `<div class="qa-none">${V.st ? 'Nenhum cenário com esse status.' : 'Nada encontrado.'}</div>`;
+  const autoOpen = filtering || files.length <= 3;
+  const card = ([rel, f, scs]) => featCard(rel, f, scs, autoOpen || V.openFeat.has(rel));
+  let list;
+  if (V.sort === 'recent') list = files.map(card).join('');
+  else {
+    const groups = new Map(); for (const x of files) { const g = dirOf(x[0]); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+    list = [...groups.entries()].map(([g, xs]) => {
+      if (groups.size === 1) return xs.map(card).join('');
+      const shut = !filtering && V.shut.has(g);
+      return `<div class="qa-dir ${shut ? '' : 'open'}" data-dir="${esc(g)}">${ICO.chev}<span class="qa-dn">${esc(g || 'raiz do projeto')}</span><em>${xs.length}</em></div>${shut ? '' : xs.map(card).join('')}`;
+    }).join('');
+  }
+  return sum + tagRow + head + `<div class="qa-feats">${list}</div>`;
+}
+function featCard(rel, f, scs, open) {
+  const d = f.doc; const c = counts(rel, d); const n = d.scenarios.length; const tk = ticketsOf(rel);
+  const state = c.fail ? 'fail' : c.blocked ? 'blocked' : n && c.pass === n ? 'pass' : '';
+  if (!n) open = false;
+  const done = n - c.none;
+  // selo à direita: o que mais importa primeiro (falhas, bloqueios, tudo ok, andamento)
+  const badge = !n ? '<span class="qa-fb">vazia</span>'
+    : c.fail ? `<span class="qa-fb fail">✗ ${c.fail}</span>`
+    : c.blocked ? `<span class="qa-fb blocked">⊘ ${c.blocked}</span>`
+    : c.pass === n ? `<span class="qa-fb pass">✓ ${n}</span>`
+    : `<span class="qa-fb">${done}/${n}</span>`;
+  const tip = n ? `${esc(rel)}\n${c.pass} passou · ${c.fail} falhou · ${c.blocked} bloqueado · ${c.none} pendente` : esc(rel) + '\nSem cenários: clique para abrir';
+  return `<div class="qa-fc ${open ? 'open' : ''} ${state} ${n ? '' : 'nosc'}" data-rel="${esc(rel)}">
+    <div class="qa-fh" data-tog title="${tip}">
+      <span class="qa-chev">${n ? ICO.chev : ICO.feat}</span>
+      <div class="qa-ft">${tk.map(t => `<span class="qa-tk" data-tk="${esc(t)}" title="${ticketLink(t) ? 'Abrir o chamado' : 'Copiar'}">${esc(t)}</span>`).join('')}<span class="qa-fn">${esc(titleOf(rel))}</span></div>
+      <button class="qa-ico" data-openf title="Abrir a feature">${bs.I.edit}</button>
+      ${badge}
+    </div>
+    ${n ? `<div class="qa-fbar">${bar(c, n)}</div>` : ''}
+    ${open ? `<div class="qa-scs">${scs.map(s => scRow(rel, s)).join('') || '<div class="qa-none">Sem cenários.</div>'}</div>` : ''}
+  </div>`;
+}
+function scRow(rel, s) {
+  const st = statusOf(rel, s); const k = st ? st.s : 'none'; const ev = evidences(rel, s).length;
+  return `<div class="qa-sc s-${k}" data-rel="${esc(rel)}" data-line="${s.line}" title="${st && st.note ? esc(st.note) : 'Abrir no editor · botão direito: mais opções'}">
+    <i class="qa-dot">${k === 'none' ? '' : STATUS[k].sym}</i><span class="qa-scn">${esc(s.name || s.kw)}</span>${ev ? `<span class="qa-ev" title="evidências">${ICO.cam}${ev}</span>` : ''}
+    <span class="qa-qs">${['pass', 'fail', 'blocked'].map(x => `<button class="q-${x} ${k === x ? 'on' : ''}" data-set="${x}" title="${k === x ? 'Desmarcar' : STATUS[x].label}">${STATUS[x].sym}</button>`).join('')}</span>
+  </div>`;
 }
 function bindView(el) {
   el.querySelectorAll('[data-new]').forEach(b => b.onclick = () => newFeature());
   el.querySelectorAll('[data-sort]').forEach(b => b.onclick = () => { V.sort = b.dataset.sort; store.set('qaSort', V.sort); render(); });
-  el.querySelectorAll('.qa-dir').forEach(r => r.onclick = () => { const g = r.dataset.dir; V.open.has(g) ? V.open.delete(g) : V.open.add(g); store.set('qaOpen', [...V.open].slice(0, 300)); render(); });
-  el.querySelectorAll('.qa-feat').forEach(r => {
-    r.onclick = (e) => {
+  el.querySelectorAll('[data-st]').forEach(b => b.onclick = () => { V.st = V.st === b.dataset.st ? null : b.dataset.st; render(); });
+  el.querySelectorAll('.qa-dir').forEach(r => r.onclick = () => { const g = r.dataset.dir; V.shut.has(g) ? V.shut.delete(g) : V.shut.add(g); store.set('qaShut', [...V.shut].slice(0, 300)); render(); });
+  el.querySelectorAll('.qa-fc').forEach(card => {
+    const rel = card.dataset.rel;
+    card.querySelector('.qa-fh').onclick = (e) => {
       const tk = e.target.closest('[data-tk]');
-      if (tk) { e.stopPropagation(); const u = ticketLink(tk.dataset.tk); if (u) window.open(u, '_blank'); else { bs.copyText(tk.dataset.tk); toast('Copiado: ' + tk.dataset.tk); } return; }
-      if (e.target.closest('[data-tog]')) { V.openFeat.has(r.dataset.rel) ? V.openFeat.delete(r.dataset.rel) : V.openFeat.add(r.dataset.rel); render(); return; }
-      bs.openFile(r.dataset.rel, 'editor');
+      if (tk) { const u = ticketLink(tk.dataset.tk); if (u) window.open(u, '_blank'); else { bs.copyText(tk.dataset.tk); toast('Copiado: ' + tk.dataset.tk); } return; }
+      if (e.target.closest('[data-openf]') || card.classList.contains('nosc')) return bs.openFile(rel, 'editor');
+      const open = card.classList.contains('open');
+      if (open) V.openFeat.delete(rel); else V.openFeat.add(rel);
+      // com a busca/filtro ou poucas features elas já vêm abertas: fechar uma só some até o próximo render
+      store.set('qaOpenFeat', [...V.openFeat].slice(0, 300));
+      if (open) { card.classList.remove('open'); card.querySelector('.qa-scs')?.remove(); } else render();
     };
-    r.oncontextmenu = (e) => featMenu(e, r.dataset.rel);
+    card.querySelector('.qa-fh').oncontextmenu = (e) => featMenu(e, rel);
   });
-  el.querySelectorAll('.qa-sc, .qa-use').forEach(r => r.onclick = () => bs.openFile(r.dataset.rel, 'editor', +r.dataset.line + 1));
-  el.querySelectorAll('.qa-sc').forEach(r => r.oncontextmenu = (e) => { const d = docFor(r.dataset.rel); const sc = d && d.scenarios.find(s => s.line === +r.dataset.line); if (sc) statusMenu(e, r.dataset.rel, sc); });
-  el.querySelectorAll('.qa-step').forEach(r => r.onclick = () => { V.stepOpen = V.stepOpen === r.dataset.step ? null : r.dataset.step; render(); });
-  el.querySelectorAll('.qa-tag').forEach(r => r.onclick = (e) => { const run = e.target.closest('[data-runtag]'); if (run) { e.stopPropagation(); return runner(null, run.dataset.runtag, run.dataset.runtag); } V.q = r.dataset.tag; V.view = 'features'; store.set('qaView', V.view); render(); });
-  el.querySelectorAll('[data-rep]').forEach(b => b.onclick = () => runScope('report'));
-  el.querySelectorAll('[data-csv]').forEach(b => b.onclick = () => runScope('csv'));
+  el.querySelectorAll('.qa-sc').forEach(r => {
+    const sc = () => { const d = docFor(r.dataset.rel); return d && d.scenarios.find(s => s.line === +r.dataset.line); };
+    r.onclick = (e) => {
+      const b = e.target.closest('[data-set]');
+      if (b) { const s = sc(); if (s) { const cur = statusOf(r.dataset.rel, s); setStatus(r.dataset.rel, s, cur && cur.s === b.dataset.set ? null : b.dataset.set); } return; }
+      bs.openFile(r.dataset.rel, 'editor', +r.dataset.line + 1);
+    };
+    r.oncontextmenu = (e) => { const s = sc(); if (s) statusMenu(e, r.dataset.rel, s); };
+  });
+  el.querySelectorAll('.qa-tag').forEach(r => {
+    r.onclick = () => { V.q = V.q === r.dataset.tag ? '' : r.dataset.tag; render(); };
+    r.oncontextmenu = (e) => { e.preventDefault(); if (automation() && P.runner) bs.showMenu(e, [{ label: 'Executar ' + r.dataset.tag, icon: ICO.play, action: () => runner(null, r.dataset.tag, r.dataset.tag) }]); };
+  });
 }
 // relatório/CSV do painel: o que a busca encontrou (ou tudo)
 async function runScope(kind) {
@@ -1170,8 +1233,6 @@ const KI = {
   diff: '<svg class="i" viewBox="0 0 24 24"><path d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9v3a3 3 0 0 1-3 3H9"/></svg>',
   bug: '<svg class="i" viewBox="0 0 24 24"><path d="M8 8h8v8a4 4 0 0 1-8 0zM9 8a3 3 0 0 1 6 0M4 12h4M16 12h4M5 7l3 2M19 7l-3 2M5 18l3-2M19 18l-3-2"/></svg>',
   globe: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
-  list: '<svg class="i" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>',
-  timer: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/></svg>',
 };
 const copy = (v, what) => { bs.copyText(String(v)); toast((what || 'Copiado') + ': ' + (String(v).length > 60 ? String(v).slice(0, 60) + '…' : v), 'ok'); };
 const rnd = (n) => Math.floor(Math.random() * n);
@@ -1580,160 +1641,17 @@ function renderKit(sub, el) {
   sub.innerHTML = '';
   // geração rápida: um clique copia (sem abrir janela)
   const quick = [['CPF', () => G.cpf(store.get('qkFmt', true))], ['CNPJ', () => G.cnpj(store.get('qkFmt', true))], ['Nome', G.nome], ['E-mail', () => G.email()], ['Celular', () => G.telefone(true)], ['UUID', G.uuid]];
-  el.innerHTML = `<div class="qk-quick">${quick.map(([l], i) => `<button class="chip" data-q="${i}" title="Gera e copia">${esc(l)}</button>`).join('')}</div>
-    <div class="qk-tools">${KITS.map(k => `<button class="qk-tool" data-k="${k.id}">${k.ico}<span><b>${esc(k.name)}</b><small>${esc(k.desc)}</small></span></button>`).join('')}</div>`;
+  el.innerHTML = `<div class="qk-sec">Gerar e copiar</div><div class="qk-quick">${quick.map(([l], i) => `<button class="chip" data-q="${i}" title="Gera um ${esc(l)} e copia">${esc(l)}</button>`).join('')}</div>
+    <div class="qk-sec">Ferramentas</div><div class="qk-tools">${KITS.map(k => `<button class="qk-tool" data-k="${k.id}">${k.ico}<span><b>${esc(k.name)}</b><small>${esc(k.desc)}</small></span></button>`).join('')}</div>`;
   el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => copy(quick[+b.dataset.q][1](), quick[+b.dataset.q][0]));
   el.querySelectorAll('[data-k]').forEach(b => b.onclick = () => KITS.find(k => k.id === b.dataset.k).run());
 }
-
-// ====================================================================================================================
-// Checklists de teste (por projeto, na pasta de dados do plugin)
-// ====================================================================================================================
-const CHK_TPL = {
-  'Smoke test': ['A aplicação abre sem erro', 'Login com usuário válido', 'Menu principal e navegação', 'Tela principal carrega os dados', 'Cadastro principal salva', 'Busca devolve resultado', 'Logout'],
-  'Formulário': ['Campos obrigatórios marcados e validados', 'Mensagens de erro claras e no campo certo', 'Máscaras (CPF, CNPJ, telefone, CEP, data, moeda)', 'Tamanho máximo de cada campo (valores limite)', 'Caracteres especiais, acentos e emoji', 'Colar texto (Ctrl+V) nos campos', 'Tab segue a ordem lógica', 'Enter envia (ou não) como esperado', 'Duplo clique em Salvar não duplica o registro', 'Dados mantidos depois de um erro', 'Cancelar/voltar não salva'],
-  'Login e sessão': ['Usuário e senha válidos', 'Senha errada mostra mensagem genérica', 'Usuário bloqueado / inativo', 'Campos vazios', 'Esqueci a senha', 'Sessão expira e pede login de novo', 'Logout invalida a sessão (voltar no navegador)', 'Login em duas abas ou dispositivos', 'Perfis veem só o que podem (permissões)'],
-  'Regressão': ['Fluxo principal de ponta a ponta', 'Funcionalidades vizinhas da alteração', 'Integrações (APIs, filas, e-mails)', 'Relatórios e exportações', 'Permissões por perfil', 'Dados antigos continuam abrindo', 'Desempenho percebido não piorou', 'Logs sem erros novos'],
-  'Acessibilidade básica': ['Navegação só com o teclado', 'Foco visível em todos os elementos', 'Imagens com texto alternativo', 'Contraste de cores suficiente', 'Rótulos nos campos de formulário', 'Zoom de 200% sem quebrar a tela', 'Leitor de tela anuncia botões e erros'],
-  'Responsividade': ['Celular (360px)', 'Tablet (768px)', 'Notebook (1366px)', 'Monitor grande (1920px)', 'Retrato e paisagem', 'Menus e tabelas no celular', 'Chrome, Edge e Firefox'],
-  'API': ['Status HTTP corretos (200, 201, 400, 401, 403, 404, 500)', 'Contrato: campos, tipos e obrigatórios', 'Sem token / token expirado', 'Payload inválido e campos extras', 'Paginação e filtros', 'Idempotência (repetir a chamada)', 'Tempo de resposta', 'Mensagens de erro sem dados sensíveis'],
-};
-const CHK = { list: null, for: null, open: store.get('qaChkOpen', null) };
-async function chkLoad() { if (CHK.for !== proj()) { CHK.for = proj(); try { CHK.list = (await plugin.data.get('chk:' + proj())) || []; } catch { CHK.list = []; } } return CHK.list; }
-const chkSave = () => plugin.data.set('chk:' + proj(), CHK.list).catch(e => toast(e.message));
-function chkMd(c) { return `# ${c.title}\n\n${c.items.map(i => `- [${i.done ? 'x' : ' '}] ${i.t}${i.note ? ` — ${i.note}` : ''}`).join('\n')}\n\n${c.items.filter(i => i.done).length}/${c.items.length} · ${new Date().toLocaleString('pt-BR')}${P.settings.qaName ? ' · ' + P.settings.qaName : ''}\n`; }
-async function renderChecklists(sub, el) {
-  await chkLoad();
-  $('#toolSub').textContent = `${CHK.list.length} checklist(s)`;
-  $('#toolActions').innerHTML = `<button class="icon-btn" id="ckNew" title="Nova checklist">${ICO.plus}</button>`;
-  $('#ckNew').onclick = (e) => bs.showMenu(e, [...Object.keys(CHK_TPL).map(k => ({ label: k, icon: KI.list, action: () => chkNew(k, CHK_TPL[k]) })), '-', { label: 'Em branco…', icon: ICO.plus, action: () => chkNew('', []) }], 'Nova checklist');
-  sub.innerHTML = '';
-  const c = CHK.list.find(x => x.id === CHK.open);
-  if (!c) {
-    el.innerHTML = CHK.list.length ? CHK.list.map(c => { const d = c.items.filter(i => i.done).length; return `<div class="qa-feat" data-ck="${c.id}"><div class="qa-ft"><span class="qa-fn">${esc(c.title)}</span></div><span class="qa-n">${d}/${c.items.length}</span>${bar({ pass: d, fail: 0, blocked: 0, none: c.items.length - d }, c.items.length)}</div>`; }).join('')
-      : `<div class="empty">Nenhuma checklist ainda.<br><br>${Object.keys(CHK_TPL).map(k => `<button class="chip" data-tpl="${esc(k)}">${esc(k)}</button>`).join(' ')}</div>`;
-    el.querySelectorAll('[data-ck]').forEach(r => { r.onclick = () => { CHK.open = r.dataset.ck; store.set('qaChkOpen', CHK.open); render(); }; r.oncontextmenu = (e) => bs.showMenu(e, [{ label: 'Apagar', icon: bs.I.x, action: async () => { CHK.list = CHK.list.filter(x => x.id !== r.dataset.ck); await chkSave(); render(); } }], ''); });
-    el.querySelectorAll('[data-tpl]').forEach(b => b.onclick = () => chkNew(b.dataset.tpl, CHK_TPL[b.dataset.tpl]));
-    return;
-  }
-  const d = c.items.filter(i => i.done).length;
-  el.innerHTML = `<div class="ck-hd"><button class="icon-btn" id="ckBack" title="Voltar">${ICO.chev}</button><input class="ck-title" value="${esc(c.title)}"><span class="qa-n">${d}/${c.items.length}</span></div>
-    ${bar({ pass: d, fail: 0, blocked: 0, none: c.items.length - d }, c.items.length).replace('qa-bar', 'qa-bar ck-bar')}
-    <div class="ck-items">${c.items.map((it, i) => `<div class="ck-it ${it.done ? 'done' : ''}" data-i="${i}"><input type="checkbox" ${it.done ? 'checked' : ''}><div><div class="ck-t">${esc(it.t)}</div>${it.note ? `<div class="ck-note">${esc(it.note)}</div>` : ''}</div><button class="icon-btn" data-more title="Mais">${bs.TI.more}</button></div>`).join('')}</div>
-    <input class="qa-q ck-add" placeholder="+ item (Enter)">
-    <div class="qa-acts"><button class="chip" id="ckCopy">Copiar (Markdown)</button><button class="chip" id="ckSave">Salvar .md</button><button class="chip" id="ckReset">Desmarcar tudo</button></div>`;
-  el.querySelector('#ckBack').onclick = () => { CHK.open = null; store.set('qaChkOpen', null); render(); };
-  el.querySelector('.ck-title').onchange = (e) => { c.title = e.target.value.trim() || c.title; chkSave(); };
-  el.querySelectorAll('.ck-it').forEach(r => {
-    const it = c.items[+r.dataset.i];
-    r.querySelector('input').onchange = (e) => { it.done = e.target.checked; chkSave(); render(); };
-    r.querySelector('[data-more]').onclick = (e) => bs.showMenu(e, [
-      { label: 'Observação…', icon: bs.I.edit, action: () => dialog('ckNote', `<div class="dlg-hd"><span class="dlg-ic">${KI.list}</span><div><h3>Observação</h3><p>${esc(it.t)}</p></div></div>
-          <label class="fld">Observação<textarea id="ckNoteIn" rows="3">${esc(it.note || '')}</textarea></label>
-          <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip primary" id="ckNoteOk">Salvar</button></div>`, (d) => {
-          d.querySelector('#ckNoteIn').focus();
-          d.querySelector('#ckNoteOk').onclick = () => { it.note = d.querySelector('#ckNoteIn').value.trim(); d.hidden = true; chkSave(); render(); };
-        }) },
-      { label: 'Apagar item', icon: bs.I.x, action: () => { c.items.splice(+r.dataset.i, 1); chkSave(); render(); } },
-    ], it.t);
-  });
-  const add = el.querySelector('.ck-add');
-  add.onkeydown = (e) => { if (e.key === 'Enter' && add.value.trim()) { c.items.push({ t: add.value.trim(), done: false }); chkSave(); render(); setTimeout(() => $('.ck-add')?.focus(), 30); } };
-  el.querySelector('#ckCopy').onclick = () => copy(chkMd(c), 'Checklist copiada');
-  el.querySelector('#ckSave').onclick = async () => { const rel = `${(P.settings.bugsDir || 'qa').replace(/^\/+|\/+$/g, '')}/checklists/${c.title.replace(/[\\/:*?"<>|]+/g, '-')} - ${stamp().slice(0, 10)}.md`; try { await writeText(rel, chkMd(c)); toast('Salvo em ' + rel, 'ok'); bs.openFile(rel, 'editor'); } catch (e) { toast(e.message); } };
-  el.querySelector('#ckReset').onclick = () => { c.items.forEach(i => { i.done = false; }); chkSave(); render(); };
-}
-async function chkNew(title, items) {
-  await chkLoad();
-  const c = { id: Date.now().toString(36), title: title || 'Checklist', created: Date.now(), items: items.map(t => ({ t, done: false })) };
-  CHK.list.unshift(c); await chkSave(); CHK.open = c.id; store.set('qaChkOpen', c.id); V.top = 'chk'; store.set('qaTop', 'chk'); bs.openTool('qa'); render();
-}
-
-// ====================================================================================================================
-// Sessão de teste exploratório: missão, cronômetro e anotações com horário (Bug, Dúvida, Ideia, Nota)
-// ====================================================================================================================
-const SES = { cur: null, timer: null, st: null };
-const NOTE_KINDS = [['bug', 'Bug', '🐞'], ['q', 'Dúvida', '❓'], ['idea', 'Ideia', '💡'], ['note', 'Nota', '📝']];
-async function sesLoad() { try { SES.cur = (await plugin.data.get('ses')) || null; } catch { SES.cur = null; } sesTick(); }
-const sesSave = () => plugin.data.set('ses', SES.cur).catch(() => {});
-const elapsed = (s) => s ? (s.end || (s.paused ? s.pausedAt : Date.now())) - s.start - (s.pauseTotal || 0) : 0;
-const hms = (ms) => { const t = Math.floor(ms / 1000); return `${Math.floor(t / 3600) ? Math.floor(t / 3600) + ':' : ''}${pad(Math.floor(t / 60) % 60)}:${pad(t % 60)}`; };
-function sesTick() {
-  if (!SES.st) SES.st = bs.status.add({ id: 'stQaSes', title: 'Sessão de teste exploratório (QAutils)', onclick: () => { V.top = 'ses'; store.set('qaTop', 'ses'); bs.openTool('qa'); render(); } });
-  const on = SES.cur && !SES.cur.end;
-  SES.st.hidden = !on;
-  clearInterval(SES.timer);
-  if (!on) return;
-  const upd = () => { SES.st.innerHTML = `<i class="qa-rec ${SES.cur.paused ? 'paused' : ''}"></i> ${hms(elapsed(SES.cur))}`; const c = $('#sesClock'); if (c) c.textContent = hms(elapsed(SES.cur)); };
-  upd(); SES.timer = setInterval(upd, 1000);
-}
-function sesMd(s) {
-  const dur = hms(elapsed(s));
-  const by = (k) => s.notes.filter(n => n.k === k);
-  const t = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  return `# Sessão exploratória: ${s.charter}\n\n**Área:** ${s.area || '-'}  \n**Início:** ${new Date(s.start).toLocaleString('pt-BR')}  \n**Duração:** ${dur}${s.plan ? ` de ${s.plan} min planejados` : ''}  \n**QA:** ${P.settings.qaName || '-'}  \n${s.env ? `**Ambiente:** ${s.env}  \n` : ''}
-**Resumo:** ${by('bug').length} bug(s) · ${by('q').length} dúvida(s) · ${by('idea').length} ideia(s) · ${by('note').length} nota(s)
-${NOTE_KINDS.map(([k, l, e]) => by(k).length ? `\n## ${e} ${l}s\n${by(k).map(n => `- **${t(n.at)}** ${n.text}`).join('\n')}` : '').join('\n')}
-
-## Linha do tempo
-${s.notes.map(n => `- ${t(n.at)} ${NOTE_KINDS.find(x => x[0] === n.k)[2]} ${n.text}`).join('\n') || '- (sem anotações)'}
-`;
-}
-async function renderSession(sub, el) {
-  if (SES.cur === null && !SES.loaded) { SES.loaded = true; await sesLoad(); }
-  sub.innerHTML = '';
-  const s = SES.cur;
-  if (!s || s.end) {
-    $('#toolSub').textContent = 'teste exploratório';
-    const envs = envList();
-    el.innerHTML = `<div class="ses-new"><p class="qa-hint">Uma sessão com missão e tempo definidos: você explora, anota o que achar e no fim sai um relatório com tudo e os horários.</p>
-      <label class="fld">Missão (o que explorar e com qual objetivo)<textarea id="sCh" rows="3" placeholder="Explorar o cadastro de corretor com CPFs e CNPJs inválidos para achar falhas de validação"></textarea></label>
-      <label class="fld">Área / funcionalidade<input id="sAr" placeholder="Portal de negócios › Campanhas"></label>
-      <div class="qa-2"><label class="fld">Tempo planejado<select id="sPl">${[30, 45, 60, 90, 120].map(m => `<option value="${m}" ${m === 60 ? 'selected' : ''}>${m} min</option>`).join('')}</select></label>
-        <label class="fld">Ambiente<input id="sEn" list="sEnL"><datalist id="sEnL">${envs.map(e => `<option value="${esc(e.name)}">`).join('')}</datalist></label></div>
-      <button class="chip primary" id="sGo">${ICO.play} Começar sessão</button>
-      ${s && s.end ? `<div class="ses-last"><b>Última sessão:</b> ${esc(s.charter)} · ${hms(elapsed(s))} · ${s.notes.length} anotações <button class="chip" id="sLastCopy">Copiar relatório</button></div>` : ''}</div>`;
-    el.querySelector('#sGo').onclick = async () => {
-      const ch = el.querySelector('#sCh').value.trim(); if (!ch) return toast('Escreva a missão da sessão');
-      SES.cur = { charter: ch, area: el.querySelector('#sAr').value.trim(), plan: +el.querySelector('#sPl').value, env: el.querySelector('#sEn').value.trim(), start: Date.now(), notes: [], pauseTotal: 0 };
-      await sesSave(); sesTick(); render();
-    };
-    const lc = el.querySelector('#sLastCopy'); if (lc) lc.onclick = () => copy(sesMd(s), 'Relatório da sessão copiado');
-    return;
-  }
-  $('#toolSub').textContent = s.paused ? 'pausada' : 'gravando';
-  const over = s.plan && elapsed(s) > s.plan * 60000;
-  el.innerHTML = `<div class="ses-run"><div class="ses-clock ${over ? 'over' : ''}"><i class="qa-rec ${s.paused ? 'paused' : ''}"></i><span id="sesClock">${hms(elapsed(s))}</span><small>de ${s.plan} min</small></div>
-    <div class="ses-ch">${esc(s.charter)}${s.area ? `<small>${esc(s.area)}</small>` : ''}</div>
-    <div class="ses-kinds">${NOTE_KINDS.map(([k, l, e], i) => `<button class="chip ${i === 0 ? '' : ''}" data-k="${k}" title="Anotar como ${l}">${e} ${l}</button>`).join('')}</div>
-    <textarea id="sNote" rows="3" placeholder="O que você viu? Ctrl+Enter anota como Nota; escolha o tipo acima"></textarea>
-    <div class="ses-notes">${[...s.notes].reverse().map((n, i) => `<div class="ses-n ${n.k}"><span>${new Date(n.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span><b>${NOTE_KINDS.find(x => x[0] === n.k)[2]}</b><div>${esc(n.text)}</div>${n.k === 'bug' ? `<button class="icon-btn" data-bug="${s.notes.length - 1 - i}" title="Abrir relatório de bug">${KI.bug}</button>` : ''}</div>`).join('') || '<div class="qa-hint">As anotações aparecem aqui, com o horário.</div>'}</div>
-    <div class="qa-acts"><button class="chip" id="sPause">${s.paused ? 'Continuar' : 'Pausar'}</button><button class="chip" id="sCopy">Copiar relatório</button><button class="chip primary" id="sEnd">Encerrar e salvar</button></div></div>`;
-  const ta = el.querySelector('#sNote');
-  const addNote = async (k) => { const t = ta.value.trim(); if (!t) return ta.focus(); s.notes.push({ k, text: t, at: Date.now() }); await sesSave(); render(); setTimeout(() => $('#sNote')?.focus(), 30); };
-  el.querySelectorAll('[data-k]').forEach(b => b.onclick = () => addNote(b.dataset.k));
-  ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNote('note'); } };
-  el.querySelectorAll('[data-bug]').forEach(b => b.onclick = () => { const n = s.notes[+b.dataset.bug]; kitBug({ title: n.text.split('\n')[0].slice(0, 120), actual: n.text, env: s.env, evidence: `Sessão exploratória "${s.charter}" às ${new Date(n.at).toLocaleTimeString('pt-BR')}` }); });
-  el.querySelector('#sPause').onclick = async () => { if (s.paused) { s.pauseTotal += Date.now() - s.pausedAt; s.paused = false; } else { s.paused = true; s.pausedAt = Date.now(); } await sesSave(); sesTick(); render(); };
-  el.querySelector('#sCopy').onclick = () => copy(sesMd(s), 'Relatório da sessão copiado');
-  el.querySelector('#sEnd').onclick = async () => {
-    if (s.paused) { s.pauseTotal += Date.now() - s.pausedAt; s.paused = false; }
-    s.end = Date.now();
-    const rel = `${(P.settings.bugsDir || 'qa').replace(/^\/+|\/+$/g, '')}/sessoes/${stamp(new Date(s.start))} -${s.charter.slice(0, 60).replace(/[\\/:*?"<>|\n]+/g, '-')}.md`;
-    try { await writeText(rel, sesMd(s)); toast('Sessão salva em ' + rel, 'ok'); bs.openFile(rel, 'editor'); } catch (e) { toast(e.message); }
-    await sesSave(); sesTick(); render();
-  };
-  ta.focus();
-}
-setTimeout(() => sesLoad(), 1500);
 
 // ---------- registro ----------
 bs.tools.register({ id: 'qa', title: 'QAutils', icon: ICO.qa, key: 'Alt+9', order: 75, render });
 // cada ferramenta do kit também no Buscar em tudo ("QA: CPF", "QA: JSON"...)
 bs.actions.add(KITS.map(k => ({ label: 'QA: ' + k.name, icon: k.ico, run: k.run })));
 bs.actions.add([
-  { label: 'QA: Nova checklist de teste', icon: KI.list, run: () => { V.top = 'chk'; store.set('qaTop', 'chk'); bs.openTool('qa'); render(); } },
-  { label: 'QA: Sessão de teste exploratório', icon: KI.timer, run: () => { V.top = 'ses'; store.set('qaTop', 'ses'); bs.openTool('qa'); render(); } },
   { label: 'QA: Nova feature (chamado)', icon: ICO.feat, run: () => newFeature() },
   { label: 'QA: Painel de features e execução', icon: ICO.qa, run: () => bs.openTool('qa') },
   { label: 'QA: Relatório de evidências do projeto', icon: ICO.doc, run: () => makeReport('', true) },
