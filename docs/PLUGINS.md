@@ -95,10 +95,11 @@ Abre pelo ícone da chave na barra da esquerda (**Alt+8**, se nenhum plugin usar
 
 ### Para quem usa
 
-1. Copie o token no site do serviço.
-2. No Cofre, preencha nome (`github`), descrição e **sites liberados** (`api.github.com`) e clique em **Colar e guardar**. O token vai direto da área de transferência para o cofre, que limpa a área de transferência em seguida.
-3. Confirme na caixa do Windows que aparece. Ela mostra o tamanho e o começo do valor (`começa com "ghp_"`), para você conferir.
-4. Libere o token para os plugins: pelo cartão de pedido do plugin (**Permitir**) ou por **Liberar para um plugin…** no segredo. Cada liberação também pede o "Sim" na caixa do Windows.
+1. No Cofre, preencha nome (`github`), descrição e **sites liberados** (`api.github.com`). Se o segredo vem do pedido de um plugin, isso já vem preenchido, junto com o que ele pede (um token, usuário e senha...). Sem pedido, escolha em **O que guardar**: um token ou usuário e senha.
+2. Clique em **Digitar e guardar…**. Abre uma janela do Windows (*BlueScreen · Cofre*) com um campo para cada coisa que o plugin pediu. Ela mostra para onde o segredo pode ir. Digite ou cole (Ctrl+V); senhas e tokens aparecem como `•••` (marque **Mostrar o que eu digito** para conferir). **Guardar** grava, **Cancelar** (ou Esc) desiste. Se o que você colou ainda estiver na área de transferência, ela é limpa.
+3. Libere o segredo para os plugins: pelo cartão de pedido do plugin (**Permitir**) ou por **Liberar para um plugin…** no segredo. Cada liberação pede o "Sim" numa caixa do Windows.
+
+Para trocar uma senha ou token vencido: **⋯ › Trocar o valor…** no segredo. Os campos que não são secretos (usuário) vêm preenchidos, e um campo secreto deixado em branco mantém o valor atual.
 
 Em cada segredo você vê quando ele foi usado e por quem. O **Registro de uso** lista os usos e as recusas. Tirar o acesso de um plugin ou apagar um segredo vale na hora, sem confirmação.
 
@@ -118,6 +119,60 @@ Declare no `plugin.json` o que o plugin precisa. Isso aparece como pedido no Cof
 ]
 ```
 
+**O que o usuário digita (`kind` ou `fields`).** O plugin só **pede**: nada sai do Cofre até o usuário digitar na janela do Windows e liberar o plugin. Sem `kind` nem `fields`, o Cofre pede um valor só, o token. Para outra coisa, escolha um tipo pronto com `"kind"`:
+
+```json
+"vault": [{ "key": "relatorios.aws", "label": "Relatórios: credencial da AWS", "kind": "aws", "hosts": ["*.amazonaws.com"] }]
+```
+
+| `kind` | A janela pede (campo: `{{vault:nome/campo}}`) | `{{vault:nome}}` |
+|---|---|---|
+| `token` (padrão) | Token (`value`) | o token |
+| `basic` | Usuário (`user`), Senha (`password`) | a senha |
+| `domain` | Usuário (`user`), Senha (`password`), Domínio (`domain`, opcional) | a senha |
+| `apiKeySecret` | Chave (`key`), Segredo (`secret`) | o segredo |
+| `oauthClient` | Client ID (`client_id`), Client secret (`client_secret`), Tenant/realm (`tenant`, opcional) | o client secret |
+| `aws` | Access key ID (`access_key_id`), Secret access key (`secret_access_key`), Session token (`session_token`, opcional), Região (`region`, opcional) | a secret key |
+| `database` | Servidor (`host`), Porta (`port`, número, opcional), Banco (`database`, opcional), Usuário (`user`), Senha (`password`) | a senha |
+| `connectionString` | String de conexão (`value`) | a string |
+| `webhook` | URL do webhook (`value`, confere `https://`) | a URL |
+| `sshKey` | Chave privada (`private_key`, várias linhas), Senha da chave (`passphrase`, opcional) | a chave |
+| `certificate` | Certificado (`cert`, várias linhas), Chave privada (`key`, várias linhas), Senha da chave (`passphrase`, opcional) | a chave |
+| `pin` | PIN (`value`, só números) | o PIN |
+| `text` | Texto (`value`, várias linhas) | o texto |
+
+A tela do Cofre recebe a lista atual em `GET vault` → `kinds`, e o usuário escolhe um deles em **O que guardar** quando cria um segredo sem pedido de plugin.
+
+Se nenhum tipo serve, liste os campos com `fields`, que vale mais que `kind`. A janela mostra um campo para cada um, com o rótulo que você escolheu:
+
+```json
+"vault": [
+  { "key": "drilltrace.svn", "label": "DrillTrace: usuário do SVN", "hosts": ["svn.empresa.com.br"],
+    "fields": [
+      { "key": "user", "label": "Usuário" },
+      { "key": "password", "label": "Senha" },
+      { "key": "domain", "label": "Domínio", "optional": true }
+    ] }
+]
+```
+
+| Campo de `fields` | |
+|---|---|
+| `key` | o nome do campo: letras, números, `_` e `-` (até 8 campos). Também vale só o nome: `"fields": ["user", "password"]` |
+| `label` | o rótulo na janela (sem ele, o `key`) |
+| `secret` | digitado como `•••`. Por padrão, todo campo é secreto, menos `user`, `username`, `usuario`, `login`, `email`, `url`, `host`, `domain`, `tenant`, `org`, `account` e `client_id` |
+| `optional` | pode ficar em branco (o padrão é obrigatório) |
+| `type` | o formato: `text` (padrão), `secret` ou `password` (texto secreto), `multiline` (caixa de várias linhas, para chaves e certificados PEM; não fica como `•••`), `url` (começa com `https://` ou `http://`), `email`, `number` (só dígitos). A janela confere url, e-mail e número antes de gravar e diz o que está errado |
+
+Cada campo vira `{{vault:nome/campo}}`. `{{vault:nome}}` sozinho é o primeiro campo secreto (a senha, o token). `{{vault:nome/basic}}` é o `base64("usuário:senha")` pronto para HTTP Basic, feito com o primeiro campo que não é secreto e o primeiro secreto:
+
+```js
+const r = await plugin.fetch('https://svn.empresa.com.br/repos/', { headers: { Authorization: 'Basic {{vault:drilltrace.svn/basic}}' } });
+await plugin.exec('svn', ['log', '-l', '5', url, '--non-interactive'], { env: { SVN_USER: '{{vault:drilltrace.svn/user}}', SVN_PASS: '{{vault:drilltrace.svn/password}}' } });
+```
+
+No servidor, `p.vault.reveal('drilltrace.svn/user')` lê um campo; `reveal('drilltrace.svn')` devolve o principal em `value` e todos em `fields` (`GET vault/reveal` → `{ value, fields: { user, password } }`). Um segredo já guardado com um valor só continua funcionando; se um plugin passar a pedir campos, **Trocar o valor…** pede os campos novos e o valor antigo fica no campo principal.
+
 **Plugin que só funciona com o token** (`"required": true`): enquanto faltar o segredo, a liberação ou o "ver valor", o painel do plugin na barra da esquerda mostra no lugar dele uma tela de configuração. Ela traz os passos (criar o segredo, permitir o plugin, deixar ver o valor, lido pelo plugin), o andamento de cada um e o botão **Abrir no Cofre**. A tela confere sozinha e mostra o painel assim que tudo estiver liberado, sem recarregar. Campos opcionais: `title` (o título da tela, ex.: "Configure o token do Dynatrace") e `revealWhy` (o motivo do passo "Deixar ver o valor").
 
 ```json
@@ -128,7 +183,7 @@ Declare no `plugin.json` o que o plugin precisa. Isso aparece como pedido no Cof
 ]
 ```
 
-**O mesmo token para vários plugins.** Pedidos sem segredo para os **mesmos sites** aparecem num cartão só ("2 plugins pedem um token para `*.apps.dynatrace.com`"). **Criar um para todos** guarda um segredo (o nome sugerido é o fim comum dos nomes, como `dynatrace`) e libera os plugins numa confirmação só. Cada plugin continua pedindo pelo nome dele (`{{vault:rastro.dynatrace}}`, `{{vault:drilltrace.dynatrace}}`): o Cofre guarda o apelido de cada um, e o nome de um plugin não vale para outro. Se já existe um segredo para o mesmo site, o pedido oferece **Usar “nome”**. Na página, a lista de plugins traz esses pedidos em `plugin.vaultKeys`, porque `plugin.vault` é a API do Cofre.
+**O mesmo token para vários plugins.** Pedidos sem segredo para os **mesmos sites** aparecem num cartão só ("2 plugins pedem token para `*.apps.dynatrace.com`"; com `fields` diferentes, a janela pede a união dos campos). **Criar um para todos** guarda um segredo (o nome sugerido é o fim comum dos nomes, como `dynatrace`) e libera os plugins numa confirmação só. Cada plugin continua pedindo pelo nome dele (`{{vault:rastro.dynatrace}}`, `{{vault:drilltrace.dynatrace}}`): o Cofre guarda o apelido de cada um, e o nome de um plugin não vale para outro. Se já existe um segredo para o mesmo site, o pedido oferece **Usar “nome”**. Na página, a lista de plugins traz esses pedidos em `plugin.vaultKeys`, porque `plugin.vault` é a API do Cofre.
 
 Use `{{vault:nome}}` onde o token entra. O núcleo troca pelo valor, confere o destino e tira o valor do que volta:
 
@@ -154,10 +209,10 @@ Em Python, `p.fetch(url, headers={...})`, `p.vault.status()` e `p.vault.reveal("
 
 | | |
 |---|---|
-| `plugin.vault.status()` | `[{ key, exists, granted, reveal, hosts, programs }]`: os segredos que o plugin pediu ou recebeu (sem valores) |
+| `plugin.vault.status()` | `[{ key, exists, granted, reveal, hosts, programs, fields }]`: os segredos que o plugin pediu ou recebeu (sem valores; `fields` são os nomes dos campos) |
 | `plugin.vault.has(nome)` | existe e está liberado para este plugin |
 | `plugin.vault.request(nome)` | abre o Cofre no pedido (criar o segredo ou liberar) |
-| `{{vault:nome}}` | em `fetch` (url, headers, corpo) e em `exec`/`spawn` (`env` e `stdin` do `exec`). Nos argumentos do programa é recusado, porque aparecem na lista de processos do PC |
+| `{{vault:nome}}`, `{{vault:nome/campo}}`, `{{vault:nome/basic}}` | em `fetch` (url, headers, corpo) e em `exec`/`spawn` (`env` e `stdin` do `exec`). Nos argumentos do programa é recusado, porque aparecem na lista de processos do PC |
 | `vault/reveal?plugin=&key=` | o valor, só para o servidor do plugin (pelo `BLUESCREEN_PLUGIN_TOKEN`) e com "ver valor" |
 
 Erros vêm com a explicação: segredo inexistente (404), plugin sem permissão, site ou programa não liberado, HTTP sem TLS (403).
@@ -166,8 +221,8 @@ Erros vêm com a explicação: segredo inexistente (404), plugin sem permissão,
 
 Todo `ui.js` roda na mesma página: um plugin pode chamar a API dizendo ser outro, mudar as funções da página e ler o que se digita nela. Por isso o cofre não confia em nada que venha da página:
 
-- **O valor não passa pela página.** Ele entra pela área de transferência, lida pelo núcleo, e nunca volta. Nenhuma rota entrega o valor para a página.
-- **Ampliar acesso pede uma caixa nativa do Windows.** Gravar um valor, liberar um plugin, marcar "ver valor" e acrescentar sites ou programas só valem depois do **Sim** na caixa *BlueScreen · Cofre*, que fica por cima de tudo. O JavaScript da página não clica nela, então um plugin não consegue se liberar sozinho. Há uma caixa por vez.
+- **O valor não passa pela página.** Ele é digitado numa janela nativa do Windows aberta pelo núcleo (nenhum `ui.js` lê o que se digita nela nem clica em **Guardar**) e nunca volta. Nenhuma rota entrega o valor para a página. A rota antiga `paste` (um valor só, da área de transferência) continua existindo.
+- **Ampliar acesso pede uma caixa nativa do Windows.** Gravar um valor (a própria janela de digitar), liberar um plugin, marcar "ver valor" e acrescentar sites ou programas só valem depois do **Sim** na caixa *BlueScreen · Cofre*, que fica por cima de tudo. O JavaScript da página não clica nela, então um plugin não consegue se liberar sozinho. Há uma caixa por vez.
 - **O token só vai para onde você deixou.** `{{vault:..}}` só funciona para os sites liberados (só HTTPS), sem seguir redirecionamentos, e só nas variáveis de ambiente dos programas liberados. Um plugin que finja ser outro continua preso aos mesmos destinos.
 - **O valor sai do que volta.** Se o site ou o programa devolver o token (um eco, um log), a resposta chega à página com `••••••` no lugar.
 - **Ler o valor exige identidade de processo.** Cada servidor de plugin recebe um token próprio (`BLUESCREEN_PLUGIN_TOKEN`), que as bibliotecas de apoio mandam sozinhas. Só com ele, e com "ver valor", sai o valor. Plugins não administram o cofre (a rota `vault` recusa quem chega com esse token).

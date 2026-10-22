@@ -1,5 +1,6 @@
 /* BlueScreen: Cofre (plugins/vault.rs). Tokens que você guarda uma vez e libera para os plugins que quiser.
-   O valor nunca passa por esta tela: entra pela área de transferência, lida pelo núcleo, e fica cifrado (DPAPI).
+   O valor nunca passa por esta tela: é digitado numa janela nativa do Windows aberta pelo núcleo, com os campos que o
+   plugin pediu (token, usuário e senha...; "fields" no plugin.json), e fica cifrado (DPAPI).
    Gravar, liberar um plugin e acrescentar sites ou programas pedem um "Sim" numa caixa nativa do Windows, que o
    JavaScript da página não clica; tirar acesso e apagar não pedem. Abre pelo ícone da chave na barra da esquerda
    (Alt+8), pela faixa no topo da aba Plugins, pelo Buscar em tudo ("Cofre") e por plugin.vault.request(nome). */
@@ -11,7 +12,7 @@ const V = { data: null, focus: null, form: null, edit: null };
 
 const post = async (body, wait) => {
   // as ações que ampliam acesso esperam o "Sim" na caixa do Windows
-  if (wait) toast('Confirme na janela do Windows…', '', 'vault-ask');
+  if (wait) toast(body.action === 'enter' ? 'Digite na janela do Windows…' : 'Confirme na janela do Windows…', '', 'vault-ask');
   V.data = await api('vault', {}, { method: 'POST', body: JSON.stringify(body) });
   return V.data;
 };
@@ -36,6 +37,13 @@ function banner() {
 function bindBanner(root) { root.querySelectorAll('[data-vault-open]').forEach(b => b.onclick = () => open()); }
 
 const chips = (list, empty) => list && list.length ? list.map(h => `<span class="vt-chip">${esc(h)}</span>`).join('') : `<span class="vt-none">${esc(empty)}</span>`;
+// campos que o plugin pede (token, usuário e senha...): os rótulos para mostrar e a união de vários pedidos
+const TOKEN = [{ key: 'value', label: 'Token', secret: true }];
+// tipos prontos (token, usuário e senha, AWS, chave PEM...): vêm do núcleo (vault.rs, KINDS)
+const kinds = () => (V.data && V.data.kinds) || [{ id: 'token', label: 'Um token (ou chave de API)', fields: TOKEN }];
+const kindChips = (id) => ((kinds().find(k => k.id === id) || kinds()[0]).fields || []).map(x => `<span class="vt-chip">${esc(x.label || x.key)}${x.optional ? ' (opcional)' : ''}</span>`).join('');
+const fieldsTxt = (f) => (f && f.length ? f : TOKEN).map(x => typeof x === 'string' ? x : x.label || x.key).join(' + ');
+const mergeFields = (list) => { const out = []; for (const r of list) for (const f of r.fields || []) if (!out.some(x => x.key === f.key)) out.push(f); return out; };
 const pname = (id) => (bs.plugins.list.find(p => p.id === id) || { name: id }).name;
 const picon = (id) => bs.plugIcon(bs.plugins.list.find(p => p.id === id) || { id, name: id }, 'vt-pi');
 
@@ -45,6 +53,7 @@ function requestCard(r) {
   return `<div class="vt-req ${V.focus && V.focus.plugin === r.plugin && V.focus.key === r.key ? 'focus' : ''}" data-plugin="${esc(r.plugin)}" data-key="${esc(r.key)}">
     ${picon(r.plugin)}
     <div class="vt-tx"><div><b>${esc(r.pluginName)}</b> pede <code>${esc(r.key)}</code>${r.label ? ` · ${esc(r.label)}` : ''}</div>
+      ${!r.exists ? `<div class="vt-row">Você digita: <span class="vt-chip">${esc(fieldsTxt(r.fields))}</span></div>` : ''}
       ${r.why ? `<div class="vt-why">${esc(r.why)}</div>` : ''}
       ${r.hosts && r.hosts.length ? `<div class="vt-row">Sites: ${chips(r.hosts)}</div>` : ''}
       ${r.exists && r.entry && r.entry !== r.key ? `<div class="vt-why">Usa o segredo <code>${esc(r.entry)}</code>.</div>` : ''}
@@ -75,7 +84,7 @@ function groupCard(g) {
   const same = [...new Set(g.list.flatMap(r => r.sameHosts || []))];
   return `<div class="vt-req vt-group" data-group="${esc(hostKey(g.list[0]))}">
     <span class="vt-key">${KEY}</span>
-    <div class="vt-tx"><div><b>${g.list.length} plugins</b> pedem um token para ${chips(g.hosts)}</div>
+    <div class="vt-tx"><div><b>${g.list.length} plugins</b> pedem ${esc(fieldsTxt(mergeFields(g.list)).toLowerCase())} para ${chips(g.hosts)}</div>
       ${g.list.map(r => `<div class="vt-gp">${picon(r.plugin)}<div><b>${esc(r.pluginName)}</b> chama de <code>${esc(r.key)}</code>${r.reveal ? ' <span class="vt-warn">· quer ver o valor</span>' : ''}${r.why ? `<div class="vt-why">${esc(r.why)}</div>` : ''}</div></div>`).join('')}
       <div class="vt-why">Um segredo só serve a todos: cada plugin continua usando o nome dele.</div></div>
     <div class="vt-gbtns">${same.map(n => `<button class="chip primary" data-guse="${esc(n)}">Usar “${esc(n)}”</button>`).join('')}<button class="chip ${same.length ? '' : 'primary'}" data-gnew>Criar um para todos…</button></div></div>`;
@@ -86,7 +95,7 @@ function entryCard(e) {
   const others = bs.plugins.list.filter(p => !(e.grants || {})[p.id]);
   return `<div class="vt-ent" data-name="${esc(e.name)}">
     <div class="vt-hd"><span class="vt-key">${KEY}</span><div class="vt-tx"><div><b>${esc(e.name)}</b>${e.label ? ` <span class="vt-lbl">${esc(e.label)}</span>` : ''}</div>
-      <div class="vt-meta">${e.hint ? `${esc(e.hint)}… · ` : ''}${e.length} caracteres · trocado ${esc(bs.ago(e.updated))}${e.lastUsed ? ` · usado ${esc(bs.ago(e.lastUsed))} por ${esc(pname(e.lastBy))}` : ' · nunca usado'}</div></div>
+      <div class="vt-meta">${e.fields && e.fields.length > 1 ? `${esc(e.fields.map(f => f.label || f.key).join(' + '))} · ` : ''}${e.hint ? `${esc(e.hint)}… · ` : ''}${e.length} caracteres · trocado ${esc(bs.ago(e.updated))}${e.lastUsed ? ` · usado ${esc(bs.ago(e.lastUsed))} por ${esc(pname(e.lastBy))}` : ' · nunca usado'}</div></div>
       <button class="icon-btn" data-act="menu" title="Mais">${bs.TI.more}</button></div>
     ${editing ? `<div class="vt-form">
         <label class="fld">Descrição<input data-f="label" value="${esc(e.label || '')}" spellcheck="false"></label>
@@ -105,15 +114,19 @@ function entryCard(e) {
 }
 function newForm() {
   const f = V.form || {};
+  // campos pedidos pelo plugin; sem pedido, você escolhe: um token ou usuário e senha
+  const asked = f.fields && f.fields.length;
   return `<div class="vt-new"><div class="vt-sub">Novo segredo</div>
-    <p class="vt-why">Copie o token (no site do serviço) e clique em <b>Colar e guardar</b>. Ele vai direto da área de transferência para o cofre, sem passar por esta tela.</p>
+    <p class="vt-why">Clique em <b>Digitar e guardar</b>: abre uma janela do Windows pedindo ${asked ? `<b>${esc(fieldsTxt(f.fields).toLowerCase())}</b>` : 'o valor'}. Digite ou cole ali (Ctrl+V). O que você digita vai direto para o cofre, sem passar por esta tela.</p>
+    ${asked ? `<div class="vt-row">O plugin pede: ${f.fields.map(x => `<span class="vt-chip">${esc(x.label || x.key)}${x.optional ? ' (opcional)' : ''}</span>`).join('')}</div>`
+      : `<label class="fld">O que guardar<select id="vtKind">${kinds().map(k => `<option value="${esc(k.id)}" ${k.id === (f.kind || 'token') ? 'selected' : ''}>${esc(k.label)}</option>`).join('')}</select></label>
+         <div class="vt-row" id="vtKindF">Você digita: ${kindChips(f.kind || 'token')}</div>`}
     <div class="vt-2"><label class="fld">Nome<input id="vtName" value="${esc(f.name || '')}" spellcheck="false" placeholder="github"></label>
       <label class="fld">Descrição<input id="vtLabel" value="${esc(f.label || '')}" spellcheck="false" placeholder="Token do GitHub"></label></div>
     <label class="fld">Sites liberados <small class="pl-help">para onde o token pode ir, em HTTPS: api.github.com, *.atlassian.net</small><input id="vtHosts" value="${esc((f.hosts || []).join(', '))}" spellcheck="false"></label>
     <label class="fld">Programas liberados <small class="pl-help">opcional: recebem o token numa variável de ambiente (gh, git)</small><input id="vtProgs" value="${esc((f.programs || []).join(', '))}" spellcheck="false"></label>
     ${(f.plugins || []).map((p, i) => `<label class="chk vt-chk"><input type="checkbox" data-gp="${i}" checked> Liberar para ${esc(pname(p.plugin))} <span class="vt-mut">(como <code>${esc(p.as)}</code>${p.reveal ? ', vendo o valor' : ''})</span></label>`).join('')}
-    <label class="chk vt-chk"><input type="checkbox" id="vtClear" checked> Limpar a área de transferência depois</label>
-    <div class="vt-btns"><button class="chip primary" id="vtPaste">${KEY}Colar e guardar</button></div></div>`;
+    <div class="vt-btns"><button class="chip primary" id="vtPaste">${KEY}Digitar e guardar…</button></div></div>`;
 }
 
 function render() {
@@ -142,7 +155,7 @@ function draw() {
 function bind(el) {
   const val = (id) => (el.querySelector('#' + id) || {}).value || '';
   // pedidos: liberar ou criar já com os sites que o plugin sugeriu
-  const toForm = (list, name) => { const r = list[0]; V.form = { name, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })) }; draw(); el.querySelector('#vtPaste')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+  const toForm = (list, name) => { const r = list[0]; V.form = { name, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })), fields: mergeFields(list) }; draw(); el.querySelector('#vtPaste')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); };
   const grantAll = (name, list) => act(() => post({ action: 'grantMany', name, grants: list.map(x => ({ plugin: x.plugin, as: x.key, use: true, reveal: !!x.reveal })) }, true));
   el.querySelectorAll('.vt-req:not(.vt-group)').forEach(c => {
     const r = V.data.requests.find(x => x.plugin === c.dataset.plugin && x.key === c.dataset.key);
@@ -160,7 +173,7 @@ function bind(el) {
   el.querySelectorAll('.vt-ent').forEach(c => {
     const name = c.dataset.name;
     c.querySelector('[data-act="menu"]').onclick = (ev) => bs.showMenu(ev, [
-      { label: 'Trocar o valor (colar)', icon: KEY, action: () => act(() => post({ action: 'paste', name, clear: true }, true)) },
+      { label: 'Trocar o valor…', icon: KEY, action: () => act(() => post({ action: 'enter', name }, true)) },
       { label: 'Editar sites e programas', icon: bs.I.edit, action: () => { V.edit = name; draw(); } },
       '-',
       { label: 'Apagar do cofre…', icon: bs.I.x, action: () => window.dialog('vtDel', `<div class="dlg-hd"><span class="dlg-ic del">${bs.I.x}</span><div><h3>Apagar "${esc(name)}" do cofre?</h3><p>Os plugins que usam este segredo param de funcionar até você guardar outro com o mesmo nome.</p></div></div>
@@ -182,15 +195,20 @@ function bind(el) {
     const add = c.querySelector('.vt-add');
     if (add) add.onchange = () => add.value && act(() => post({ action: 'grant', name, plugin: add.value, use: true }, true));
   });
+  const ks = el.querySelector('#vtKind');
+  if (ks) ks.onchange = () => { el.querySelector('#vtKindF').innerHTML = 'Você digita: ' + kindChips(ks.value); };
   const paste = el.querySelector('#vtPaste');
   if (paste) paste.onclick = () => {
     const name = val('vtName').trim();
-    V.form = { ...(V.form || {}), name, label: val('vtLabel'), hosts: val('vtHosts').split(',').map(s => s.trim()).filter(Boolean), programs: val('vtProgs').split(',').map(s => s.trim()).filter(Boolean) };
+    const kind = val('vtKind');
+    V.form = { ...(V.form || {}), name, kind, label: val('vtLabel'), hosts: val('vtHosts').split(',').map(s => s.trim()).filter(Boolean), programs: val('vtProgs').split(',').map(s => s.trim()).filter(Boolean) };
     if (!name) { toast('Dê um nome ao segredo (ex.: github)'); return; }
     // os plugins marcados recebem o segredo com o nome que cada um usa (uma confirmação só para todos)
     const grants = (V.form.plugins || []).filter((_, i) => el.querySelector(`[data-gp="${i}"]`)?.checked);
     act(async () => {
-      await post({ action: 'paste', name, label: V.form.label, hosts: V.form.hosts, programs: V.form.programs, clear: el.querySelector('#vtClear').checked }, true);
+      // o que o plugin pediu ou o tipo escolhido (o núcleo monta os campos dele)
+      const what = V.form.fields && V.form.fields.length ? { fields: V.form.fields } : { kind: kind || 'token' };
+      await post({ action: 'enter', name, label: V.form.label, hosts: V.form.hosts, programs: V.form.programs, ...what }, true);
       V.form = null; toast(`"${name}" guardado no cofre`, 'ok');
       if (grants.length) await post({ action: 'grantMany', name, grants: grants.map(g => ({ plugin: g.plugin, as: g.as, use: true, reveal: g.reveal })) }, true);
     });
@@ -205,7 +223,7 @@ async function open(focus) {
     const r = V.data.requests.find(x => x.plugin === focus.plugin && x.key === focus.key);
     if (r && !r.exists && !(r.sameHosts || []).length) {
       const list = hostKey(r) ? pending().filter(x => !x.exists && hostKey(x) === hostKey(r)) : [r];
-      V.form = { name: list.length > 1 ? suggestName(list) : r.key, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })) };
+      V.form = { name: list.length > 1 ? suggestName(list) : r.key, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })), fields: mergeFields(list) };
     }
   }
   draw();
@@ -237,7 +255,7 @@ function gate(id, body, tool) {
     let n = 0;
     return `<div class="vg-card"><div class="vg-hd"><span class="vg-ic">${KEY}</span><div><h4>${esc(what)}</h4><p>O ${esc(name)} só abre com ele${r.why ? ': ' + esc(r.why) : ''}.</p></div></div>
       <ol class="vg-steps">
-        ${step(++n, s[0], cur === 0, 'Criar o segredo', same ? `Já existe <b>${esc(same)}</b> para o mesmo site: no Cofre, “Usar ${esc(same)}”.` : 'Copie o token, Criar… e Colar e guardar.', `<div><code>${esc(r.key)}</code></div>`)}
+        ${step(++n, s[0], cur === 0, 'Criar o segredo', same ? `Já existe <b>${esc(same)}</b> para o mesmo site: no Cofre, “Usar ${esc(same)}”.` : `Criar… e Digitar e guardar (${esc(fieldsTxt(r.fields).toLowerCase())}).`, `<div><code>${esc(r.key)}</code></div>`)}
         ${step(++n, s[1], cur === 1, `Permitir o ${esc(name)}`, 'Libera o segredo para este plugin.')}
         ${r.reveal ? step(++n, s[2], cur === 2, 'Deixar ver o valor', esc(r.revealWhy || `O servidor do ${name} usa o valor direto.`)) : ''}
         ${step(++n, false, false, `Lido pelo ${esc(name)}`, 'Confere sozinho; não precisa reabrir nada.')}

@@ -378,6 +378,11 @@ function dialog(id, html, bind) {
     el.addEventListener('mousedown', (e) => { if (e.target === el) el.hidden = true; });
   }
   el.innerHTML = `<div class="dlg-box" role="dialog" aria-modal="true"><button class="icon-btn dlg-x" data-close title="Fechar (Esc)">${I.x}</button>${html}</div>`; el.hidden = false;
+  // cabeçalho (.dlg-hd) e botões (.actions) ficam parados; só o meio rola, para o título não sumir ao descer
+  const kids = [...el.firstElementChild.children].filter(c => !c.classList.contains('dlg-x'));
+  if (kids[0] && kids[0].classList.contains('dlg-hd')) kids.shift();
+  if (kids.length && kids[kids.length - 1].classList.contains('actions')) kids.pop();
+  if (kids.length) { const sc = document.createElement('div'); sc.className = 'dlg-scroll'; kids[0].before(sc); sc.append(...kids); }
   el.querySelectorAll('[data-close]').forEach(b => b.onclick = () => { el.hidden = true; });
   bind && bind(el);
   return el;

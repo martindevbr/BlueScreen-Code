@@ -1,0 +1,141 @@
+<!doctype html>
+<html data-theme="/*THEME*/" lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>BlueScreen · Cofre</title>
+<style>
+/*FONTS*/
+:root {
+  --bg: #191B21; --panel: #1E2129; --panel-2: #23262F; --hover: #2A2E39; --line: #2A2F3A; --line-2: #343A47;
+  --fg: #E1E4EA; --fg-2: #B4B9C4; --muted: #737B8C; --accent: #4C8DFF; --accent-2: #6CA2FF; --del: #F0606E; --ok: #5FB865;
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  --bg: #FFFFFF; --panel: #F8F9FB; --panel-2: #EFF2F7; --hover: #E7EBF2; --line: #E2E6ED; --line-2: #D3D9E3;
+  --fg: #1C1F26; --fg-2: #3E4450; --muted: #7D8594; --accent: #2E63D4; --accent-2: #2457C4; --del: #CF3B4A; --ok: #2E8540;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; overflow: hidden; }
+body {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-2) 70%, var(--panel)), var(--panel) 140px);
+  color: var(--fg); font: 13px/1.45 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif; user-select: none; -webkit-font-smoothing: antialiased;
+}
+body::before { content: ''; position: fixed; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 55%, transparent), transparent); }
+.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+main { padding: 20px 22px 4px; }
+.hd { display: flex; gap: 12px; align-items: center; }
+.ic { flex: none; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.005em; }
+h1 code { font: 500 13.5px var(--mono); color: var(--accent-2); }
+.sub { margin-top: 1px; font-size: 12px; color: var(--muted); }
+.dest { margin-top: 14px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--bg) 45%, transparent);
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; align-items: center; font-size: 12px; color: var(--muted); }
+.dest > div { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.chip { font: 11.5px var(--mono); color: var(--fg-2); background: color-mix(in srgb, var(--fg) 8%, transparent); border: 1px solid var(--line); padding: 0 7px; border-radius: 6px; }
+.none { font-style: italic; }
+.fld { margin-top: 14px; }
+.fld label { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; font-size: 12px; font-weight: 500; color: var(--fg-2); }
+.fld label small { font-weight: 400; color: var(--muted); }
+.in { position: relative; }
+input, textarea { width: 100%; height: 36px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--bg); color: var(--fg);
+  font: 13px 'IBM Plex Sans', 'Segoe UI', sans-serif; outline: none; transition: border-color .12s, box-shadow .12s; user-select: text; }
+input.sec { padding-right: 40px; font-family: var(--mono); letter-spacing: .02em; }
+textarea { height: 116px; padding: 9px 11px; font: 12px/1.5 var(--mono); resize: none; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif; letter-spacing: 0; }
+input:hover, textarea:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line-2)); }
+input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.bad input, .bad textarea { border-color: var(--del); box-shadow: 0 0 0 3px color-mix(in srgb, var(--del) 18%, transparent); }
+.eye { position: absolute; right: 5px; top: 5px; width: 26px; height: 26px; border: 0; border-radius: 6px; background: none; color: var(--muted);
+  display: grid; place-items: center; cursor: pointer; }
+.eye:hover { color: var(--fg); background: var(--hover); }
+.eye .i { width: 15px; height: 15px; }
+.err { min-height: 18px; margin-top: 10px; font-size: 12px; color: var(--del); display: flex; gap: 6px; align-items: center; }
+.err:empty { visibility: hidden; }
+footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 12px 22px; border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 40%, transparent); }
+.note { flex: 1; min-width: 0; display: flex; gap: 7px; align-items: center; font-size: 11.5px; color: var(--muted); }
+.note .i { width: 14px; height: 14px; flex: none; color: var(--ok); }
+button.b { height: 32px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg);
+  font: 500 12.5px 'IBM Plex Sans', 'Segoe UI', sans-serif; cursor: pointer; transition: background .12s, border-color .12s; }
+button.b:hover { background: var(--hover); }
+button.b.p { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.b.p:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+button:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+kbd { font: 10.5px var(--mono); color: var(--muted); border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const SPEC = /*SPEC*/;
+const ICO = {
+  key: '<svg class="i" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M14 9l2 2"/></svg>',
+  eye: '<svg class="i" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  off: '<svg class="i" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+  lock: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>',
+  warn: '<svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg>',
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const post = (m) => window.ipc.postMessage(JSON.stringify(m));
+const F = SPEC.fields || [];
+const chips = (l, none) => l && l.length ? l.map(x => `<span class="chip">${esc(x)}</span>`).join('') : `<span class="none">${esc(none)}</span>`;
+const hint = (f) => f.keep && f.secret ? 'em branco mantém o atual' : f.optional ? 'opcional' : '';
+const ph = (f) => f.keep && f.secret ? '••••••••  (guardado)' : f.kind === 'url' ? 'https://…' : f.kind === 'email' ? 'nome@empresa.com' : f.kind === 'multiline' ? 'Cole aqui o texto inteiro (-----BEGIN …)' : '';
+document.getElementById('app').innerHTML = `<main>
+  <div class="hd"><span class="ic">${ICO.key}</span><div><h1>${SPEC.replace ? 'Trocar' : 'Guardar'} <code>${esc(SPEC.name)}</code> no cofre</h1>
+    <div class="sub">Digite ou cole (Ctrl+V) o que o segredo precisa.</div></div></div>
+  <div class="dest"><span>Pode ir para</span><div>${chips(SPEC.hosts, 'nenhum site ainda')}</div>${SPEC.programs && SPEC.programs.length ? `<span>Programas</span><div>${chips(SPEC.programs)}</div>` : ''}</div>
+  <form id="f" autocomplete="off">${F.map((f, i) => `<div class="fld" data-i="${i}"><label for="v${i}">${esc(f.label)}${hint(f) ? ` <small>${hint(f)}</small>` : ''}</label><div class="in">${
+    f.kind === 'multiline' ? `<textarea id="v${i}" spellcheck="false" placeholder="${esc(ph(f))}">${esc(f.prefill)}</textarea>`
+    : `<input id="v${i}" ${f.secret ? 'type="password" class="sec"' : `type="${f.kind === 'number' ? 'text" inputmode="numeric' : 'text'}"`} value="${esc(f.prefill)}" placeholder="${esc(ph(f))}" spellcheck="false" autocomplete="off">${f.secret ? `<button type="button" class="eye" tabindex="-1" title="Mostrar">${ICO.eye}</button>` : ''}`
+  }</div></div>`).join('')}</form>
+  <div class="err" id="err"></div>
+</main>
+<footer><span class="note">${ICO.lock}<span>Fica cifrado neste PC. Os plugins usam sem ver, e a página da IDE não vê o que você digita.</span></span>
+  <button class="b" id="no" type="button">Cancelar</button><button class="b p" id="ok" type="button">${SPEC.replace ? 'Trocar' : 'Guardar'}</button></footer>`;
+
+const box = (i) => document.getElementById('v' + i);
+document.querySelectorAll('.eye').forEach(b => b.onclick = () => {
+  const inp = b.parentElement.querySelector('input'); const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password'; b.innerHTML = show ? ICO.off : ICO.eye; b.title = show ? 'Esconder' : 'Mostrar'; inp.focus();
+});
+// o que está errado num campo, pelo formato (o mesmo que a janela Win32 confere)
+function wrong(f, v) {
+  if (!v) return !f.optional && !f.keep ? 'preencha este campo' : '';
+  if (f.kind === 'url' && (!/^https?:\/\//.test(v) || /\s/.test(v))) return 'precisa ser um endereço que começa com https://';
+  if (f.kind === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'precisa ser um e-mail (nome@empresa.com)';
+  if (f.kind === 'number' && !/^\d+$/.test(v)) return 'só números';
+  return '';
+}
+const err = document.getElementById('err');
+function save() {
+  document.querySelectorAll('.fld.bad').forEach(x => x.classList.remove('bad'));
+  const vals = F.map((f, i) => f.kind === 'multiline' ? box(i).value.replace(/\r\n/g, '\n').trim() : box(i).value.trim());
+  const bad = F.findIndex((f, i) => wrong(f, vals[i]));
+  if (bad >= 0) {
+    err.innerHTML = `${ICO.warn}<span>${esc(F[bad].label)}: ${esc(wrong(F[bad], vals[bad]))}</span>`;
+    box(bad).closest('.fld').classList.add('bad'); box(bad).focus(); return;
+  }
+  post({ type: 'ok', values: vals });
+  F.forEach((_, i) => { box(i).value = ''; });
+}
+document.getElementById('ok').onclick = save;
+document.getElementById('no').onclick = () => post({ type: 'cancel' });
+document.addEventListener('input', (e) => { const f = e.target.closest('.fld'); if (f && f.classList.contains('bad')) { f.classList.remove('bad'); err.textContent = ''; } });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); post({ type: 'cancel' }); }
+  // Enter grava; numa caixa de várias linhas, Ctrl+Enter
+  else if (e.key === 'Enter' && (e.target.tagName !== 'TEXTAREA' || e.ctrlKey) && e.target.tagName !== 'BUTTON') { e.preventDefault(); save(); }
+});
+document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
+// a janela nasce escondida: aparece no tamanho certo depois de pintar (com as fontes)
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => requestAnimationFrame(() => {
+  post({ type: 'ready', h: Math.ceil(document.body.scrollHeight) });
+  const first = F.findIndex(f => !f.prefill); (box(first >= 0 ? first : 0) || document.getElementById('ok')).focus();
+}));
+</script>
+</body>
+</html>

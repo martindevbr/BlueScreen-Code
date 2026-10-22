@@ -1,31 +1,12 @@
 # QAutils
 
-O kit do QA no BlueScreen: cenários em Gherkin (Cucumber), e ferramentas do dia a dia. É um plugin nativo e só tem interface: usa o índice e a busca do núcleo, a pasta de dados do plugin e o console de Build. Não sobe nenhum servidor.
+Cenários de QA no BlueScreen, em Gherkin (Cucumber). É um plugin nativo e só tem interface: usa o índice e a busca do núcleo, a pasta de dados do plugin e o console de Build. Não sobe nenhum servidor.
 
-O painel **QAutils** (`Alt+9`, se nenhum outro plugin usar a tecla) tem duas abas: **Cenários** e **Kit**. Toda ferramenta do kit também está no **Buscar em tudo** (`QA: Dados de teste`, `QA: JSON`…).
+O painel **QAutils** (`Alt+9`, se nenhum outro plugin usar a tecla) mostra os cenários do projeto.
 
-## Kit
+## Bug a partir de um cenário
 
-Botões rápidos no topo: um clique gera e copia CPF, CNPJ, nome, e-mail, celular ou UUID. Cada ferramenta abre numa janela larga; clicar num valor copia.
-
-| Ferramenta | O que faz |
-|---|---|
-| **Dados de teste** | nome, e-mail (`@example.com`), CPF, CNPJ, RG (SP), PIS/PASEP, CNH, título de eleitor, Renavam, placa Mercosul, celular com DDD real, nascimento (com a idade), CEP de capital (com logradouro), cartão **de teste** (Visa, Mastercard, Elo, Amex, Hipercard: passa no Luhn, com validade e CVV), UUID e senha forte. Com ou sem máscara. Todos os documentos têm dígito verificador válido e são gerados: não são de ninguém |
-| **Massa de dados** | N linhas (até 5000) com os campos escolhidos, em CSV (`;`, abre como planilha) ou JSON; copia ou salva em `qa/massas/` |
-| **Validar** | cole CPFs, CNPJs, cartões, e-mails ou CEPs (um por linha): diz o que é e se é válido |
-| **Valores limite** | texto (tamanho), número ou data: vazio, mín−1, mín, mín+1, máx−1, máx, máx+1 e os casos clássicos (29/02, dia 31, mês 13, negativo, letras…) |
-| **Entradas especiais** | espaços, acentos, apóstrofo, emoji, caracteres invisíveis, texto da direita para a esquerda, 255/256/1000 caracteres, números estranhos, e-mails inválidos e entradas de injeção (HTML, XSS, SQL, template, caminho) para testar o seu sistema |
-| **JSON** | formatar, validar (com linha e coluna do erro), minificar, ordenar chaves, virar/tirar de string e comparar |
-| **Base64 · URL · JWT** | codifica e decodifica Base64, URL e HTML; lê um JWT (header, payload, emitido, validade e se já expirou) |
-| **Data e hora** | epoch (s/ms) ↔ data, ISO, dia da semana; somar dias (corridos ou úteis); dias corridos, úteis e horas entre duas datas |
-| **Texto** | gera texto com **exatamente N caracteres** (para testar limite de campo), conta caracteres, bytes, palavras e linhas; maiúsculas, minúsculas, título, sem acentos, espaços extras, linhas únicas, ordenar, slug |
-| **Hash e UUID** | SHA-1, SHA-256, SHA-512 e Base64 do texto; UUIDs |
-| **Regex** | testa uma expressão com vários valores de uma vez |
-| **Comparar** | esperado × obtido lado a lado (texto, JSON, XML, SQL, HTML), com as diferenças marcadas |
-| **Relatório de bug** | título, severidade, prioridade, ambiente, navegador, chamado, cenário, pré-condição, passos (numerados sozinhos), esperado, obtido e evidências; copia como texto (para o chamado) ou Markdown (Jira, Azure, GitHub) ou salva em `qa/bugs/` |
-| **Ambientes** | os ambientes das configurações (PRD, HML, DSV…), a um clique |
-
-**Bug a partir de um cenário:** no status de um cenário (acima dele, no editor) há **Abrir relatório de bug deste cenário…**, com a pré-condição, os passos, o esperado, o chamado e as evidências já preenchidos.
+No status de um cenário (acima dele, no editor) há **Abrir relatório de bug deste cenário…**, com a pré-condição, os passos, o esperado, o chamado e as evidências já preenchidos. Copia como texto (para o chamado) ou Markdown (Jira, Azure, GitHub), ou salva em `qa/bugs/`.
 
 ---
 
@@ -103,8 +84,8 @@ Quando o projeto tem step definitions (Java, Kotlin, JS/TS, Ruby, Python/behave 
 | | |
 |---|---|
 | Seu nome | vai nos relatórios e nos bugs |
-| Ambientes | um por linha, `NOME=endereço`: o Kit abre com um clique e o relatório de bug oferece a lista |
-| Pasta dos relatórios de bug | `qa` (bugs e massas salvos ficam em `qa/…`) |
+| Ambientes | um por linha, `NOME=endereço`: o relatório de bug oferece a lista |
+| Pasta dos relatórios de bug | `qa` (os bugs salvos ficam em `qa/bugs/`) |
 | Modo | automático (documentação sem step definitions), documentação ou automação |
 | Idioma das features novas | o mesmo do projeto, português ou inglês |
 | Prefixo dos cenários | `CT` (CT001, CT002…) |

@@ -3,7 +3,8 @@
 //!
 //! Todo ui.js roda na mesma página, então um plugin pode se passar por outro numa chamada à API e ler o que se digita
 //! num campo da página. Por isso o cofre não confia na página:
-//!   - o valor entra pela área de transferência, lida aqui no núcleo: nunca passa por um campo da página;
+//!   - o valor é digitado numa janela nativa do Windows aberta pelo núcleo (vault_input.rs), com os campos que o plugin
+//!     pediu (token, usuário e senha...), ou vem da área de transferência, lida aqui: nunca passa por um campo da página;
 //!   - tudo o que amplia o acesso (gravar um valor, liberar um plugin, acrescentar sites ou programas) só vale depois
 //!     do "Sim" numa caixa de diálogo nativa do Windows, que o JavaScript da página não clica;
 //!   - o plugin usa o segredo sem vê-lo: `{{vault:nome}}` no `plugin/fetch` (só para os sites liberados, em HTTPS)
@@ -14,7 +15,7 @@
 //!   - cada uso (e cada recusa) entra no registro do cofre.
 //! Plugins com servidor nativo rodam como o seu usuário do Windows: o cofre limita o que eles recebem pela API, mas
 //! não é uma sandbox.
-use super::{RouteFn, ok, route_fn};
+use super::{RouteFn, ok, route_fn, vault_input};
 use crate::server::host;
 use crate::util::*;
 use bluescreen_sdk::plugin::Req;
@@ -47,12 +48,85 @@ fn find<'a>(s: &'a Store, plugin: &str, name: &str) -> Option<(&'a String, &'a E
     if let Some((_, e)) = exact { if e.grants.get(plugin).is_some_and(|g| g.allow || g.reveal) { return exact; } }
     s.entries.iter().find(|(_, e)| e.grants.get(plugin).is_some_and(|g| g.alias.as_deref() == Some(name))).or(exact)
 }
+/// Um campo de um segredo com mais de um valor (usuário e senha, token e id do cliente...). O plugin declara no
+/// plugin.json (`"fields"`) e usa cada um como `{{vault:nome/campo}}`.
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(default)]
+pub struct Field {
+    pub key: String,
+    pub label: String,
+    /// digitado como ••• e nunca mostrado
+    pub secret: bool,
+    pub optional: bool,
+    /// o formato do que se digita (FIELD_TYPES): "text" (padrão), "multiline", "url", "email", "number"
+    #[serde(rename = "type", skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+}
+/// Formatos de campo: a janela confere url, e-mail e número; "multiline" é uma caixa de várias linhas (chave PEM,
+/// certificado). "secret" e "password" são texto com `secret: true`.
+pub const FIELD_TYPES: &[&str] = &["text", "secret", "password", "multiline", "url", "email", "number"];
+/// Tipos prontos de segredo: o plugin escolhe um com `"kind"` no lugar de listar os campos.
+/// (id, rótulo, [(campo, rótulo, secreto, opcional, formato)])
+type Preset = (&'static str, &'static str, &'static [(&'static str, &'static str, bool, bool, &'static str)]);
+pub const KINDS: &[Preset] = &[
+    ("token", "Um token (ou chave de API)", &[("value", "Token", true, false, "")]),
+    ("basic", "Usuário e senha", &[("user", "Usuário", false, false, ""), ("password", "Senha", true, false, "")]),
+    ("domain", "Usuário, senha e domínio (Windows/AD)", &[("user", "Usuário", false, false, ""), ("password", "Senha", true, false, ""), ("domain", "Domínio", false, true, "")]),
+    ("apiKeySecret", "Chave e segredo de API", &[("key", "Chave (key / id)", false, false, ""), ("secret", "Segredo (secret)", true, false, "")]),
+    ("oauthClient", "OAuth: client ID e client secret", &[("client_id", "Client ID", false, false, ""), ("client_secret", "Client secret", true, false, ""), ("tenant", "Tenant / realm", false, true, "")]),
+    ("aws", "AWS: access key e secret key", &[("access_key_id", "Access key ID", false, false, ""), ("secret_access_key", "Secret access key", true, false, ""), ("session_token", "Session token", true, true, ""), ("region", "Região", false, true, "")]),
+    ("database", "Banco de dados: servidor, usuário e senha", &[("host", "Servidor", false, false, ""), ("port", "Porta", false, true, "number"), ("database", "Banco", false, true, ""), ("user", "Usuário", false, false, ""), ("password", "Senha", true, false, "")]),
+    ("connectionString", "String de conexão", &[("value", "String de conexão", true, false, "")]),
+    ("webhook", "URL de webhook (com o segredo na URL)", &[("value", "URL do webhook", true, false, "url")]),
+    ("sshKey", "Chave SSH ou privada (PEM)", &[("private_key", "Chave privada (cole o texto inteiro)", true, false, "multiline"), ("passphrase", "Senha da chave", true, true, "")]),
+    ("certificate", "Certificado e chave (PEM)", &[("cert", "Certificado (PEM)", false, false, "multiline"), ("key", "Chave privada (PEM)", true, false, "multiline"), ("passphrase", "Senha da chave", true, true, "")]),
+    ("pin", "PIN ou código numérico", &[("value", "PIN", true, false, "number")]),
+    ("text", "Texto livre (várias linhas)", &[("value", "Texto", true, false, "multiline")]),
+];
+fn preset(id: &str) -> Vec<Field> {
+    KINDS.iter().find(|k| k.0.eq_ignore_ascii_case(id)).map(|k| k.2.iter().map(|&(key, label, secret, optional, kind)| Field { key: key.into(), label: label.into(), secret, optional, kind: kind.into() }).collect()).unwrap_or_default()
+}
+/// os tipos prontos para a tela do cofre: [{ id, label, fields }]
+fn kinds_json() -> Value { Value::Array(KINDS.iter().map(|k| json!({ "id": k.0, "label": k.1, "fields": preset(k.0) })).collect()) }
+/// O que um pedido quer que se digite: `fields` (lista própria) ou `kind` (um tipo pronto); sem nenhum, vazio (token).
+fn fields_for(d: &Value) -> Vec<Field> {
+    let f = fields_of(&d["fields"]);
+    if !f.is_empty() { return f; }
+    d["kind"].as_str().map(preset).unwrap_or_default()
+}
+/// Campos que um plugin pede: [{ key, label, secret, optional, type }] ou só os nomes (["user", "password"]). Sem
+/// `secret`, só usuário, login, e-mail e endereços aparecem ao digitar.
+fn fields_of(v: &Value) -> Vec<Field> {
+    let mut out: Vec<Field> = vec![];
+    for f in v.as_array().into_iter().flatten().take(8) {
+        let key = f.as_str().or(f["key"].as_str()).unwrap_or("").trim().to_string();
+        if key.is_empty() || key.len() > 32 || !key.chars().all(|c| c.is_ascii_alphanumeric() || "_-".contains(c)) || out.iter().any(|x| x.key == key) { continue; }
+        let plain = matches!(key.to_ascii_lowercase().as_str(), "user" | "username" | "usuario" | "login" | "email" | "url" | "host" | "domain" | "tenant" | "org" | "account" | "client_id" | "clientid");
+        let ty = f["type"].as_str().unwrap_or("").trim().to_ascii_lowercase();
+        let ty = if FIELD_TYPES.contains(&ty.as_str()) { ty } else { String::new() };
+        let secret = matches!(ty.as_str(), "secret" | "password") || f["secret"].as_bool().unwrap_or(!plain);
+        out.push(Field {
+            label: f["label"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| key.clone()),
+            secret, optional: f["optional"].as_bool().unwrap_or(false), key,
+            kind: if matches!(ty.as_str(), "text" | "secret" | "password") { String::new() } else { ty },
+        });
+    }
+    out
+}
+/// o campo que `{{vault:nome}}` (sem /campo) usa: o primeiro secreto, ou o primeiro
+fn main_field(fields: &[Field]) -> Option<&Field> { fields.iter().find(|f| f.secret).or(fields.first()) }
+/// `nome/campo` -> (nome, Some(campo))
+fn split_name(n: &str) -> (&str, Option<&str>) { match n.split_once('/') { Some((a, b)) => (a.trim(), Some(b.trim())), None => (n.trim(), None) } }
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct Entry {
-    /// cifrado (DPAPI, base64); nunca sai daqui
+    /// cifrado (DPAPI, base64); nunca sai daqui. Com `fields`, um JSON { campo: valor } cifrado
     #[serde(skip_serializing_if = "String::is_empty")]
     value: String,
+    /// os campos do segredo (vazio = um valor só, o token)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<Field>,
     label: String,
     note: String,
     /// sites para onde o segredo pode ir: "api.github.com", "*.atlassian.net"
@@ -103,6 +177,32 @@ fn unseal(sealed: &str) -> Option<String> {
     let c = base64::engine::general_purpose::STANDARD.decode(sealed).ok()?;
     String::from_utf8(super::data::dpapi::protect(&c, ENTROPY, false)?).ok()
 }
+/// Os valores de um segredo, campo a campo (um segredo de valor só fica como { "value": ... }).
+fn values(e: &Entry) -> Option<BTreeMap<String, String>> {
+    let plain = unseal(&e.value)?;
+    if e.fields.is_empty() { return Some(BTreeMap::from([("value".to_string(), plain)])); }
+    serde_json::from_str(&plain).ok()
+}
+/// O valor de `campo` (ou do campo principal). `basic` sem um campo com esse nome: base64("usuário:senha"), do primeiro
+/// campo que não é secreto e do primeiro secreto, para `Authorization: Basic {{vault:nome/basic}}`.
+fn value_of(e: &Entry, name: &str, field: Option<&str>) -> ApiResult<String> {
+    let v = values(e).ok_or_else(|| fail(format!("não deu para decifrar \"{name}\" (o cofre foi copiado de outro usuário ou PC?)"), 500))?;
+    if e.fields.is_empty() {
+        return match field { None | Some("value") => Ok(v.get("value").cloned().unwrap_or_default()), Some(f) => Err(fail(format!("\"{name}\" tem um valor só, sem o campo \"{f}\""), 400)) };
+    }
+    let key = match field {
+        Some("basic") if !e.fields.iter().any(|f| f.key == "basic") => {
+            use base64::Engine;
+            let user = e.fields.iter().find(|f| !f.secret).and_then(|f| v.get(&f.key)).cloned().unwrap_or_default();
+            let pass = e.fields.iter().find(|f| f.secret).and_then(|f| v.get(&f.key)).cloned().unwrap_or_default();
+            return Ok(base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}")));
+        }
+        Some(f) => e.fields.iter().find(|x| x.key == f).map(|x| x.key.clone())
+            .ok_or_else(|| fail(format!("\"{name}\" não tem o campo \"{f}\" (tem: {})", e.fields.iter().map(|x| x.key.as_str()).collect::<Vec<_>>().join(", ")), 400))?,
+        None => main_field(&e.fields).map(|f| f.key.clone()).unwrap_or_default(),
+    };
+    Ok(v.get(&key).cloned().unwrap_or_default())
+}
 
 fn audit(plugin: &str, name: &str, target: &str, allowed: bool, why: &str) {
     let mut a = AUDIT.lock();
@@ -130,8 +230,10 @@ pub fn caller(r: &Req) -> ApiResult<Caller> {
 }
 
 // ---------- uso pelos plugins ----------
-/// Valor do segredo para um plugin liberado (a política de destino é conferida depois, em `check`).
-pub fn resolve(c: &Caller, name: &str) -> ApiResult<String> {
+/// Valor do segredo para um plugin liberado (a política de destino é conferida depois, em `check`). `nome/campo` pega
+/// um campo de um segredo com vários (usuário e senha).
+pub fn resolve(c: &Caller, full: &str) -> ApiResult<String> {
+    let (name, field) = split_name(full);
     let s = { let _g = LOCK.lock(); load() };
     let Some((_, e)) = find(&s, &c.plugin, name) else {
         audit(&c.plugin, name, "", false, "não existe no cofre");
@@ -141,7 +243,7 @@ pub fn resolve(c: &Caller, name: &str) -> ApiResult<String> {
         audit(&c.plugin, name, "", false, "plugin sem permissão");
         return Err(fail(format!("o plugin {} não tem permissão para usar \"{name}\" (Plugins › Cofre)", c.plugin), 403));
     }
-    unseal(&e.value).ok_or_else(|| fail(format!("não deu para decifrar \"{name}\" (o cofre foi copiado de outro usuário ou PC?)"), 500))
+    value_of(e, name, field)
 }
 pub enum Target<'a> { Http(&'a reqwest::Url), Program(&'a str) }
 fn host_ok(pattern: &str, host: &str) -> bool {
@@ -154,7 +256,8 @@ pub fn check(c: &Caller, names: &[String], target: Target) -> ApiResult<()> {
     if names.is_empty() { return Ok(()); }
     let s = { let _g = LOCK.lock(); load() };
     let mut real: Vec<String> = vec![];
-    for name in names {
+    for full in names {
+        let name = split_name(full).0;
         let Some((key, e)) = find(&s, &c.plugin, name) else { continue };
         real.push(key.clone());
         let (desc, res): (String, Result<(), String>) = match &target {
@@ -256,7 +359,7 @@ fn requests(s: &Store) -> Vec<Value> {
             let same: Vec<&String> = if hosts.is_empty() { vec![] } else { s.entries.iter().filter(|(_, e)| { let mut a = e.hosts.clone(); a.sort(); a == hosts }).map(|(k, _)| k).collect() };
             out.push(json!({
                 "plugin": p.id, "pluginName": p.name, "enabled": p.enabled, "key": key, "label": d["label"], "why": d["why"],
-                "hosts": d["hosts"], "programs": d["programs"], "reveal": d["reveal"].as_bool().unwrap_or(false),
+                "hosts": d["hosts"], "programs": d["programs"], "reveal": d["reveal"].as_bool().unwrap_or(false), "fields": fields_for(d), "kind": d["kind"],
                 "exists": hit.is_some(), "entry": hit.map(|(k, _)| k), "granted": g.allow, "revealGranted": g.reveal, "sameHosts": same,
             }));
         }
@@ -288,6 +391,7 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
                 "entries": s.entries.iter().map(|(k, e)| public(k, e)).collect::<Vec<_>>(),
                 "requests": requests(&s),
                 "audit": AUDIT.lock().iter().take(100).cloned().collect::<Vec<_>>(),
+                "kinds": kinds_json(),
                 "file": file(),
             }))
         })),
@@ -303,7 +407,8 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             let items: Vec<Value> = keys.iter().map(|k| {
                 let e = find(&s, &c.plugin, k).map(|(_, e)| e);
                 let g = e.and_then(|e| e.grants.get(&c.plugin)).cloned().unwrap_or_default();
-                json!({ "key": k, "exists": e.is_some(), "granted": g.allow, "reveal": g.reveal, "hosts": e.map(|e| e.hosts.clone()), "programs": e.map(|e| e.programs.clone()) })
+                json!({ "key": k, "exists": e.is_some(), "granted": g.allow, "reveal": g.reveal, "hosts": e.map(|e| e.hosts.clone()), "programs": e.map(|e| e.programs.clone()),
+                    "fields": e.map(|e| e.fields.iter().map(|f| f.key.clone()).collect::<Vec<_>>()) })
             }).collect();
             ok(json!({ "items": items }))
         })),
@@ -311,7 +416,9 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
         ("vault/reveal", route_fn(|r| async move {
             r.local_only()?;
             let c = caller(&r)?;
-            let name = need_name(r.require("key")?)?;
+            let full = r.require("key")?.to_string();
+            let (base, field) = split_name(&full);
+            let name = need_name(base)?;
             if !c.verified {
                 audit(&c.plugin, &name, "valor", false, "pedido da página");
                 return Err(fail("o valor do cofre só sai para servidores de plugin; na página, use {{vault:nome}} no fetch", 403));
@@ -322,15 +429,18 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
                 audit(&c.plugin, &name, "valor", false, "sem permissão para ver o valor");
                 return Err(fail(format!("o plugin {} não pode ver o valor de \"{name}\"", c.plugin), 403));
             }
-            let v = unseal(&e.value).ok_or_else(|| fail("não deu para decifrar", 500))?;
-            audit(&c.plugin, &name, "valor", true, "");
-            ok(json!({ "value": v }))
+            let v = value_of(e, &name, field)?;
+            // todos os campos juntos, para quem pediu o segredo inteiro
+            let all = if field.is_none() && !e.fields.is_empty() { values(e).map(|m| json!(m)) } else { None };
+            audit(&c.plugin, &full, "valor", true, "");
+            ok(json!({ "value": v, "fields": all }))
         })),
     ]
 }
 
 /// Ações da tela do cofre. As que ampliam acesso passam pela confirmação nativa; restringir ou apagar, não.
-///   paste   { name, label, note, hosts, programs, clear }   grava o texto da área de transferência
+///   enter   { name, label, note, hosts, programs, fields | kind }  abre a janela nativa para digitar os campos e grava
+///   paste   { name, label, note, hosts, programs, clear }   grava o texto da área de transferência (um valor só)
 ///   edit    { name, label, note, hosts, programs }          muda os dados (sites/programas novos pedem confirmação)
 ///   grant   { name, plugin, use, reveal }                    libera ou tira um plugin
 ///   delete  { name }
@@ -358,7 +468,7 @@ async fn manage(r: &Req) -> ApiResult<()> {
             drop(text);
             edit(|s| {
                 let e = s.entries.entry(name.clone()).or_insert_with(|| Entry { created: now(), ..Default::default() });
-                e.value = sealed; e.hint = hint; e.length = len; e.updated = now();
+                e.value = sealed; e.fields = vec![]; e.hint = hint; e.length = len; e.updated = now();
                 if let Some(l) = b["label"].as_str() { e.label = l.trim().into(); }
                 if let Some(n) = b["note"].as_str() { e.note = n.trim().into(); }
                 if !b["hosts"].is_null() { e.hosts = hosts; }
@@ -366,6 +476,52 @@ async fn manage(r: &Req) -> ApiResult<()> {
                 Ok(())
             })?;
             if clear { let _ = tokio::task::spawn_blocking(|| clipboard_text(true)).await; }
+            log(format!("cofre: \"{name}\" gravado"));
+        }
+        "enter" => {
+            // os campos: os que a página manda (do pedido do plugin), os do segredo que já existe ou um token só
+            let mut fields = fields_for(&b);
+            if fields.is_empty() { fields = cur.as_ref().map(|e| e.fields.clone()).unwrap_or_default(); }
+            if fields.is_empty() { fields = preset("token"); }
+            let old = cur.as_ref().and_then(values).unwrap_or_default();
+            // um segredo de valor só que ganha campos: o valor antigo vale como o campo principal
+            let single = cur.as_ref().is_some_and(|e| e.fields.is_empty());
+            let main_key = main_field(&fields).map(|f| f.key.clone()).unwrap_or_default();
+            let old_of = |f: &Field| old.get(&f.key).or_else(|| if single && f.key == main_key { old.get("value") } else { None }).cloned();
+            let hosts = if b["hosts"].is_null() { cur.as_ref().map(|e| e.hosts.clone()).unwrap_or_default() } else { list_of(&b["hosts"]) };
+            let programs = if b["programs"].is_null() { cur.as_ref().map(|e| e.programs.clone()).unwrap_or_default() } else { list_of(&b["programs"]) };
+            let asks: Vec<vault_input::Ask> = fields.iter().map(|f| {
+                let had = old_of(f).unwrap_or_default();
+                vault_input::Ask { label: f.label.clone(), secret: f.secret, optional: f.optional, kind: f.kind.clone(), keep: !had.is_empty(), prefill: if f.secret { String::new() } else { had } }
+            }).collect();
+            let prompt = vault_input::Prompt { replace: cur.is_some(), name: name.clone(), hosts: hosts.clone(), programs: programs.clone(), fields: asks };
+            let got = {
+                let _g = ASKING.try_lock().map_err(|_| fail("já há uma janela do cofre aberta", 409))?;
+                tokio::task::spawn_blocking(move || vault_input::ask(&prompt)).await.ok().flatten().ok_or_else(|| fail("cancelado", 409))?
+            };
+            let mut vals: BTreeMap<String, String> = BTreeMap::new();
+            for (f, v) in fields.iter().zip(got) {
+                let v = if v.is_empty() { old_of(f).unwrap_or_default() } else { v };
+                if v.chars().count() > 16_384 { return Err(fail(format!("{} grande demais", f.label), 400)); }
+                vals.insert(f.key.clone(), v);
+            }
+            if vals.values().all(|v| v.is_empty()) { return Err(fail("nada digitado", 400)); }
+            let main = vals.get(&main_key).cloned().unwrap_or_default();
+            let hint: String = if main.chars().count() >= 16 { main.chars().take(4).collect() } else { String::new() };
+            let len = main.chars().count();
+            let sealed = seal(&serde_json::to_string(&vals).unwrap_or_default())?;
+            // se o que foi colado ainda está na área de transferência, sai de lá
+            let typed: Vec<String> = fields.iter().filter(|f| f.secret).filter_map(|f| vals.get(&f.key).cloned()).filter(|v| !v.is_empty()).collect();
+            drop(vals);
+            edit(|s| {
+                let e = s.entries.entry(name.clone()).or_insert_with(|| Entry { created: now(), ..Default::default() });
+                e.value = sealed; e.fields = fields; e.hint = hint; e.length = len; e.updated = now();
+                if let Some(l) = b["label"].as_str() { e.label = l.trim().into(); }
+                if let Some(n) = b["note"].as_str() { e.note = n.trim().into(); }
+                e.hosts = hosts; e.programs = programs;
+                Ok(())
+            })?;
+            let _ = tokio::task::spawn_blocking(move || { if clipboard_text(false).is_some_and(|c| typed.iter().any(|t| *t == c.trim())) { clipboard_text(true); } }).await;
             log(format!("cofre: \"{name}\" gravado"));
         }
         "edit" => {
@@ -482,5 +638,21 @@ mod tests {
         assert_eq!(alias_of(&json!("dynatrace"), "dynatrace"), Some(None));
         assert_eq!(alias_of(&json!("rastro.dynatrace"), "dynatrace"), Some(Some("rastro.dynatrace".into())));
         assert_eq!(alias_of(&Value::Null, "dynatrace"), None);
+    }
+    #[test]
+    fn fields() {
+        let f = fields_of(&json!(["user", { "key": "password", "label": "Senha" }, "user", "a/b", { "key": "pin", "secret": false }]));
+        assert_eq!(f.iter().map(|x| (x.key.as_str(), x.secret)).collect::<Vec<_>>(), vec![("user", false), ("password", true), ("pin", false)]);
+        assert_eq!(f[1].label, "Senha");
+        assert_eq!(main_field(&f).map(|x| x.key.as_str()), Some("password"));
+        assert_eq!(split_name("bitbucket/user"), ("bitbucket", Some("user")));
+        assert_eq!(split_name("rastro.dynatrace"), ("rastro.dynatrace", None));
+        // tipo pronto, e `fields` vale mais que `kind`
+        assert_eq!(fields_for(&json!({ "kind": "aws" })).iter().map(|x| x.key.as_str()).collect::<Vec<_>>(), vec!["access_key_id", "secret_access_key", "session_token", "region"]);
+        assert_eq!(fields_for(&json!({ "kind": "basic", "fields": ["pin"] }))[0].key, "pin");
+        assert!(fields_for(&json!({ "kind": "nada" })).is_empty());
+        let t = fields_of(&json!([{ "key": "pem", "type": "multiline" }, { "key": "pw", "type": "password" }, { "key": "x", "type": "zzz" }]));
+        assert_eq!(t.iter().map(|x| (x.kind.as_str(), x.secret)).collect::<Vec<_>>(), vec![("multiline", true), ("", true), ("", true)]);
+        for k in KINDS { assert!(!preset(k.0).is_empty() && main_field(&preset(k.0)).is_some()); }
     }
 }

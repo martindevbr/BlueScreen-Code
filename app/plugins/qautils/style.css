@@ -2,13 +2,7 @@
 .qa { --qa-pass: #2fa35c; --qa-fail: #e5534b; --qa-block: #e0a526; --qa-soft: color-mix(in srgb, var(--fg) 6%, transparent); display: flex; flex-direction: column; min-height: 100%; }
 .qa .i { width: 14px; height: 14px; flex: none; }
 .qa-top { position: sticky; top: 0; z-index: 2; padding: 10px 10px 8px; background: var(--panel); }
-/* Cenários | Kit */
-.qa-seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--qa-soft); }
-.qa-seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: none; color: var(--muted); font: 600 12px var(--sans, inherit); padding: 6px 8px; border-radius: 8px; cursor: pointer; transition: background .15s, color .15s; }
-.qa-seg button:hover { color: var(--fg); }
-.qa-seg button.on { background: var(--panel-2); color: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
-.qa-seg button.on .i { color: var(--accent-2); }
-.qa-sub:not(:empty) { margin-top: 8px; }
+
 /* busca */
 .qa-search { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 10px; border-radius: 9px; border: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 55%, transparent); transition: border-color .15s, box-shadow .15s; }
 .qa-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
@@ -145,20 +139,9 @@
 .qa-evs figcaption { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 2px 4px 2px 8px; font: 11px var(--mono); color: var(--muted); }
 .qa-none { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; padding: 8px 2px; }
 @media (max-width: 560px) { .qa-2 { grid-template-columns: 1fr; } }
-/* Kit */
-.qk-sec { margin: 6px 2px 8px; font: 600 10.5px var(--sans, inherit); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.qk-sec + .qk-quick { margin-bottom: 14px; }
-.qk-quick { display: flex; flex-wrap: wrap; gap: 6px; }
-.qk-quick .chip { height: 26px; font-size: 12px; border-radius: 20px; padding: 0 11px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel-2) 70%, transparent); color: var(--fg-2); cursor: pointer; }
-.qk-quick .chip:hover { border-color: var(--accent); color: var(--fg); }
-.qk-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
-.qk-tool { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel-2) 55%, transparent); color: var(--fg-2); cursor: pointer; font: inherit; transition: transform .12s, border-color .15s, background .15s; }
-.qk-tool:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel-2)); }
-.qk-tool > .i { width: 30px; height: 30px; padding: 7px; box-sizing: border-box; border-radius: 9px; color: var(--accent-2); background: color-mix(in srgb, var(--accent) 15%, transparent); flex: none; }
-.qk-tool b { display: block; font-size: 12.5px; color: var(--fg); font-weight: 600; }
-.qk-tool small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+/* relatório de bug */
 .dlg-box.qk-box { width: 860px; }
-.qk { max-height: min(70vh, 720px); overflow: auto; margin: 8px -6px 0; padding: 0 6px 4px; }
+.qk { margin-top: 8px; }
 .qk textarea, .qk input:not([type=checkbox]), .qk select { font: 12.5px var(--mono); }
 .qk textarea { width: 100%; resize: vertical; margin-top: 8px; }
 .qk-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: 12.5px; color: var(--fg-2); }
@@ -166,26 +149,6 @@
 .qk-bar input[type=number] { width: 80px; }
 .qk-bar input:not([type]), .qk-bar input[type=text] { height: 28px; }
 .qk-bar .spacer { flex: 1; }
-.qk-sub { margin: 14px 0 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.qk-grid { display: grid; grid-template-columns: 1fr; gap: 4px; margin-top: 8px; }
-.qk-out { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel-2) 50%, transparent); }
-.qk-l { font-size: 12px; color: var(--muted); }
-.qk-v { font: 12.5px var(--mono); color: var(--fg); cursor: copy; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 4px; border-radius: 4px; }
-.qk-v:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.qk-mut { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
-.qk-chks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12.5px; }
-.qk-prev { max-height: 260px; }
-.qk-msg { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
-.qk-msg.ok { color: #2fa35c; } .qk-msg.bad { color: var(--del); }
-.qk-res { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
-.qk-vr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; font-size: 12.5px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--fg) 4%, transparent); }
-.qk-vr code { font: 12.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qk-vr span { color: var(--muted); }
-.qk-vr.ok b { color: #2fa35c; } .qk-vr.bad b { color: var(--del); }
-.qk-stats { font-size: 12px; color: var(--muted); margin-top: 4px; }
-.qk-dhead { display: grid; grid-template-columns: 1fr 1fr; font-size: 11.5px; color: var(--muted); margin-top: 10px; }
-.qk-diff { height: 52vh; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 4px; }
-@media (max-width: 640px) { .qk-out { grid-template-columns: 1fr; } }
 /* faixa do status na margem esquerda do cenário (editor) */
 .monaco-editor .qa-ln { width: 3px !important; margin-left: 3px; border-radius: 2px; }
 .monaco-editor .qa-ln-pass { background: #2fa35c; }

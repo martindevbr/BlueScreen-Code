@@ -26,6 +26,7 @@ mod external;
 pub mod remote;
 pub mod services;
 pub mod vault;
+pub mod vault_input;
 pub use bluescreen_sdk::plugin::{Reply, Req, RouteFn, ok, path_str, project_of, route_fn};
 
 #[derive(Serialize, Clone, Default)]

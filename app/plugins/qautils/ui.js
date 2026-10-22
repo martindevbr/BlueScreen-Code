@@ -1,13 +1,10 @@
-// QAutils: o kit do QA (plugin nativo, só interface). Usa o índice e a busca do núcleo, a pasta de dados do plugin e o
-// console de Build; nada de servidor próprio. O painel QA (Alt+9) tem duas abas:
-// - Cenários (Gherkin/Cucumber): features por pasta e por chamado, busca por texto, @tag ou chamado,
+// QAutils: cenários do QA (plugin nativo, só interface). Usa o índice e a busca do núcleo, a pasta de dados do plugin e o
+// console de Build; nada de servidor próprio. O painel QA (Alt+9) mostra os cenários
+// (Gherkin/Cucumber): features por pasta e por chamado, busca por texto, @tag ou chamado,
 //   tags e o andamento da execução manual. No editor (.feature): autocompletar com os passos do projeto e as step
 //   definitions, aviso de passo parecido, Contexto automático, renumeração dos CTs, formatação (Shift+Alt+F); acima de
 //   cada cenário o status (Passou/Falhou/Bloqueado), as evidências coladas e "Copiar"; relatório de evidências (HTML)
-//   e casos de teste (CSV). Em projetos automatizados: steps sem definição, F12, gerar a definição e ▶ executar
-// - Kit: dados de teste (CPF, CNPJ, RG, PIS, CNH, título, Renavam, placa, CEP, telefone, cartão de teste...), massa de
-//   dados, validar documentos, valores limite, entradas especiais, JSON, Base64/URL/HTML/JWT, data e hora, texto,
-//   hash, regex, comparar textos, relatório de bug e ambientes
+//   e casos de teste (CSV). Em projetos automatizados: steps sem definição, F12, gerar a definição e ▶ executar. Cenário que falhou: relatório de bug já preenchido
 const { S, api, esc, toast, store, $ } = bs;
 // onde o mouse clicou por último: os menus abertos pelo editor (CodeLens) aparecem ali
 const mouse = { x: innerWidth / 2, y: innerHeight / 3 };
@@ -27,6 +24,7 @@ const ICO = {
   block: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M6.5 6.5l11 11"/></svg>',
   link: '<svg class="i" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>',
   folder: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  bug: '<svg class="i" viewBox="0 0 24 24"><path d="M8 8h8v8a4 4 0 0 1-8 0zM9 8a3 3 0 0 1 6 0M4 12h4M16 12h4M5 7l3 2M19 7l-3 2M5 18l3-2M19 18l-3-2"/></svg>',
   feat: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 9h.01M14 8h.01M12 12h.01M9 15h.01M15 14h.01"/></svg>',
 };
 const STATUS = {
@@ -695,7 +693,7 @@ function statusMenu(e, rel, sc) {
   bs.showMenu(e, [
     ...Object.entries(STATUS).map(([k, v]) => ({ label: v.label + (st && st.s === k ? ' ✓' : ''), icon: v.ico, action: () => setStatus(rel, sc, k) })),
     { label: 'Anotação…', icon: bs.I.edit, action: () => noteDialog(rel, sc) },
-    { label: 'Abrir relatório de bug deste cenário…', icon: KI.bug, action: () => bugFromScenario(rel, sc) },
+    { label: 'Abrir relatório de bug deste cenário…', icon: ICO.bug, action: () => bugFromScenario(rel, sc) },
     '-', { label: 'Não executado', icon: bs.I.x, action: () => setStatus(rel, sc, null) },
   ], sc.name);
 }
@@ -1054,17 +1052,13 @@ function ring(c, total) {
   return `<svg class="qa-ring" viewBox="0 0 52 52"><circle r="${r}" cx="26" cy="26" class="bg"/><g transform="rotate(-90 26 26)">${segs}</g></svg>`;
 }
 const SFILTER = [['pass', 'Passou', '✓'], ['fail', 'Falhou', '✗'], ['blocked', 'Bloqueado', '⊘'], ['none', 'Pendente', '○']];
-// abas do painel: Cenários (Gherkin) e Kit (ferramentas)
-const TOPS = [['cen', 'Cenários', ICO.feat], ['kit', 'Kit', ICO.qa]];
+// o painel: os cenários (Gherkin)
 function render() {
   const body = $('#toolBody');
   if (!S.project) { body.innerHTML = '<div class="empty">Abra um projeto.</div>'; return; }
-  V.top = V.top || store.get('qaTop', 'cen'); if (!TOPS.some(t => t[0] === V.top)) V.top = 'cen';
-  body.innerHTML = `<div class="qa"><div class="qa-top"><div class="qa-seg">${TOPS.map(([k, l, ic]) => `<button class="${V.top === k ? 'on' : ''}" data-top="${k}">${ic}${l}</button>`).join('')}</div><div class="qa-sub"></div></div><div class="qa-body"></div></div>`;
-  body.querySelectorAll('[data-top]').forEach(b => b.onclick = () => { V.top = b.dataset.top; store.set('qaTop', V.top); render(); });
+  body.innerHTML = `<div class="qa"><div class="qa-top"><div class="qa-sub"></div></div><div class="qa-body"></div></div>`;
   const sub = body.querySelector('.qa-sub'), el = body.querySelector('.qa-body');
   $('#toolActions').innerHTML = ''; $('#toolSub').textContent = '';
-  if (V.top === 'kit') return renderKit(sub, el);
   renderScenarios(sub, el);
 }
 function renderScenarios(sub, el) {
@@ -1214,354 +1208,12 @@ function featMenu(e, rel) {
 }
 
 // ====================================================================================================================
-// Kit do QA: dados de teste, validadores, valores limite, entradas especiais, JSON, codificação, JWT, datas, texto,
-// hash, regex, comparar textos, relatório de bug e ambientes. Tudo local, na página.
+// Relatório de bug de um cenário que falhou (no menu do status): passos, esperado e chamado já preenchidos
 // ====================================================================================================================
-const KI = {
-  id: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16c.8-1.6 5.2-1.6 6 0M14 10h4M14 13h3"/></svg>',
-  table: ICO.csv,
-  check: '<svg class="i" viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
-  ruler: '<svg class="i" viewBox="0 0 24 24"><path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/></svg>',
-  bomb: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="14" r="7"/><path d="M15 8l3-3M18 5l1.5-1.5M19 8h2M16 3V1"/></svg>',
-  json: '<svg class="i" viewBox="0 0 24 24"><path d="M8 4c-2 0-2 2-2 4s-2 4-2 4 2 2 2 4 0 4 2 4M16 4c2 0 2 2 2 4s2 4 2 4-2 2-2 4 0 4-2 4"/></svg>',
-  code: '<svg class="i" viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>',
-  key: '<svg class="i" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M16 7l3 3M14 9l2 2"/></svg>',
-  clock: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-  text: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7V5h16v2M12 5v14M9 19h6"/></svg>',
-  hash: '<svg class="i" viewBox="0 0 24 24"><path d="M5 9h14M5 15h14M10 3 8 21M16 3l-2 18"/></svg>',
-  regex: '<svg class="i" viewBox="0 0 24 24"><path d="M17 3v8M13.5 5l7 4M13.5 9l7-4"/><circle cx="6" cy="18" r="2.5"/></svg>',
-  diff: '<svg class="i" viewBox="0 0 24 24"><path d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9v3a3 3 0 0 1-3 3H9"/></svg>',
-  bug: '<svg class="i" viewBox="0 0 24 24"><path d="M8 8h8v8a4 4 0 0 1-8 0zM9 8a3 3 0 0 1 6 0M4 12h4M16 12h4M5 7l3 2M19 7l-3 2M5 18l3-2M19 18l-3-2"/></svg>',
-  globe: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
-};
 const copy = (v, what) => { bs.copyText(String(v)); toast((what || 'Copiado') + ': ' + (String(v).length > 60 ? String(v).slice(0, 60) + '…' : v), 'ok'); };
-const rnd = (n) => Math.floor(Math.random() * n);
-const pick = (a) => a[rnd(a.length)];
-const digits = (n) => Array.from({ length: n }, () => rnd(10));
-const onlyDigits = (s) => String(s).replace(/\D/g, '');
 const pad = (n, w = 2) => String(n).padStart(w, '0');
 // 2026-10-21-19-02 no horário local (nome de arquivo)
 const stamp = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}`;
-
-// ---------- geradores (documentos brasileiros com dígito verificador válido) ----------
-const G = {
-  cpf(f) {
-    const d = digits(9);
-    if (d.every(x => x === d[0])) d[8] = (d[8] + 1) % 10;
-    const dv = (arr) => { const s = arr.reduce((a, x, i) => a + x * (arr.length + 1 - i), 0) % 11; return s < 2 ? 0 : 11 - s; };
-    d.push(dv(d)); d.push(dv(d));
-    const s = d.join(''); return f ? `${s.slice(0, 3)}.${s.slice(3, 6)}.${s.slice(6, 9)}-${s.slice(9)}` : s;
-  },
-  cnpj(f) {
-    const d = [...digits(8), 0, 0, 0, 1];
-    const dv = (arr) => { const w = arr.length === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; const s = arr.reduce((a, x, i) => a + x * w[i], 0) % 11; return s < 2 ? 0 : 11 - s; };
-    d.push(dv(d)); d.push(dv(d));
-    const s = d.join(''); return f ? `${s.slice(0, 2)}.${s.slice(2, 5)}.${s.slice(5, 8)}/${s.slice(8, 12)}-${s.slice(12)}` : s;
-  },
-  rg(f) { // padrão SP
-    const d = digits(8); const s = d.reduce((a, x, i) => a + x * (i + 2), 0) % 11; const dv = 11 - s === 10 ? 'X' : 11 - s === 11 ? '0' : String(11 - s);
-    const t = d.join('') + dv; return f ? `${t.slice(0, 2)}.${t.slice(2, 5)}.${t.slice(5, 8)}-${t.slice(8)}` : t;
-  },
-  pis(f) {
-    const d = digits(10); const w = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; const r = 11 - (d.reduce((a, x, i) => a + x * w[i], 0) % 11); d.push(r >= 10 ? 0 : r);
-    const s = d.join(''); return f ? `${s.slice(0, 3)}.${s.slice(3, 8)}.${s.slice(8, 10)}-${s.slice(10)}` : s;
-  },
-  cnh() {
-    for (;;) {
-      const d = digits(9); let v = 0; for (let i = 0; i < 9; i++) v += d[i] * (9 - i);
-      let dv1 = v % 11, dsc = 0; if (dv1 >= 10) { dv1 = 0; dsc = 2; }
-      v = 0; for (let i = 0; i < 9; i++) v += d[i] * (i + 1);
-      let dv2 = v % 11; dv2 = dv2 >= 10 ? 0 : dv2 - dsc; if (dv2 < 0) continue;
-      return d.join('') + dv1 + dv2;
-    }
-  },
-  titulo(f) {
-    const seq = digits(8); const uf = 1 + rnd(28); const u = [Math.floor(uf / 10), uf % 10];
-    let r = seq.reduce((a, x, i) => a + x * (i + 2), 0) % 11; if (r === 10) r = 0; if (r === 0 && (uf === 1 || uf === 2)) r = 1;
-    let r2 = (u[0] * 7 + u[1] * 8 + r * 9) % 11; if (r2 === 10) r2 = 0; if (r2 === 0 && (uf === 1 || uf === 2)) r2 = 1;
-    const s = seq.join('') + u.join('') + r + r2; return f ? `${s.slice(0, 4)} ${s.slice(4, 8)} ${s.slice(8)}` : s;
-  },
-  renavam() { const d = digits(10); const w = [3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; let r = (d.reduce((a, x, i) => a + x * w[i], 0) * 10) % 11; if (r === 10) r = 0; return d.join('') + r; },
-  placa() { const L = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'; return pick(L) + pick(L) + pick(L) + rnd(10) + pick(L) + rnd(10) + rnd(10); },
-  cep(f) { const c = pick(CEPS); return { cep: f ? c[0] : onlyDigits(c[0]), cidade: c[1], uf: c[2], logradouro: c[3] }; },
-  telefone(f) { const ddd = pick(DDDS); const n = '9' + digits(8).join(''); return f ? `(${ddd}) ${n.slice(0, 5)}-${n.slice(5)}` : ddd + n; },
-  nome() { const sexo = rnd(2); return `${pick(sexo ? NOMES_F : NOMES_M)} ${pick(SOBRENOMES)} ${pick(SOBRENOMES)}`; },
-  email(nome) { const n = (nome || G.nome()).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(' '); return `${n[0]}.${n[n.length - 1]}${rnd(100)}@example.com`; },
-  nascimento(min = 18, max = 80) { const now = new Date(); const age = min + rnd(max - min + 1); const d = new Date(now.getFullYear() - age, rnd(12), 1 + rnd(28)); return { br: `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`, iso: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, idade: age }; },
-  cartao(bandeira) {
-    const pre = { Visa: ['4'], Mastercard: ['51', '52', '53', '54', '55', '2221', '2720'], Amex: ['34', '37'], Elo: ['636368', '438935', '504175', '451416'], Hipercard: ['606282'] }[bandeira] || ['4'];
-    const len = bandeira === 'Amex' ? 15 : 16;
-    const n = (pick(pre) + digits(len).join('')).slice(0, len - 1).split('').map(Number);
-    let s = 0; for (let i = n.length - 1, dbl = true; i >= 0; i--, dbl = !dbl) { let x = n[i]; if (dbl) { x *= 2; if (x > 9) x -= 9; } s += x; }
-    n.push((10 - (s % 10)) % 10);
-    const now = new Date();
-    return { numero: n.join('').replace(bandeira === 'Amex' ? /(\d{4})(\d{6})(\d{5})/ : /(\d{4})(?=\d)/g, bandeira === 'Amex' ? '$1 $2 $3' : '$1 '), validade: `${pad(1 + rnd(12))}/${String(now.getFullYear() + 1 + rnd(5)).slice(2)}`, cvv: digits(bandeira === 'Amex' ? 4 : 3).join(''), bandeira };
-  },
-  uuid() { return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = rnd(16); return (c === 'x' ? r : (r & 3) | 8).toString(16); }); },
-  senha(n = 14) { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ', b = 'abcdefghijkmnopqrstuvwxyz', c = '23456789', e = '!@#$%&*?-_'; const all = a + b + c + e; const out = [pick(a), pick(b), pick(c), pick(e)]; while (out.length < n) out.push(pick(all)); return out.sort(() => Math.random() - .5).join(''); },
-};
-const NOMES_M = 'Miguel Arthur Gael Heitor Theo Davi Gabriel Bernardo Samuel João Pedro Lucas Rafael Gustavo Felipe Matheus Bruno Diego Thiago Rodrigo Leonardo Eduardo Vinícius Henrique Caio'.split(' ');
-const NOMES_F = 'Helena Alice Laura Maria Valentina Heloísa Sophia Isabella Manuela Júlia Cecília Beatriz Larissa Mariana Fernanda Camila Juliana Patrícia Aline Bruna Letícia Gabriela Renata Carolina Ana'.split(' ');
-const SOBRENOMES = 'Silva Santos Oliveira Souza Rodrigues Ferreira Alves Pereira Lima Gomes Costa Ribeiro Martins Carvalho Almeida Lopes Soares Fernandes Vieira Barbosa Rocha Dias Nascimento Andrade Moreira Nunes Marques Machado Mendes Freitas Cardoso Ramos Teixeira Araújo Moura'.split(' ');
-const DDDS = [11, 12, 13, 15, 19, 21, 24, 27, 31, 34, 41, 43, 47, 48, 51, 54, 61, 62, 65, 67, 71, 73, 79, 81, 82, 83, 84, 85, 86, 91, 92, 98];
-const CEPS = [['01001-000', 'São Paulo', 'SP', 'Praça da Sé'], ['20040-002', 'Rio de Janeiro', 'RJ', 'Avenida Rio Branco'], ['30130-010', 'Belo Horizonte', 'MG', 'Praça Sete de Setembro'], ['70040-010', 'Brasília', 'DF', 'Esplanada dos Ministérios'], ['40020-000', 'Salvador', 'BA', 'Rua Chile'], ['80010-000', 'Curitiba', 'PR', 'Praça Tiradentes'], ['90010-000', 'Porto Alegre', 'RS', 'Rua dos Andradas'], ['60060-000', 'Fortaleza', 'CE', 'Rua Senador Pompeu'], ['50010-000', 'Recife', 'PE', 'Avenida Martins de Barros'], ['69005-000', 'Manaus', 'AM', 'Avenida Eduardo Ribeiro'], ['88010-000', 'Florianópolis', 'SC', 'Praça XV de Novembro'], ['74003-010', 'Goiânia', 'GO', 'Avenida Goiás']];
-
-// ---------- validadores ----------
-const VAL = {
-  cpf(v) { const d = onlyDigits(v); if (d.length !== 11 || /^(\d)\1+$/.test(d)) return false; const n = d.split('').map(Number); const dv = (k) => { const s = n.slice(0, k).reduce((a, x, i) => a + x * (k + 1 - i), 0) % 11; return s < 2 ? 0 : 11 - s; }; return dv(9) === n[9] && dv(10) === n[10]; },
-  cnpj(v) { const d = onlyDigits(v); if (d.length !== 14 || /^(\d)\1+$/.test(d)) return false; const n = d.split('').map(Number); const dv = (k) => { const w = k === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]; const s = n.slice(0, k).reduce((a, x, i) => a + x * w[i], 0) % 11; return s < 2 ? 0 : 11 - s; }; return dv(12) === n[12] && dv(13) === n[13]; },
-  luhn(v) { const d = onlyDigits(v); if (d.length < 12 || d.length > 19) return false; let s = 0; for (let i = d.length - 1, dbl = false; i >= 0; i--, dbl = !dbl) { let x = +d[i]; if (dbl) { x *= 2; if (x > 9) x -= 9; } s += x; } return s % 10 === 0; },
-  email(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v).trim()); },
-  cep(v) { return /^\d{5}-?\d{3}$/.test(String(v).trim()); },
-};
-function detectDoc(v) {
-  const d = onlyDigits(v), t = String(v).trim();
-  if (!t) return null;
-  if (/@/.test(t)) return ['E-mail', VAL.email(t)];
-  if (d.length === 11 && !/[a-z]/i.test(t)) return ['CPF', VAL.cpf(d)];
-  if (d.length === 14) return ['CNPJ', VAL.cnpj(d)];
-  if (d.length === 8 && /^\d{5}-?\d{3}$/.test(t)) return ['CEP (formato)', VAL.cep(t)];
-  if (d.length >= 12 && d.length <= 19) return ['Cartão (Luhn)', VAL.luhn(d)];
-  return ['Desconhecido', null];
-}
-
-// ---------- janelas do kit ----------
-function kit(id, title, desc, html, bind, wide = true) {
-  return dialog('qk_' + id, `<div class="dlg-hd"><span class="dlg-ic">${KITS.find(k => k.id === id)?.ico || KI.check}</span><div><h3>${esc(title)}</h3>${desc ? `<p>${desc}</p>` : ''}</div></div>
-    <div class="qk">${html}</div>
-    <div class="actions"><span class="spacer"></span><button class="chip" data-close>Fechar</button></div>`, (el) => { if (wide) el.querySelector('.dlg-box').classList.add('qk-box'); bind && bind(el); });
-}
-const out = (label, value, extra = '') => `<div class="qk-out"><span class="qk-l">${esc(label)}</span><code class="qk-v" data-copy="${esc(value)}" title="Clique para copiar">${esc(value)}</code>${extra}</div>`;
-const bindCopy = (el) => el.querySelectorAll('[data-copy]').forEach(c => c.onclick = () => copy(c.dataset.copy, c.closest('.qk-out')?.querySelector('.qk-l')?.textContent));
-
-function kitData() {
-  const fmt = () => store.get('qkFmt', true);
-  const draw = (el) => {
-    const f = fmt(); const nome = G.nome(); const nasc = G.nascimento(); const cep = G.cep(f); const card = G.cartao(el.querySelector('#qkBand')?.value || 'Visa');
-    el.querySelector('.qk-grid').innerHTML = [
-      out('Nome', nome), out('E-mail', G.email(nome)), out('CPF', G.cpf(f)), out('CNPJ', G.cnpj(f)), out('RG (SP)', G.rg(f)), out('PIS/PASEP', G.pis(f)),
-      out('CNH', G.cnh()), out('Título de eleitor', G.titulo(f)), out('Renavam', G.renavam()), out('Placa (Mercosul)', G.placa()),
-      out('Telefone (celular)', G.telefone(f)), out('Nascimento', nasc.br, `<span class="qk-mut">${nasc.idade} anos · ${nasc.iso}</span>`),
-      out('CEP', cep.cep, `<span class="qk-mut">${esc(cep.logradouro)} · ${esc(cep.cidade)}/${cep.uf}</span>`),
-      out(`Cartão de teste (${card.bandeira})`, card.numero, `<span class="qk-mut">val ${card.validade} · CVV ${card.cvv}</span>`),
-      out('UUID', G.uuid()), out('Senha forte', G.senha()),
-    ].join('');
-    bindCopy(el);
-  };
-  kit('data', 'Dados de teste', 'Documentos com dígito verificador válido (gerados, não são de ninguém). Clique num valor para copiar. Cartões passam no Luhn e servem só em ambientes de teste.', `
-    <div class="qk-bar"><label class="chk"><input type="checkbox" id="qkFmt" ${fmt() ? 'checked' : ''}> Com máscara (pontos e traços)</label>
-      <label>Bandeira <select id="qkBand">${['Visa', 'Mastercard', 'Elo', 'Amex', 'Hipercard'].map(b => `<option>${b}</option>`).join('')}</select></label>
-      <span class="spacer"></span><button class="chip primary" id="qkNew">Gerar de novo</button></div>
-    <div class="qk-grid"></div>`, (el) => {
-    draw(el);
-    el.querySelector('#qkNew').onclick = () => draw(el);
-    el.querySelector('#qkFmt').onchange = (e) => { store.set('qkFmt', e.target.checked); draw(el); };
-    el.querySelector('#qkBand').onchange = () => draw(el);
-  });
-}
-const MASS = [['nome', 'Nome'], ['email', 'E-mail'], ['cpf', 'CPF'], ['rg', 'RG'], ['nascimento', 'Nascimento'], ['telefone', 'Telefone'], ['cep', 'CEP'], ['cidade', 'Cidade'], ['uf', 'UF'], ['cnpj', 'CNPJ'], ['cartao', 'Cartão de teste'], ['placa', 'Placa'], ['uuid', 'UUID'], ['senha', 'Senha']];
-function kitMass() {
-  kit('mass', 'Massa de dados', 'Várias linhas de uma vez, para importar ou cadastrar em lote. CSV abre como planilha no BlueScreen.', `
-    <div class="qk-chks">${MASS.map(([k, l], i) => `<label class="chk"><input type="checkbox" value="${k}" ${i < 7 ? 'checked' : ''}> ${l}</label>`).join('')}</div>
-    <div class="qk-bar"><label>Linhas <input id="qkN" type="number" min="1" max="5000" value="20"></label><label class="chk"><input type="checkbox" id="qkMF" checked> Com máscara</label>
-      <label>Formato <select id="qkOut"><option value="csv">CSV (;)</option><option value="json">JSON</option></select></label><span class="spacer"></span>
-      <button class="chip" id="qkCopy">Copiar</button><button class="chip primary" id="qkSave">Salvar no projeto</button></div>
-    <pre class="qa-code qk-prev"></pre>`, (el) => {
-    const gen = () => {
-      const keys = [...el.querySelectorAll('.qk-chks input:checked')].map(i => i.value); const n = Math.max(1, Math.min(5000, +el.querySelector('#qkN').value || 1)); const f = el.querySelector('#qkMF').checked;
-      const rows = Array.from({ length: n }, () => { const nome = G.nome(), cep = G.cep(f), card = G.cartao(pick(['Visa', 'Mastercard', 'Elo'])); const all = { nome, email: G.email(nome), cpf: G.cpf(f), rg: G.rg(f), nascimento: G.nascimento().br, telefone: G.telefone(f), cep: cep.cep, cidade: cep.cidade, uf: cep.uf, cnpj: G.cnpj(f), cartao: card.numero, placa: G.placa(), uuid: G.uuid(), senha: G.senha() }; return Object.fromEntries(keys.map(k => [k, all[k]])); });
-      const fmt = el.querySelector('#qkOut').value;
-      const q = (v) => /[;"\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
-      const text = fmt === 'json' ? JSON.stringify(rows, null, 2) : '﻿' + [keys.map(k => MASS.find(m => m[0] === k)[1]).join(';'), ...rows.map(r => keys.map(k => q(r[k])).join(';'))].join('\r\n') + '\r\n';
-      el.querySelector('.qk-prev').textContent = text.replace('﻿', '').split('\n').slice(0, 12).join('\n') + (n > 10 ? `\n… (${n} linhas)` : '');
-      return { text, fmt };
-    };
-    let last = gen();
-    el.querySelectorAll('input,select').forEach(i => i.onchange = () => { last = gen(); });
-    el.querySelector('#qkCopy').onclick = () => copy(last.text.replace('﻿', ''), 'Massa copiada');
-    el.querySelector('#qkSave').onclick = async () => {
-      const dir = (P.settings.bugsDir || 'qa').replace(/^\/+|\/+$/g, '') + '/massas';
-      const rel = `${dir}/massa-${stamp()}.${last.fmt}`;
-      try { await writeText(rel, last.text); toast('Salvo em ' + rel, 'ok'); bs.openFile(rel, 'editor'); } catch (e) { toast(e.message); }
-    };
-  });
-}
-function kitValidate() {
-  kit('validate', 'Validar documento', 'Cole um CPF, CNPJ, número de cartão, e-mail ou CEP (com ou sem máscara). Uma linha por valor.', `
-    <textarea id="qkIn" rows="6" placeholder="123.456.789-09\n11.222.333/0001-81\n4111 1111 1111 1111"></textarea><div class="qk-res"></div>`, (el) => {
-    const run = () => { el.querySelector('.qk-res').innerHTML = el.querySelector('#qkIn').value.split('\n').filter(l => l.trim()).map(l => { const r = detectDoc(l); return `<div class="qk-vr ${r && r[1] === true ? 'ok' : r && r[1] === false ? 'bad' : ''}"><code>${esc(l.trim())}</code><span>${r ? esc(r[0]) : ''}</span><b>${r && r[1] === true ? '✓ válido' : r && r[1] === false ? '✗ inválido' : '?'}</b></div>`; }).join(''); };
-    el.querySelector('#qkIn').oninput = run; el.querySelector('#qkIn').focus();
-  }, false);
-}
-function kitBoundary() {
-  kit('boundary', 'Valores limite', 'Os valores que mais acham bug num campo: nas bordas do permitido e logo fora delas.', `
-    <div class="qk-bar"><label>Tipo <select id="qkT"><option value="text">Texto (tamanho)</option><option value="num">Número</option><option value="date">Data</option></select></label>
-      <label>Mínimo <input id="qkMin" value="3"></label><label>Máximo <input id="qkMax" value="50"></label></div><div class="qk-grid"></div>`, (el) => {
-    const run = () => {
-      const t = el.querySelector('#qkT').value, a = el.querySelector('#qkMin').value.trim(), b = el.querySelector('#qkMax').value.trim();
-      const rows = [];
-      if (t === 'text') {
-        const mn = Math.max(0, parseInt(a) || 0), mx = Math.max(mn, parseInt(b) || 0);
-        const s = (n) => n <= 0 ? '' : ('Teste' + 'abcdefghijklmnopqrstuvwxyz'.repeat(Math.ceil(n / 26) + 1)).slice(0, n);
-        rows.push(['Vazio', '', 'inválido se obrigatório'], ['Só espaços', '   ', 'deve ser recusado ou aparado']);
-        if (mn > 0) rows.push([`${mn - 1} caracteres (mín−1)`, s(mn - 1), 'inválido']);
-        rows.push([`${mn} caracteres (mín)`, s(mn), 'válido'], [`${mn + 1} caracteres (mín+1)`, s(mn + 1), 'válido'], [`${mx - 1} caracteres (máx−1)`, s(mx - 1), 'válido'], [`${mx} caracteres (máx)`, s(mx), 'válido'], [`${mx + 1} caracteres (máx+1)`, s(mx + 1), 'inválido / cortado']);
-      } else if (t === 'num') {
-        const mn = Number(a.replace(',', '.')), mx = Number(b.replace(',', '.')); const step = /[.,]/.test(a + b) ? 0.01 : 1;
-        const f = (x) => String(Math.round(x * 100) / 100).replace('.', ',');
-        rows.push(['Vazio', '', 'inválido se obrigatório'], [`mín−${f(step)}`, f(mn - step), 'inválido'], ['mín', f(mn), 'válido'], [`mín+${f(step)}`, f(mn + step), 'válido'], [`máx−${f(step)}`, f(mx - step), 'válido'], ['máx', f(mx), 'válido'], [`máx+${f(step)}`, f(mx + step), 'inválido'], ['Zero', '0', 'conferir'], ['Negativo', '-1', 'conferir'], ['Letras', 'abc', 'inválido'], ['Decimal com ponto', '1.5', 'conferir separador'], ['Muito grande', '99999999999999999999', 'inválido / estouro']);
-      } else {
-        const p = (s) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s) || /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if (!m) return null; return s.includes('/') ? new Date(+m[3], m[2] - 1, +m[1]) : new Date(+m[1], m[2] - 1, +m[3]); };
-        const br = (d) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`; const add = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-        const mn = p(a) || new Date(), mx = p(b) || add(new Date(), 30);
-        rows.push(['Vazio', '', 'inválido se obrigatório'], ['mín−1 dia', br(add(mn, -1)), 'inválido'], ['mín', br(mn), 'válido'], ['mín+1 dia', br(add(mn, 1)), 'válido'], ['máx−1 dia', br(add(mx, -1)), 'válido'], ['máx', br(mx), 'válido'], ['máx+1 dia', br(add(mx, 1)), 'inválido'], ['29/02 de ano não bissexto', '29/02/2025', 'inválido'], ['29/02 de ano bissexto', '29/02/2028', 'válido'], ['Dia 31 em mês de 30', '31/04/2026', 'inválido'], ['Mês 13', '01/13/2026', 'inválido'], ['Formato errado', '2026-13-45', 'inválido']);
-      }
-      el.querySelector('.qk-grid').innerHTML = rows.map(([l, v, e]) => out(l, v, `<span class="qk-mut">${esc(e)}${v.length > 40 ? ' · ' + v.length + ' car.' : ''}</span>`)).join('');
-      bindCopy(el);
-    };
-    el.querySelectorAll('input,select').forEach(i => i.oninput = run); el.querySelector('#qkT').onchange = () => { const t = el.querySelector('#qkT').value; el.querySelector('#qkMin').value = t === 'num' ? '1' : t === 'date' ? new Date().toLocaleDateString('pt-BR') : '3'; el.querySelector('#qkMax').value = t === 'num' ? '100' : t === 'date' ? new Date(Date.now() + 30 * 864e5).toLocaleDateString('pt-BR') : '50'; run(); };
-    run();
-  });
-}
-const SPECIAL = [
-  ['Básico', [['Vazio', ''], ['Só espaços', '     '], ['Espaço no começo e no fim', '  texto  '], ['Tab e quebra de linha', 'linha 1\n\tlinha 2']]],
-  ['Acentos e símbolos', [['Acentos', 'Ação Ñandú Über çãõ êéè'], ['Apóstrofo', "D'Ávila O'Connor"], ['Aspas', '"aspas" e \'simples\''], ['Símbolos', '!@#$%¨&*()_+-=[]{}|;:,.<>?/~`^'], ['Emoji', 'Teste 😀👍🏽👨‍👩‍👧 ✔'], ['Moeda', 'R$ 1.234,56 · US$ 1,234.56 · € 9,99']]],
-  ['Unicode traiçoeiro', [['Caractere invisível (zero-width)', 'te​ste'], ['Espaço não separável', 'te ste'], ['Texto da direita p/ esquerda', '‮etset'], ['Letras parecidas (cirílico)', 'аdmin'], ['Ideogramas', '测试 テスト 테스트']]],
-  ['Tamanho', [['255 caracteres', 'a'.repeat(255)], ['256 caracteres', 'a'.repeat(256)], ['1000 caracteres', 'a'.repeat(1000)], ['Palavra enorme sem espaço', 'Supercalifragilisticexpialidocious'.repeat(8)]]],
-  ['Números', [['Zero', '0'], ['Negativo', '-1'], ['Decimal com vírgula', '1,5'], ['Decimal com ponto', '1.5'], ['Notação científica', '1e10'], ['Muito grande', '9999999999999999999999'], ['Com espaço', '1 000']]],
-  ['Injeção (teste o seu sistema)', [['HTML', '<b>negrito</b><i>itálico</i>'], ['Script (XSS)', '<script>alert(1)</script>'], ['Imagem com onerror', '<img src=x onerror=alert(1)>'], ['SQL', "' OR '1'='1' --"], ['SQL com ponto e vírgula', "'; DROP TABLE teste; --"], ['Template', '{{7*7}} ${7*7} <%= 7*7 %>'], ['Caminho', '../../etc/passwd'], ['Comando', '; ls -la && whoami'], ['Formato printf', '%s%s%s%n%d']]],
-  ['E-mail', [['Válido simples', 'teste@example.com'], ['Com +', 'teste+qa@example.com'], ['Sem @', 'teste.example.com'], ['Dois @', 'a@@example.com'], ['Sem domínio', 'teste@'], ['Com espaço', 'te ste@example.com'], ['Maiúsculas', 'TESTE@EXAMPLE.COM']]],
-];
-function kitSpecial() {
-  kit('special', 'Entradas especiais', 'Valores que costumam quebrar campos, máscaras, banco e tela. Clique para copiar. Use a parte de injeção só nos sistemas que você testa.', SPECIAL.map(([g, list]) => `<div class="qk-sub">${esc(g)}</div><div class="qk-grid">${list.map(([l, v]) => out(l, v, v.length > 60 ? `<span class="qk-mut">${v.length} caracteres</span>` : '')).join('')}</div>`).join(''), bindCopy);
-}
-function kitJson() {
-  kit('json', 'JSON', 'Formatar, validar, minificar e comparar. O erro aponta linha e coluna.', `
-    <div class="qk-bar"><button class="chip" data-a="fmt">Formatar</button><button class="chip" data-a="min">Minificar</button><button class="chip" data-a="sort">Ordenar chaves</button><button class="chip" data-a="esc">Virar string</button><button class="chip" data-a="unesc">Tirar de string</button><span class="spacer"></span><button class="chip" data-a="cmp">Comparar com outro…</button><button class="chip primary" data-a="copy">Copiar</button></div>
-    <textarea id="qkJ" rows="16" spellcheck="false" placeholder='{"exemplo": [1, 2, 3]}'></textarea><div class="qk-msg"></div>`, (el) => {
-    const ta = el.querySelector('#qkJ'), msg = el.querySelector('.qk-msg');
-    const sortKeys = (v) => Array.isArray(v) ? v.map(sortKeys) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])])) : v;
-    const parse = () => { try { const v = JSON.parse(ta.value); msg.className = 'qk-msg ok'; msg.textContent = '✓ JSON válido' + (Array.isArray(v) ? ` · lista com ${v.length} itens` : v && typeof v === 'object' ? ` · ${Object.keys(v).length} chaves` : ''); return v; } catch (e) { const m = /position (\d+)/.exec(e.message); let where = ''; if (m) { const before = ta.value.slice(0, +m[1]); where = ` (linha ${before.split('\n').length}, coluna ${before.length - before.lastIndexOf('\n')})`; } msg.className = 'qk-msg bad'; msg.textContent = '✗ ' + e.message + where; return undefined; } };
-    ta.oninput = () => ta.value.trim() && parse();
-    el.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
-      const a = b.dataset.a;
-      if (a === 'copy') return copy(ta.value, 'JSON copiado');
-      if (a === 'cmp') return kitDiff(ta.value, '', 'json');
-      if (a === 'unesc') { try { ta.value = JSON.parse(ta.value); parse(); } catch (e) { msg.className = 'qk-msg bad'; msg.textContent = '✗ não é uma string JSON'; } return; }
-      const v = parse(); if (v === undefined) return;
-      ta.value = a === 'min' ? JSON.stringify(v) : a === 'esc' ? JSON.stringify(JSON.stringify(v)) : JSON.stringify(a === 'sort' ? sortKeys(v) : v, null, 2);
-    });
-    ta.focus();
-  });
-}
-function b64e(s) { return btoa(String.fromCharCode(...new TextEncoder().encode(s))); }
-function b64d(s) { const t = s.trim().replace(/-/g, '+').replace(/_/g, '/'); return new TextDecoder().decode(Uint8Array.from(atob(t + '==='.slice((t.length + 3) % 4)), c => c.charCodeAt(0))); }
-function kitCode() {
-  kit('code', 'Codificar e decodificar', 'Base64, URL, HTML e JWT. Cole no campo de cima.', `
-    <textarea id="qkC" rows="6" spellcheck="false" placeholder="texto, Base64, URL ou um JWT (eyJ...)"></textarea>
-    <div class="qk-bar"><button class="chip" data-a="b64e">Base64 ←</button><button class="chip" data-a="b64d">Base64 →</button><button class="chip" data-a="urle">URL ←</button><button class="chip" data-a="urld">URL →</button><button class="chip" data-a="htmle">HTML ←</button><button class="chip" data-a="htmld">HTML →</button><button class="chip" data-a="jwt">Ler JWT</button></div>
-    <textarea id="qkR" rows="10" spellcheck="false" readonly></textarea><div class="qk-msg"></div>
-    <div class="qk-bar"><span class="qk-mut">← codifica · → decodifica</span><span class="spacer"></span><button class="chip primary" id="qkRC">Copiar resultado</button></div>`, (el) => {
-    const i = el.querySelector('#qkC'), o = el.querySelector('#qkR'), msg = el.querySelector('.qk-msg');
-    const jwt = (t) => {
-      const p = t.trim().replace(/^Bearer\s+/i, '').split('.'); if (p.length < 2) throw new Error('não parece um JWT (header.payload.assinatura)');
-      const h = JSON.parse(b64d(p[0])), pl = JSON.parse(b64d(p[1]));
-      const when = (s) => s ? `${new Date(s * 1000).toLocaleString('pt-BR')}` : '';
-      const now = Date.now() / 1000;
-      msg.className = 'qk-msg ' + (pl.exp && pl.exp < now ? 'bad' : 'ok');
-      msg.textContent = [pl.exp ? (pl.exp < now ? `✗ expirou em ${when(pl.exp)}` : `✓ válido até ${when(pl.exp)} (${Math.round((pl.exp - now) / 60)} min)`) : 'sem exp', pl.iat ? `emitido ${when(pl.iat)}` : '', h.alg ? `alg ${h.alg}` : ''].filter(Boolean).join(' · ') + ' · a assinatura não é conferida aqui';
-      return JSON.stringify({ header: h, payload: pl }, null, 2);
-    };
-    el.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
-      msg.textContent = ''; msg.className = 'qk-msg';
-      try {
-        const v = i.value; const ta = document.createElement('textarea');
-        o.value = ({ b64e: () => b64e(v), b64d: () => b64d(v), urle: () => encodeURIComponent(v), urld: () => decodeURIComponent(v.replace(/\+/g, ' ')), htmle: () => v.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])), htmld: () => { ta.innerHTML = v; return ta.value; }, jwt: () => jwt(v) })[b.dataset.a]();
-      } catch (e) { msg.className = 'qk-msg bad'; msg.textContent = '✗ ' + e.message; }
-    });
-    i.oninput = () => { if (/^\s*(Bearer\s+)?eyJ[\w-]+\.[\w-]+\./.test(i.value)) el.querySelector('[data-a="jwt"]').click(); };
-    el.querySelector('#qkRC').onclick = () => copy(o.value, 'Resultado copiado');
-    i.focus();
-  });
-}
-function kitDate() {
-  const br = (d) => d.toLocaleString('pt-BR');
-  kit('date', 'Data e hora', 'Converte epoch (segundos ou milissegundos) e datas; soma dias; conta dias corridos e úteis (seg a sex, sem feriados).', `
-    <div class="qk-sub">Converter</div><input id="qkD" placeholder="1792617444 · 1792617444203 · 21/10/2026 18:30 · 2026-10-21T18:30:00Z" spellcheck="false"><div class="qk-grid" id="qkDo"></div>
-    <div class="qk-sub">Somar</div><div class="qk-bar"><input id="qkA" placeholder="data (vazio = hoje)" spellcheck="false"><label>+ dias <input id="qkAd" type="number" value="30"></label><label class="chk"><input type="checkbox" id="qkAu"> só úteis</label></div><div class="qk-grid" id="qkAo"></div>
-    <div class="qk-sub">Entre duas datas</div><div class="qk-bar"><input id="qkB1" placeholder="de" spellcheck="false"><input id="qkB2" placeholder="até" spellcheck="false"></div><div class="qk-grid" id="qkBo"></div>`, (el) => {
-    const parse = (s) => {
-      s = String(s || '').trim(); if (!s) return new Date();
-      if (/^\d{10}$/.test(s)) return new Date(+s * 1000); if (/^\d{13}$/.test(s)) return new Date(+s);
-      const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
-      if (m) return new Date(+m[3], m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
-      const d = new Date(s); return isNaN(d) ? null : d;
-    };
-    const work = (a, b) => { let n = 0; const d = new Date(Math.min(a, b)); d.setHours(0, 0, 0, 0); const e = new Date(Math.max(a, b)); e.setHours(0, 0, 0, 0); while (d < e) { d.setDate(d.getDate() + 1); if (d.getDay() % 6) n++; } return n; };
-    const conv = () => { const d = parse(el.querySelector('#qkD').value); el.querySelector('#qkDo').innerHTML = d ? [out('Data e hora (BR)', br(d)), out('ISO 8601 (UTC)', d.toISOString()), out('Epoch (s)', String(Math.floor(d / 1000))), out('Epoch (ms)', String(+d)), out('Dia da semana', d.toLocaleDateString('pt-BR', { weekday: 'long' }))].join('') : '<div class="qk-msg bad">✗ não reconheci a data</div>'; bindCopy(el); };
-    const add = () => { const d = parse(el.querySelector('#qkA').value); const n = +el.querySelector('#qkAd').value || 0; if (!d) return; const r = new Date(d); if (el.querySelector('#qkAu').checked) { let k = Math.abs(n); while (k) { r.setDate(r.getDate() + Math.sign(n)); if (r.getDay() % 6) k--; } } else r.setDate(r.getDate() + n); el.querySelector('#qkAo').innerHTML = out('Resultado', r.toLocaleDateString('pt-BR'), `<span class="qk-mut">${r.toLocaleDateString('pt-BR', { weekday: 'long' })}</span>`); bindCopy(el); };
-    const between = () => { const a = parse(el.querySelector('#qkB1').value), b = parse(el.querySelector('#qkB2').value); if (!a || !b) return; const days = Math.round((b - a) / 864e5); el.querySelector('#qkBo').innerHTML = [out('Dias corridos', String(days)), out('Dias úteis', String(work(a, b))), out('Horas', String(Math.round((b - a) / 36e5)))].join(''); bindCopy(el); };
-    el.querySelector('#qkD').oninput = conv; ['#qkA', '#qkAd', '#qkAu'].forEach(s => el.querySelector(s).oninput = add); el.querySelector('#qkAu').onchange = add; ['#qkB1', '#qkB2'].forEach(s => el.querySelector(s).oninput = between);
-    conv(); add();
-  });
-}
-function kitText() {
-  kit('text', 'Texto', 'Contar, gerar texto do tamanho exato que o campo pede e transformar.', `
-    <div class="qk-bar"><label>Gerar texto com <input id="qkLen" type="number" min="1" value="255"> caracteres</label><button class="chip primary" id="qkGen">Gerar e copiar</button></div>
-    <textarea id="qkTx" rows="10" spellcheck="false" placeholder="Cole ou digite um texto"></textarea><div class="qk-stats"></div>
-    <div class="qk-bar">${[['up', 'MAIÚSCULAS'], ['low', 'minúsculas'], ['title', 'Título'], ['noacc', 'Sem acentos'], ['trim', 'Tirar espaços extras'], ['uniq', 'Linhas únicas'], ['sort', 'Ordenar linhas'], ['slug', 'slug-de-url']].map(([k, l]) => `<button class="chip" data-a="${k}">${l}</button>`).join('')}<span class="spacer"></span><button class="chip" id="qkTC">Copiar</button></div>`, (el) => {
-    const ta = el.querySelector('#qkTx');
-    const stats = () => { const v = ta.value; el.querySelector('.qk-stats').textContent = `${[...v].length} caracteres · ${new TextEncoder().encode(v).length} bytes (UTF-8) · ${v.trim() ? v.trim().split(/\s+/).length : 0} palavras · ${v ? v.split('\n').length : 0} linhas`; };
-    const noacc = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
-    ta.oninput = stats;
-    el.querySelector('#qkGen').onclick = () => { const n = Math.max(1, Math.min(1e6, +el.querySelector('#qkLen').value || 1)); const base = 'Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua '; ta.value = base.repeat(Math.ceil(n / base.length)).slice(0, n - 3) + (n >= 3 ? 'FIM' : '').slice(0, n); ta.value = ta.value.slice(0, n); stats(); copy(ta.value, `Texto com ${n} caracteres copiado`); };
-    el.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
-      const v = ta.value; const lines = v.split('\n');
-      ta.value = ({ up: () => v.toUpperCase(), low: () => v.toLowerCase(), title: () => v.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase()), noacc: () => noacc(v), trim: () => lines.map(l => l.trim().replace(/\s+/g, ' ')).join('\n').trim(), uniq: () => [...new Set(lines)].join('\n'), sort: () => [...lines].sort((a, b) => a.localeCompare(b, 'pt-BR')).join('\n'), slug: () => noacc(v).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') })[b.dataset.a]();
-      stats();
-    });
-    el.querySelector('#qkTC').onclick = () => copy(ta.value, 'Texto copiado');
-    stats();
-  });
-}
-function kitHash() {
-  kit('hash', 'Hash e UUID', 'SHA do texto (como sai num log, numa API ou num banco) e identificadores aleatórios.', `
-    <textarea id="qkH" rows="5" spellcheck="false" placeholder="texto"></textarea><div class="qk-grid" id="qkHo"></div>
-    <div class="qk-sub">UUIDs</div><div class="qk-grid" id="qkU"></div>`, (el) => {
-    const hex = (b) => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
-    const run = async () => { const data = new TextEncoder().encode(el.querySelector('#qkH').value); const rows = []; for (const a of ['SHA-1', 'SHA-256', 'SHA-512']) rows.push(out(a, hex(await crypto.subtle.digest(a, data)))); rows.push(out('Base64', b64e(el.querySelector('#qkH').value))); el.querySelector('#qkHo').innerHTML = rows.join(''); bindCopy(el); };
-    el.querySelector('#qkH').oninput = run;
-    el.querySelector('#qkU').innerHTML = Array.from({ length: 5 }, () => out('UUID v4', G.uuid())).join('');
-    run();
-  }, false);
-}
-function kitRegex() {
-  kit('regex', 'Testar regex', 'Confira a expressão de uma validação com vários valores de uma vez (um por linha).', `
-    <div class="qk-bar"><input id="qkRe" placeholder="^\\d{5}-?\\d{3}$" spellcheck="false" style="flex:1"><input id="qkFl" value="" placeholder="flags (i, g, m)" spellcheck="false" style="width:110px"></div>
-    <textarea id="qkRv" rows="8" spellcheck="false" placeholder="01001-000\n01001000\n0100-1000"></textarea><div class="qk-res"></div>`, (el) => {
-    const run = () => {
-      let re; try { re = new RegExp(el.querySelector('#qkRe').value, el.querySelector('#qkFl').value.replace(/[^gimsuy]/g, '')); } catch (e) { el.querySelector('.qk-res').innerHTML = `<div class="qk-msg bad">✗ ${esc(e.message)}</div>`; return; }
-      el.querySelector('.qk-res').innerHTML = el.querySelector('#qkRv').value.split('\n').filter(Boolean).map(l => { const m = l.match(re); return `<div class="qk-vr ${m ? 'ok' : 'bad'}"><code>${esc(l)}</code><span>${m ? esc(m.slice(0, 4).filter(x => x !== undefined).join(' · ')) : ''}</span><b>${m ? '✓ casa' : '✗ não casa'}</b></div>`; }).join('');
-    };
-    el.querySelectorAll('input,textarea').forEach(i => i.oninput = run); el.querySelector('#qkRe').focus();
-  });
-}
-// comparar: o editor de diferenças do Monaco, lado a lado
-function kitDiff(a = '', b = '', lang = 'plaintext') {
-  kit('diff', 'Comparar textos', 'Cole o esperado à esquerda e o obtido à direita: as diferenças aparecem marcadas.', `
-    <div class="qk-bar"><label>Formato <select id="qkDl">${[['plaintext', 'Texto'], ['json', 'JSON'], ['xml', 'XML'], ['sql', 'SQL'], ['html', 'HTML']].map(([v, l]) => `<option value="${v}" ${v === lang ? 'selected' : ''}>${l}</option>`).join('')}</select></label><label class="chk"><input type="checkbox" id="qkDj"> Formatar JSON antes</label></div>
-    <div class="qk-dhead"><span>Esperado</span><span>Obtido</span></div><div class="qk-diff"></div>`, (el) => {
-    const m = bs.monaco; const host = el.querySelector('.qk-diff');
-    const A = m.editor.createModel(a, lang), B = m.editor.createModel(b, lang);
-    const de = m.editor.createDiffEditor(host, { originalEditable: true, automaticLayout: true, renderSideBySide: true, minimap: { enabled: false }, fontSize: 12.5, scrollBeyondLastLine: false, theme: undefined });
-    de.setModel({ original: A, modified: B });
-    el.querySelector('#qkDl').onchange = (e) => { m.editor.setModelLanguage(A, e.target.value); m.editor.setModelLanguage(B, e.target.value); };
-    el.querySelector('#qkDj').onchange = (e) => { if (!e.target.checked) return; for (const x of [A, B]) { try { x.setValue(JSON.stringify(JSON.parse(x.getValue()), null, 2)); } catch {} } };
-    // fechar a janela libera os editores
-    const obs = new MutationObserver(() => { if (el.hidden) { obs.disconnect(); de.dispose(); A.dispose(); B.dispose(); } });
-    obs.observe(el, { attributes: true, attributeFilter: ['hidden'] });
-  });
-}
 // ---------- relatório de bug ----------
 const SEV = ['Bloqueante', 'Crítica', 'Alta', 'Média', 'Baixa'];
 const envList = () => String(P.settings.envs || '').split('\n').map(l => /^\s*([^=]+?)\s*=\s*(\S+)/.exec(l)).filter(Boolean).map(m => ({ name: m[1], url: m[2] }));
@@ -1572,9 +1224,10 @@ function bugText(b, md) {
   return [md ? `## ${b.title}` : b.title, '', [L('Severidade', b.sev), L('Prioridade', b.prio), L('Ambiente', b.env), L('Navegador / dispositivo', b.device), L('Chamado relacionado', b.ticket), L('Cenário', b.scenario), L('Reportado por', b.by), L('Data', new Date().toLocaleString('pt-BR'))].filter(Boolean).join(md ? '  \n' : '\n'),
     sec('Pré-condição', b.pre), sec('Passos para reproduzir', steps), sec('Resultado esperado', b.expected), sec('Resultado obtido', b.actual), sec('Evidências', b.evidence)].join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
-function kitBug(seed = {}) {
+function bugDialog(seed = {}) {
   const envs = envList();
-  kit('bug', 'Relatório de bug', 'Preencha e copie (texto para o chamado ou Markdown para Jira/Azure/GitHub), ou salve em ' + esc((P.settings.bugsDir || 'qa') + '/bugs') + '.', `
+  dialog('qk_bug', `<div class="dlg-hd"><span class="dlg-ic">${ICO.bug}</span><div><h3>Relatório de bug</h3><p>` + 'Preencha e copie (texto para o chamado ou Markdown para Jira/Azure/GitHub), ou salve em ' + esc((P.settings.bugsDir || 'qa') + '/bugs') + `.</p></div></div>
+    <div class="qk">
     <label class="fld">Título<input id="bT" value="${esc(seed.title || '')}" placeholder="Ao salvar o cadastro com CPF válido, a tela mostra erro 500"></label>
     <div class="qa-2"><label class="fld">Severidade<select id="bS">${SEV.map(s => `<option ${s === (seed.sev || 'Média') ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
       <label class="fld">Prioridade<select id="bP">${['Alta', 'Média', 'Baixa'].map(s => `<option ${s === 'Média' ? 'selected' : ''}>${s}</option>`).join('')}</select></label></div>
@@ -1585,7 +1238,9 @@ function kitBug(seed = {}) {
     <label class="fld">Passos para reproduzir <small class="pl-help">um por linha; a numeração entra sozinha</small><textarea id="bSt" rows="5">${esc(seed.steps || '')}</textarea></label>
     <div class="qa-2"><label class="fld">Resultado esperado<textarea id="bEx" rows="3">${esc(seed.expected || '')}</textarea></label><label class="fld">Resultado obtido<textarea id="bAc" rows="3">${esc(seed.actual || '')}</textarea></label></div>
     <label class="fld">Evidências <small class="pl-help">links, nomes dos prints, trecho de log</small><textarea id="bEv" rows="2">${esc(seed.evidence || '')}</textarea></label>
-    <div class="qk-bar"><span class="spacer"></span><button class="chip" id="bCopyT">Copiar texto</button><button class="chip" id="bCopyM">Copiar Markdown</button><button class="chip primary" id="bSave">Salvar .md</button></div>`, (el) => {
+    <div class="qk-bar"><span class="spacer"></span><button class="chip" id="bCopyT">Copiar texto</button><button class="chip" id="bCopyM">Copiar Markdown</button><button class="chip primary" id="bSave">Salvar .md</button></div></div>
+    <div class="actions"><span class="spacer"></span><button class="chip" data-close>Fechar</button></div>`, (el) => {
+    el.querySelector('.dlg-box').classList.add('qk-box');
     const v = (id) => el.querySelector('#' + id).value.trim();
     const get = () => { const env = v('bE'); const e = envs.find(x => x.name === env); return { title: v('bT') || 'Bug sem título', sev: v('bS'), prio: v('bP'), env: e ? `${e.name} (${e.url})` : env, device: v('bD'), ticket: v('bK'), scenario: v('bC'), pre: v('bPre'), steps: v('bSt'), expected: v('bEx'), actual: v('bAc'), evidence: v('bEv'), by: P.settings.qaName || '' }; };
     el.querySelector('#bCopyT').onclick = () => copy(bugText(get(), false), 'Bug copiado (texto)');
@@ -1600,10 +1255,10 @@ function kitBug(seed = {}) {
 }
 // bug de um cenário (Falhou): passos, esperado e chamado já preenchidos
 function bugFromScenario(rel, sc) {
-  const d = docFor(rel); if (!d) return kitBug();
+  const d = docFor(rel); if (!d) return bugDialog();
   const all = [...(d.background ? d.background.steps : []), ...sc.steps];
   const st = statusOf(rel, sc);
-  kitBug({
+  bugDialog({
     title: `${scKey(sc)} falhou: ${sc.name.replace(/^\s*[A-Za-z]{1,6}\s*-?\s*\d+\s*[-–:]?\s*/, '')}`,
     ticket: ticketsOf(rel)[0] || '', scenario: sc.name, sev: 'Média',
     pre: all.filter(s => s.type === 'given').map(s => `${s.kw} ${s.text}`).join('\n'),
@@ -1613,44 +1268,9 @@ function bugFromScenario(rel, sc) {
     evidence: evidences(rel, sc).map(p => p).join('\n'),
   });
 }
-function kitEnvs() {
-  const envs = envList();
-  kit('envs', 'Ambientes', envs.length ? 'Clique para abrir no navegador; o endereço também copia.' : 'Cadastre os ambientes nas configurações do QAutils (engrenagem na aba Plugins): um por linha, NOME=endereço.', envs.length ? `<div class="qk-grid">${envs.map(e => `<div class="qk-out"><span class="qk-l">${esc(e.name)}</span><code class="qk-v" data-copy="${esc(e.url)}">${esc(e.url)}</code><button class="chip" data-open="${esc(e.url)}">Abrir</button></div>`).join('')}</div>` : `<button class="chip primary" id="qkCfg">Abrir configurações</button>`, (el) => {
-    bindCopy(el); el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => window.open(b.dataset.open, '_blank'));
-    const c = el.querySelector('#qkCfg'); if (c) c.onclick = () => { el.hidden = true; plugin.settings.open(); };
-  }, false);
-}
-const KITS = [
-  { id: 'data', ico: KI.id, name: 'Dados de teste', desc: 'CPF, CNPJ, RG, CNH, cartão, CEP…', run: kitData },
-  { id: 'mass', ico: KI.table, name: 'Massa de dados', desc: 'N linhas em CSV ou JSON', run: kitMass },
-  { id: 'validate', ico: KI.check, name: 'Validar', desc: 'CPF, CNPJ, cartão, e-mail', run: kitValidate },
-  { id: 'boundary', ico: KI.ruler, name: 'Valores limite', desc: 'mín−1, mín, máx, máx+1', run: kitBoundary },
-  { id: 'special', ico: KI.bomb, name: 'Entradas especiais', desc: 'emoji, invisíveis, XSS, SQL', run: kitSpecial },
-  { id: 'json', ico: KI.json, name: 'JSON', desc: 'formatar, validar, comparar', run: kitJson },
-  { id: 'code', ico: KI.code, name: 'Base64 · URL · JWT', desc: 'codificar e decodificar', run: kitCode },
-  { id: 'date', ico: KI.clock, name: 'Data e hora', desc: 'epoch, somar, dias úteis', run: kitDate },
-  { id: 'text', ico: KI.text, name: 'Texto', desc: 'N caracteres, contar, acentos', run: kitText },
-  { id: 'hash', ico: KI.hash, name: 'Hash e UUID', desc: 'SHA-1/256/512', run: kitHash },
-  { id: 'regex', ico: KI.regex, name: 'Regex', desc: 'testar uma validação', run: kitRegex },
-  { id: 'diff', ico: KI.diff, name: 'Comparar', desc: 'esperado × obtido', run: () => kitDiff() },
-  { id: 'bug', ico: KI.bug, name: 'Relatório de bug', desc: 'texto, Markdown ou .md', run: () => kitBug() },
-  { id: 'envs', ico: KI.globe, name: 'Ambientes', desc: 'PRD, HML, DSV', run: kitEnvs },
-];
-function renderKit(sub, el) {
-  $('#toolSub').textContent = 'ferramentas';
-  sub.innerHTML = '';
-  // geração rápida: um clique copia (sem abrir janela)
-  const quick = [['CPF', () => G.cpf(store.get('qkFmt', true))], ['CNPJ', () => G.cnpj(store.get('qkFmt', true))], ['Nome', G.nome], ['E-mail', () => G.email()], ['Celular', () => G.telefone(true)], ['UUID', G.uuid]];
-  el.innerHTML = `<div class="qk-sec">Gerar e copiar</div><div class="qk-quick">${quick.map(([l], i) => `<button class="chip" data-q="${i}" title="Gera um ${esc(l)} e copia">${esc(l)}</button>`).join('')}</div>
-    <div class="qk-sec">Ferramentas</div><div class="qk-tools">${KITS.map(k => `<button class="qk-tool" data-k="${k.id}">${k.ico}<span><b>${esc(k.name)}</b><small>${esc(k.desc)}</small></span></button>`).join('')}</div>`;
-  el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => copy(quick[+b.dataset.q][1](), quick[+b.dataset.q][0]));
-  el.querySelectorAll('[data-k]').forEach(b => b.onclick = () => KITS.find(k => k.id === b.dataset.k).run());
-}
 
 // ---------- registro ----------
 bs.tools.register({ id: 'qa', title: 'QAutils', icon: ICO.qa, key: 'Alt+9', order: 75, render });
-// cada ferramenta do kit também no Buscar em tudo ("QA: CPF", "QA: JSON"...)
-bs.actions.add(KITS.map(k => ({ label: 'QA: ' + k.name, icon: k.ico, run: k.run })));
 bs.actions.add([
   { label: 'QA: Nova feature (chamado)', icon: ICO.feat, run: () => newFeature() },
   { label: 'QA: Painel de features e execução', icon: ICO.qa, run: () => bs.openTool('qa') },
@@ -1677,7 +1297,7 @@ bs.dashboard.card({
   bind(el) { const b = el.querySelector('[data-qa-open]'); if (b) b.onclick = () => bs.openTool('qa'); },
 });
 // para outros plugins: ler features, reindexar e consultar o estado (features, passos, definições, status)
-bs.qautils = { parse, index: () => index(true), state: () => P, defsFor, automation, generate: G, validate: VAL, bug: kitBug };
+bs.qautils = { parse, index: () => index(true), state: () => P, defsFor, automation, bug: bugDialog };
 function refreshAll() { S.tabs.forEach(t => isFeature(t) && diagnose(t.model)); fireLens(); if (S.tool === 'qa') bs.renderTool(); }
 bs.hooks.on('editor:ready', setup); if (bs.monaco) setup();
 bs.hooks.on('tab:open', (t) => { if (ready) watch(t); });

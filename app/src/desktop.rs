@@ -1,6 +1,6 @@
 //! Janela do aplicativo: uma janela nativa (tao) com WebView2 (wry), sem barra de navegador.
 //! A página conversa com a janela por `window.ipc.postMessage(JSON)`: tema (cor da barra de título),
-//! tela cheia (Apresentar) e DevTools.
+//! tela cheia (Apresentar) e DevTools. Também abre a janela do cofre para digitar um segredo (vault_input.rs).
 use crate::server::{self, UiEvent};
 use crate::util::*;
 use serde_json::{Value, json};
@@ -8,11 +8,28 @@ use std::path::PathBuf;
 use tao::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tao::window::{Fullscreen, Icon, Window, WindowBuilder};
+use tao::window::{Fullscreen, Icon, Window, WindowBuilder, WindowId};
 use wry::{NewWindowResponse, WebContext, WebViewBuilder};
 
-/// Ipc(mensagem, endereço da página que mandou)
-enum Ev { Activate, Ipc(String, String), Title(String), Show }
+/// Ipc(mensagem, endereço da página que mandou). Prompt: abrir a janela do cofre (pedido, canal da resposta);
+/// PromptMsg: o que a página dela mandou; PromptShow: mostrá-la mesmo se a página demorar.
+enum Ev { Activate, Ipc(String, String), Title(String), Show, Prompt(Value, std::sync::mpsc::Sender<Option<Vec<String>>>), PromptMsg(WindowId, String), PromptShow(WindowId) }
+/// Uma janela do cofre aberta: a janela, a página e para quem responder.
+type PromptWin = (Window, wry::WebView, std::sync::mpsc::Sender<Option<Vec<String>>>);
+const PROMPT_W: f64 = 500.0;
+/// No centro da janela do BlueScreen (ou da tela, se ela estiver escondida), um pouco acima do meio.
+fn center_on(w: &Window, main: &Window, h: f64) {
+    let s = w.scale_factor();
+    let (pw, ph) = ((PROMPT_W * s) as i32, (h * s) as i32);
+    if main.is_visible() && !main.is_minimized() {
+        if let Ok(p) = main.outer_position() {
+            let ms = main.outer_size();
+            w.set_outer_position(PhysicalPosition::new(p.x + (ms.width as i32 - pw) / 2, p.y + ((ms.height as i32 - ph) / 3).max(0)));
+            return;
+        }
+    }
+    center(w, PROMPT_W, h);
+}
 
 fn state_file() -> PathBuf { user_dir().join("window.json") }
 
@@ -61,7 +78,11 @@ pub fn run(url: String, devtools: bool, doc: Option<PathBuf>) -> ! {
     let event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let p2 = proxy.clone();
-    let _ = server::UI.set(Box::new(move |e| match e { UiEvent::Activate => { let _ = p2.send_event(Ev::Activate); } }));
+    let _ = server::UI.set(Box::new(move |e| match e {
+        UiEvent::Activate => { let _ = p2.send_event(Ev::Activate); }
+        // sem a janela (o laço já acabou), o canal cai e o cofre entende como cancelado
+        UiEvent::Prompt(spec, tx) => { let _ = p2.send_event(Ev::Prompt(spec, tx)); }
+    }));
 
     let saved = read_json(&state_file());
     // a última sessão terminou sem projeto aberto: já nasce no tamanho de boas-vindas (sem piscar grande)
@@ -146,11 +167,65 @@ pub fn run(url: String, devtools: bool, doc: Option<PathBuf>) -> ! {
     };
     let mut dark = dark;
     let mut caption = saved["caption"].as_str().unwrap_or("#0F1A2E").to_string();
-    let _keep = (&webview, ctx);
+    let mut ctx = ctx;
+    let mut prompts: std::collections::HashMap<WindowId, PromptWin> = Default::default();
 
-    event_loop.run(move |event, _, flow| {
+    event_loop.run(move |event, target, flow| {
         *flow = ControlFlow::Wait;
         match event {
+            // ---------- janela do cofre ----------
+            Event::UserEvent(Ev::Prompt(spec, tx)) => {
+                // altura aproximada até a página medir a dela (mensagem "ready")
+                let h = 250.0 + spec["fields"].as_array().map(|a| a.iter().map(|f| if f["kind"] == "multiline" { 160.0 } else { 74.0 }).sum::<f64>()).unwrap_or(74.0);
+                let mut wb = WindowBuilder::new().with_title("BlueScreen · Cofre").with_inner_size(LogicalSize::new(PROMPT_W, h))
+                    .with_resizable(false).with_minimizable(false).with_maximizable(false).with_always_on_top(true).with_visible(false);
+                #[cfg(windows)]
+                {
+                    use tao::platform::windows::IconExtWindows;
+                    if let Ok(icon) = Icon::from_resource(1, None) { wb = wb.with_window_icon(Some(icon)); }
+                }
+                let Ok(pw) = wb.build(target) else { return };
+                paint_titlebar(&pw, dark, colorref(&caption));
+                center_on(&pw, &window, h);
+                let id = pw.id();
+                let pm = proxy.clone();
+                let b = WebViewBuilder::new_with_web_context(&mut ctx)
+                    .with_html(crate::plugins::vault_input::html(&spec, dark))
+                    .with_devtools(false)
+                    .with_hotkeys_zoom(false)
+                    .with_background_color(if dark { (30, 33, 41, 255) } else { (248, 249, 251, 255) })
+                    .with_ipc_handler(move |req| { let _ = pm.send_event(Ev::PromptMsg(id, req.body().clone())); })
+                    // a página é só esta: nada de navegar nem abrir outras
+                    .with_navigation_handler(|u| u.starts_with("about:") || u.starts_with("data:"))
+                    .with_new_window_req_handler(|_, _| NewWindowResponse::Deny);
+                #[cfg(windows)]
+                let b = { use wry::WebViewBuilderExtWindows; b.with_browser_accelerator_keys(false).with_default_context_menus(false) };
+                let Ok(wv) = b.build(&pw) else { return };
+                { let p = proxy.clone(); std::thread::spawn(move || { std::thread::sleep(std::time::Duration::from_millis(1500)); let _ = p.send_event(Ev::PromptShow(id)); }); }
+                prompts.insert(id, (pw, wv, tx));
+            }
+            Event::UserEvent(Ev::PromptShow(id)) => if let Some((pw, ..)) = prompts.get(&id) { if !pw.is_visible() { pw.set_visible(true); pw.set_focus(); } },
+            Event::UserEvent(Ev::PromptMsg(id, msg)) => {
+                let m: Value = serde_json::from_str(&msg).unwrap_or(Value::Null);
+                match m["type"].as_str() {
+                    Some("ready") => if let Some((pw, wv, _)) = prompts.get(&id) {
+                        let h = m["h"].as_f64().unwrap_or(400.0).clamp(200.0, 900.0);
+                        pw.set_inner_size(LogicalSize::new(PROMPT_W, h));
+                        center_on(pw, &window, h);
+                        pw.set_visible(true); pw.set_focus(); let _ = wv.focus();
+                    },
+                    Some("ok") => if let Some((_, _, tx)) = prompts.remove(&id) {
+                        let vals: Vec<String> = m["values"].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
+                        let _ = tx.send(Some(vals));
+                    },
+                    Some("cancel") => if let Some((_, _, tx)) = prompts.remove(&id) { let _ = tx.send(None); },
+                    _ => {}
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if prompts.contains_key(&window_id) => {
+                if let Some((_, _, tx)) = prompts.remove(&window_id) { let _ = tx.send(None); }
+            }
+            Event::WindowEvent { window_id, .. } if prompts.contains_key(&window_id) => {}
             Event::UserEvent(Ev::Activate) => {
                 window.set_visible(true); window.set_minimized(false);
                 // sobe por cima das outras janelas mesmo se o Windows negar o foco
