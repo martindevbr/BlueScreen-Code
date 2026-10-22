@@ -473,6 +473,33 @@ kbd { font: 500 10.5px var(--mono); background: var(--panel-2); border: 1px soli
 .vt-bs { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .vt-bs b { color: var(--accent-2); font-weight: 600; }
 .vt-wrap { container-type: inline-size; }
+/* pedidos agrupados (mesmo site) e botões dos pedidos */
+.vt-gbtns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.vt-group { grid-template-columns: auto minmax(0, 1fr) auto; }
+.vt-gp { display: flex; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.vt-gp .vt-pi { width: 22px !important; height: 22px !important; border-radius: 6px !important; font-size: 10px !important; }
+.vt-gn em, .vt-mut { color: var(--muted); font-style: normal; font-size: 11.5px; }
+@media (max-width: 560px) { .vt-req, .vt-group { grid-template-columns: auto minmax(0, 1fr); } .vt-gbtns { grid-column: 1 / -1; } }
+/* tela de configuração no painel de um plugin que precisa de um token do Cofre */
+.vg { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.vg-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: color-mix(in srgb, var(--panel-2) 60%, transparent); }
+.vg-hd { display: flex; gap: 12px; align-items: flex-start; }
+.vg-ic { flex: none; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: #e9b949; background: color-mix(in srgb, #e9b949 16%, transparent); }
+.vg-ic .i { width: 18px; height: 18px; }
+.vg-hd h4 { margin: 0; font-size: 14px; color: var(--fg); }
+.vg-hd p { margin: 3px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.vg-steps { list-style: none; margin: 14px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.vg-st { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; color: var(--muted); }
+.vg-st b { color: var(--fg-2); font-weight: 600; }
+.vg-st code { font: 11.5px var(--mono); color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); padding: 1px 6px; border-radius: 4px; display: inline-block; margin-top: 3px; }
+.vg-d { margin-top: 2px; font-size: 12px; line-height: 1.4; }
+.vg-n { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 600 11px var(--mono); border: 1.5px solid var(--line-2); color: var(--muted); margin-top: -1px; }
+.vg-st.cur .vg-n { border-color: var(--accent); color: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.vg-st.cur b { color: var(--fg); }
+.vg-st.done .vg-n { border-color: #2fa35c; background: #2fa35c; color: #fff; }
+.vg-st.done b { color: var(--fg-2); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--fg) 30%, transparent); }
+.vg-go { width: 100%; justify-content: center; height: 34px; }
+.vg-go .i { width: 15px; height: 15px; margin-right: 6px; }
 @container (max-width: 360px) { .vt-banner { grid-template-columns: auto minmax(0, 1fr); } .vt-banner .chip { grid-column: 1 / -1; justify-content: center; } }
 .dlg-box.vt-box { width: 760px; }
 .vt-body { max-height: min(72vh, 760px); overflow-y: auto; overflow-x: hidden; margin: 4px -6px 0; padding: 0 6px 4px; }

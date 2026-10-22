@@ -91,7 +91,7 @@ await plugin.files.write('cache/repos.json', repos);
 
 O cofre guarda tokens da IDE (GitHub, OpenAI, Jira, a API da empresa) **uma vez só** e libera cada um para os plugins que você escolher. É diferente de `plugin.secrets`, que é de um plugin só: um segredo do cofre pode servir a vários plugins, e você controla para onde ele vai.
 
-Abre pelo ícone da chave na barra da esquerda (**Alt+8**; um número nele avisa que há plugins pedindo acesso), pela faixa **Cofre de credenciais** no topo da aba Plugins, pelo **Buscar em tudo** ("Cofre") ou pelo botão direito num plugin › **Cofre…**. Fica em `~/.bluescreen/vault.json`.
+Abre pelo ícone da chave na barra da esquerda (**Alt+8**, se nenhum plugin usar essa tecla; um número no ícone avisa que há plugins pedindo acesso), pela faixa **Cofre de credenciais** no topo da aba Plugins, pelo **Buscar em tudo** ("Cofre") ou pelo botão direito num plugin › **Cofre…**. Fica em `~/.bluescreen/vault.json`.
 
 ### Para quem usa
 
@@ -117,6 +117,18 @@ Declare no `plugin.json` o que o plugin precisa. Isso aparece como pedido no Cof
     "hosts": ["api.github.com"], "programs": ["gh"], "reveal": false }
 ]
 ```
+
+**Plugin que só funciona com o token** (`"required": true`): enquanto faltar o segredo, a liberação ou o "ver valor", o painel do plugin na barra da esquerda mostra no lugar dele uma tela de configuração. Ela traz os passos (criar o segredo, permitir o plugin, deixar ver o valor, lido pelo plugin), o andamento de cada um e o botão **Abrir no Cofre**. A tela confere sozinha e mostra o painel assim que tudo estiver liberado, sem recarregar. Campos opcionais: `title` (o título da tela, ex.: "Configure o token do Dynatrace") e `revealWhy` (o motivo do passo "Deixar ver o valor").
+
+```json
+"vault": [
+  { "key": "rastro.dynatrace", "label": "Rastro: platform token do Dynatrace", "title": "Configure o token do Dynatrace",
+    "why": "implantações, métricas e spans vêm do Grail com este token, só de leitura",
+    "hosts": ["*.apps.dynatrace.com"], "reveal": true, "revealWhy": "O servidor do Rastro consulta o Grail com ele.", "required": true }
+]
+```
+
+**O mesmo token para vários plugins.** Pedidos sem segredo para os **mesmos sites** aparecem num cartão só ("2 plugins pedem um token para `*.apps.dynatrace.com`"). **Criar um para todos** guarda um segredo (o nome sugerido é o fim comum dos nomes, como `dynatrace`) e libera os plugins numa confirmação só. Cada plugin continua pedindo pelo nome dele (`{{vault:rastro.dynatrace}}`, `{{vault:drilltrace.dynatrace}}`): o Cofre guarda o apelido de cada um, e o nome de um plugin não vale para outro. Se já existe um segredo para o mesmo site, o pedido oferece **Usar “nome”**. Na página, a lista de plugins traz esses pedidos em `plugin.vaultKeys`, porque `plugin.vault` é a API do Cofre.
 
 Use `{{vault:nome}}` onde o token entra. O núcleo troca pelo valor, confere o destino e tira o valor do que volta:
 
@@ -169,7 +181,7 @@ O objeto `bs` (também em `window.BS`):
 
 | | |
 |---|---|
-| `bs.tools.register({ id, title, icon, key: 'Alt+5', order, render() })` | painel na barra da esquerda, com atalho e badge `#badge-<id>`. Com `bottom: true` e `toggle(on)`, vira um painel embaixo do editor, como o Terminal |
+| `bs.tools.register({ id, title, icon, key: 'Alt+5', order, render() })` | painel na barra da esquerda, com atalho e badge `#badge-<id>`. Com `bottom: true` e `toggle(on)`, vira um painel embaixo do editor, como o Terminal. Atalho repetido fica com quem registrou por último (os plugins carregam depois dos painéis embutidos); o outro painel fica sem atalho |
 | `bs.keys.add('Ctrl+F9', fn)` | tecla; devolver `false` deixa a tecla seguir |
 | `bs.actions.add([{ label, k, run, icon }])` | ações do Buscar em tudo (`Shift` `Shift`) |
 | `bs.status.add({ id, title, onclick })` | item na status bar (devolve o `<span>`) |

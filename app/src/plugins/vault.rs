@@ -35,6 +35,17 @@ pub struct Grant {
     pub allow: bool,
     /// ler o valor (só servidores de plugin)
     pub reveal: bool,
+    /// o nome que o plugin usa para este segredo, quando é outro ({{vault:rastro.dynatrace}} -> segredo "dynatrace"):
+    /// vários plugins que pedem o mesmo token com nomes diferentes usam um segredo só
+    #[serde(rename = "as", skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+}
+/// O segredo que um plugin quer dizer com `name`: o de mesmo nome liberado para ele ou o que ele recebeu com esse
+/// apelido; sem nenhum dos dois, o de mesmo nome (para a mensagem de "sem permissão").
+fn find<'a>(s: &'a Store, plugin: &str, name: &str) -> Option<(&'a String, &'a Entry)> {
+    let exact = s.entries.get_key_value(name);
+    if let Some((_, e)) = exact { if e.grants.get(plugin).is_some_and(|g| g.allow || g.reveal) { return exact; } }
+    s.entries.iter().find(|(_, e)| e.grants.get(plugin).is_some_and(|g| g.alias.as_deref() == Some(name))).or(exact)
 }
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -122,7 +133,7 @@ pub fn caller(r: &Req) -> ApiResult<Caller> {
 /// Valor do segredo para um plugin liberado (a política de destino é conferida depois, em `check`).
 pub fn resolve(c: &Caller, name: &str) -> ApiResult<String> {
     let s = { let _g = LOCK.lock(); load() };
-    let Some(e) = s.entries.get(name) else {
+    let Some((_, e)) = find(&s, &c.plugin, name) else {
         audit(&c.plugin, name, "", false, "não existe no cofre");
         return Err(fail(format!("\"{name}\" não está no cofre. Crie em Plugins › Cofre."), 404));
     };
@@ -142,8 +153,10 @@ fn local_host(h: &str) -> bool { matches!(h, "localhost" | "127.0.0.1" | "[::1]"
 pub fn check(c: &Caller, names: &[String], target: Target) -> ApiResult<()> {
     if names.is_empty() { return Ok(()); }
     let s = { let _g = LOCK.lock(); load() };
+    let mut real: Vec<String> = vec![];
     for name in names {
-        let Some(e) = s.entries.get(name) else { continue };
+        let Some((key, e)) = find(&s, &c.plugin, name) else { continue };
+        real.push(key.clone());
         let (desc, res): (String, Result<(), String>) = match &target {
             Target::Http(u) => {
                 let h = u.host_str().unwrap_or("");
@@ -167,7 +180,7 @@ pub fn check(c: &Caller, names: &[String], target: Target) -> ApiResult<()> {
         }
     }
     // último uso (sem travar a resposta numa escrita de disco por pedido)
-    let (names, who) = (names.to_vec(), c.plugin.clone());
+    let (names, who) = (real, c.plugin.clone());
     std::thread::spawn(move || { let _ = edit(|s| { for n in &names { if let Some(e) = s.entries.get_mut(n) { e.last_used = Some(now()); e.last_by = Some(who.clone()); } } Ok(()) }); });
     Ok(())
 }
@@ -236,15 +249,24 @@ fn requests(s: &Store) -> Vec<Value> {
     for p in host().get().list.iter() {
         for d in p.vault.as_array().into_iter().flatten() {
             let Some(key) = d["key"].as_str().filter(|k| valid_name(k)) else { continue };
-            let g = s.entries.get(key).and_then(|e| e.grants.get(&p.id)).cloned().unwrap_or_default();
+            let hit = find(s, &p.id, key);
+            let g = hit.and_then(|(_, e)| e.grants.get(&p.id)).cloned().unwrap_or_default();
+            // segredos que já existem para os mesmos sites: dá para liberar um deles em vez de criar outro
+            let hosts = list_of(&d["hosts"]);
+            let same: Vec<&String> = if hosts.is_empty() { vec![] } else { s.entries.iter().filter(|(_, e)| { let mut a = e.hosts.clone(); a.sort(); a == hosts }).map(|(k, _)| k).collect() };
             out.push(json!({
                 "plugin": p.id, "pluginName": p.name, "enabled": p.enabled, "key": key, "label": d["label"], "why": d["why"],
                 "hosts": d["hosts"], "programs": d["programs"], "reveal": d["reveal"].as_bool().unwrap_or(false),
-                "exists": s.entries.contains_key(key), "granted": g.allow, "revealGranted": g.reveal,
+                "exists": hit.is_some(), "entry": hit.map(|(k, _)| k), "granted": g.allow, "revealGranted": g.reveal, "sameHosts": same,
             }));
         }
     }
     out
+}
+/// apelido válido e diferente do nome do segredo: Some(Some(apelido)); igual ao nome ou vazio: Some(None); ausente: None
+fn alias_of(v: &Value, name: &str) -> Option<Option<String>> {
+    let s = v.as_str()?.trim();
+    Some(if s.is_empty() || s == name || !valid_name(s) { None } else { Some(s.to_string()) })
 }
 fn plugin_name(id: &str) -> String { host().get().list.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| id.to_string()) }
 fn list_of(v: &Value) -> Vec<String> {
@@ -275,10 +297,11 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             let s = { let _g = LOCK.lock(); load() };
             let mut keys: Vec<String> = host().get().list.iter().filter(|p| p.id == c.plugin).flat_map(|p| p.vault.as_array().cloned().unwrap_or_default())
                 .filter_map(|d| d["key"].as_str().map(String::from)).collect();
-            keys.extend(s.entries.iter().filter(|(_, e)| e.grants.get(&c.plugin).is_some_and(|g| g.allow || g.reveal)).map(|(k, _)| k.clone()));
+            // o plugin enxerga os segredos pelo nome que ele usa (o apelido, quando há)
+            keys.extend(s.entries.iter().filter_map(|(k, e)| e.grants.get(&c.plugin).filter(|g| g.allow || g.reveal).map(|g| g.alias.clone().unwrap_or_else(|| k.clone()))));
             keys.sort(); keys.dedup();
             let items: Vec<Value> = keys.iter().map(|k| {
-                let e = s.entries.get(k);
+                let e = find(&s, &c.plugin, k).map(|(_, e)| e);
                 let g = e.and_then(|e| e.grants.get(&c.plugin)).cloned().unwrap_or_default();
                 json!({ "key": k, "exists": e.is_some(), "granted": g.allow, "reveal": g.reveal, "hosts": e.map(|e| e.hosts.clone()), "programs": e.map(|e| e.programs.clone()) })
             }).collect();
@@ -294,7 +317,7 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
                 return Err(fail("o valor do cofre só sai para servidores de plugin; na página, use {{vault:nome}} no fetch", 403));
             }
             let s = { let _g = LOCK.lock(); load() };
-            let e = s.entries.get(&name).ok_or_else(|| fail(format!("\"{name}\" não está no cofre"), 404))?;
+            let (_, e) = find(&s, &c.plugin, &name).ok_or_else(|| fail(format!("\"{name}\" não está no cofre"), 404))?;
             if !e.grants.get(&c.plugin).is_some_and(|g| g.reveal) {
                 audit(&c.plugin, &name, "valor", false, "sem permissão para ver o valor");
                 return Err(fail(format!("o plugin {} não pode ver o valor de \"{name}\"", c.plugin), 403));
@@ -383,12 +406,48 @@ async fn manage(r: &Req) -> ApiResult<()> {
                 };
                 confirm(t).await?;
             }
+            let alias = alias_of(&b["as"], &name).unwrap_or(old.alias);
             edit(|s| {
                 let e = s.entries.get_mut(&name).ok_or_else(|| fail("sumiu", 404))?;
-                if !allow && !reveal { e.grants.remove(&plugin); } else { e.grants.insert(plugin.clone(), Grant { allow, reveal }); }
+                if !allow && !reveal { e.grants.remove(&plugin); } else { e.grants.insert(plugin.clone(), Grant { allow, reveal, alias }); }
                 Ok(())
             })?;
             log(format!("cofre: \"{name}\" para {plugin}: usar={allow} ver={reveal}"));
+        }
+        // vários plugins de uma vez (pedidos do mesmo site), com uma confirmação só:
+        // { name, grants: [{ plugin, as, use, reveal }] }
+        "grantMany" => {
+            let cur = cur.ok_or_else(|| fail(format!("\"{name}\" não está no cofre"), 404))?;
+            let mut list = vec![];
+            for g in b["grants"].as_array().into_iter().flatten() {
+                let plugin = g["plugin"].as_str().filter(|p| bluescreen_sdk::store::valid_id(p)).ok_or_else(|| fail("plugin obrigatório", 400))?.to_string();
+                let old = cur.grants.get(&plugin).cloned().unwrap_or_default();
+                let grant = Grant { allow: g["use"].as_bool().unwrap_or(true) || old.allow, reveal: g["reveal"].as_bool().unwrap_or(false) || old.reveal, alias: alias_of(&g["as"], &name).unwrap_or(old.alias.clone()) };
+                list.push((plugin, old, grant));
+            }
+            if list.is_empty() { return Err(fail("nenhum plugin", 400)); }
+            let wider: Vec<String> = list.iter().filter(|(_, o, g)| (g.allow && !o.allow) || (g.reveal && !o.reveal)).map(|(p, _, g)| {
+                format!("• {}{}{}", plugin_name(p), g.alias.as_deref().map(|a| format!(" (chama de \"{a}\")")).unwrap_or_default(), if g.reveal { " — também VÊ o valor" } else { "" })
+            }).collect();
+            if !wider.is_empty() {
+                let dest = if cur.hosts.is_empty() { "nenhum site liberado ainda".to_string() } else { cur.hosts.join(", ") };
+                let reveal = list.iter().any(|(_, o, g)| g.reveal && !o.reveal);
+                let only_use = list.iter().any(|(_, _, g)| !g.reveal);
+                // quem só usa não vê o valor; quem pediu para ver, vê: o texto diz o que vale para cada caso
+                let how = match (reveal, only_use) {
+                    (false, _) => "Os plugins não veem o valor: o BlueScreen o coloca nos pedidos.",
+                    (true, true) => "Os que só usam não veem o valor: o BlueScreen o coloca nos pedidos.",
+                    (true, false) => "Estes plugins vão ler o valor (os servidores deles usam o token direto).",
+                };
+                confirm(format!("Permitir que estes plugins usem \"{name}\"?\n\n{}\n\n{how}\nPode ir para: {dest}{}",
+                    wider.join("\n"), if reveal { "\n\nQuem VÊ o valor pode copiar o token e mandá-lo para qualquer lugar. Só permita para plugins em que você confia." } else { "" })).await?;
+            }
+            edit(|s| {
+                let e = s.entries.get_mut(&name).ok_or_else(|| fail("sumiu", 404))?;
+                for (p, _, g) in list { e.grants.insert(p, g); }
+                Ok(())
+            })?;
+            log(format!("cofre: \"{name}\" liberado para vários plugins"));
         }
         "delete" => { edit(|s| { s.entries.remove(&name); Ok(()) })?; log(format!("cofre: \"{name}\" apagado")); }
         a => return Err(fail(format!("ação desconhecida: {a}"), 400)),
@@ -406,5 +465,22 @@ mod tests {
         assert!(!host_ok("*.atlassian.net", "atlassian.net.evil.com") && !host_ok("github.com", "api.github.com"));
         assert_eq!(list_of(&json!("https://api.github.com/, *.x.com;gh")), vec!["*.x.com", "api.github.com", "gh"]);
         assert_eq!(scrub("token=abcd1234 ok", &["abcd1234".into()]), "token=•••••• ok");
+    }
+    #[test]
+    fn aliases() {
+        // um segredo "dynatrace" liberado para dois plugins, cada um com o nome que ele usa
+        let mut e = Entry::default();
+        e.grants.insert("rastro".into(), Grant { allow: true, reveal: false, alias: Some("rastro.dynatrace".into()) });
+        e.grants.insert("drill".into(), Grant { allow: true, reveal: false, alias: Some("drilltrace.dynatrace".into()) });
+        let mut s = Store::default();
+        s.entries.insert("dynatrace".into(), e);
+        assert_eq!(find(&s, "rastro", "rastro.dynatrace").map(|x| x.0.as_str()), Some("dynatrace"));
+        assert_eq!(find(&s, "drill", "drilltrace.dynatrace").map(|x| x.0.as_str()), Some("dynatrace"));
+        // o apelido de um plugin não serve para outro, e o nome que o outro usa não vale para este
+        assert!(find(&s, "outro", "rastro.dynatrace").is_none());
+        assert!(find(&s, "rastro", "drilltrace.dynatrace").is_none());
+        assert_eq!(alias_of(&json!("dynatrace"), "dynatrace"), Some(None));
+        assert_eq!(alias_of(&json!("rastro.dynatrace"), "dynatrace"), Some(Some("rastro.dynatrace".into())));
+        assert_eq!(alias_of(&Value::Null, "dynatrace"), None);
     }
 }

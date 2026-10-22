@@ -486,8 +486,76 @@ function fileMenu(e, rel, isDir, vcsSub) {
     { label: 'Mostrar no Explorer', icon: I.explorer, action: () => reveal(absPath(rel)) },
     { label: 'Copiar caminho', icon: I.copy, action: () => copyText(absPath(rel)) },
     { label: 'Copiar caminho relativo', icon: I.copy, action: () => copyText(rel) },
-    ...(S.remote ? [] : ['-', { label: 'Excluir…', icon: I.x, k: 'Delete', action: () => deletePath(rel, isDir) }]),
+    ...(S.remote ? [] : ['-', { label: 'Renomear…', icon: I.edit, k: 'F2', action: () => renamePath(rel, isDir) }, { label: 'Excluir…', icon: I.x, k: 'Delete', action: () => deletePath(rel, isDir) }]),
   ], { rel, isDir, chg }), rel + (chg ? `  ·  ${chg.code}` : ''));
+}
+// Renomear (F2 / Shift+F6): mesmo lugar, nome novo. Salva antes o que estiver aberto e alterado dentro, e as abas
+// passam a apontar para o caminho novo. Java/Kotlin: com a classe de mesmo nome do arquivo, renomeia também a classe
+// (e o nome dela nesse arquivo), como o IntelliJ.
+const BAD_NAME = /[\\/:*?"<>|\x00-\x1f]|^\.{1,2}$|[. ]$|^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+function renamePath(rel, isDir) {
+  if (!S.project || !rel || S.remote) return;
+  const name = rel.split('/').pop(), parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+  const dot = isDir ? -1 : name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name, ext = dot > 0 ? name.slice(dot) : '';
+  const cls = !isDir && /^\.(java|kt|kts|groovy|scala|cs)$/i.test(ext) && /^[A-Za-z_$][\w$]*$/.test(stem) ? stem : null;
+  dialog('renDlg', `<div class="dlg-hd"><span class="dlg-ic">${I.edit}</span><div><h3>Renomear ${isDir ? 'a pasta' : 'o arquivo'}</h3><p>${esc(rel)}</p></div></div>
+    <label class="fld">Nome novo<input id="renIn" spellcheck="false" autocomplete="off" value="${esc(name)}"></label>
+    ${cls ? `<label class="chk" id="renClsRow" hidden><input type="checkbox" id="renCls" checked> Renomear também a classe <code>${esc(cls)}</code> neste arquivo</label>` : ''}
+    <div class="err" id="renErr"></div>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip primary" id="renOk">Renomear</button></div>`, (el) => {
+    const inp = $('#renIn'), ok = $('#renOk'), err = $('#renErr');
+    inp.focus(); inp.setSelectionRange(0, stem.length); // como o IntelliJ: seleciona o nome, sem a extensão
+    const check = () => {
+      const v = inp.value.trim();
+      const msg = !v ? 'Digite o nome.' : BAD_NAME.test(v) ? 'Nome inválido no Windows (sem \\ / : * ? " < > | e sem terminar em ponto ou espaço).' : '';
+      err.textContent = msg; ok.disabled = !!msg || v === name;
+      // a classe só acompanha quando o nome novo também é um nome de classe com a mesma extensão
+      const row = $('#renClsRow'); if (row) { const ns = v.slice(0, v.length - ext.length); row.hidden = !(v.endsWith(ext) && ns !== stem && /^[A-Za-z_$][\w$]*$/.test(ns)); }
+      return !msg;
+    };
+    inp.oninput = check; check();
+    inp.onkeydown = (e) => { if (e.key === 'Enter' && !ok.disabled) ok.click(); };
+    ok.onclick = async () => {
+      if (!check()) return;
+      const newName = inp.value.trim(); if (newName === name) { el.hidden = true; return; }
+      const to = parent ? parent + '/' + newName : newName;
+      const inside = (t) => t.project === S.project.path && (t.path === rel || (isDir && t.path.startsWith(rel + '/')));
+      const moved = (p) => p === rel ? to : to + p.slice(rel.length);
+      ok.disabled = true; err.textContent = '';
+      // o que está aberto e alterado lá dentro vai para o disco antes (senão salvar depois recriaria o caminho velho)
+      for (const t of S.tabs.filter(t => inside(t) && t.dirty)) { await saveTab(t); if (t.dirty) { err.textContent = `Não deu para salvar ${t.path.split('/').pop()}; renomeação cancelada.`; ok.disabled = false; return; } }
+      try { await api('file/move', { project: S.project.path }, { method: 'POST', body: JSON.stringify({ from: rel, to }) }); }
+      catch (e) { err.textContent = e.message; ok.disabled = false; return; }
+      el.hidden = true;
+      // a classe de mesmo nome dentro do arquivo (Foo.java -> Bar.java: class Foo -> class Bar, new Foo() -> new Bar())
+      const newStem = newName.slice(0, newName.length - ext.length);
+      const renCls = cls && $('#renCls') && $('#renCls').checked && !$('#renClsRow').hidden;
+      if (renCls) {
+        try {
+          const f = await api('file', { project: S.project.path, file: to });
+          const re = new RegExp(`(?<![\\w$.])${cls.replace(/\$/g, '\\$')}(?![\\w$])`, 'g');
+          if (!f.binary && re.test(f.content)) await api('file', { project: S.project.path, file: to }, { method: 'PUT', body: f.content.replace(re, newStem) });
+        } catch (e) { toast('A classe não foi renomeada: ' + e.message); }
+      }
+      // abas: reabre no caminho novo, mantendo a ativa por último (e a posição do cursor nela)
+      const open = S.tabs.filter(inside).map(t => ({ path: moved(t.path), mode: t.mode === 'diff' ? 'diff' : 'editor', active: S.active === t }));
+      const view = open.some(o => o.active) && editor ? editor.saveViewState() : null;
+      S.tabs.filter(inside).forEach(t => { t.dirty = false; t.gone = true; closeTab(t); });
+      // árvore: pastas abertas e seleção acompanham o nome novo
+      const out = (p) => p === rel || p.startsWith(rel + '/');
+      for (const p of [...S.treeOpen]) if (out(p)) { S.treeOpen.delete(p); S.treeOpen.add(moved(p)); }
+      saveTreeOpen();
+      for (const k of Object.keys(S.tree)) if (k === parent || out(k) || !k || parent.startsWith(k + '/')) delete S.tree[k];
+      S.treeSel = to;
+      await refreshProject();
+      for (const o of [...open.filter(o => !o.active), ...open.filter(o => o.active)]) await openFile(o.path, o.mode);
+      if (view && editor) editor.restoreViewState(view);
+      treeSelect(to, true);
+      toast(`${name} → ${newName}${renCls ? ` (classe ${cls} → ${newStem})` : ''}`, 'ok');
+      BS.hooks.run('file:rename', rel, to, isDir);
+    };
+  });
 }
 // Excluir (como o IntelliJ): confirma e manda para a Lixeira do Windows, então dá para desfazer por lá.
 // As abas do que foi excluído fecham sem salvar (salvar recriaria o arquivo).
@@ -535,7 +603,7 @@ function tabMenu(e, t) {
     '-',
     { label: 'Mostrar no Explorer', icon: I.explorer, action: () => reveal(t.project + '\\' + t.path.replace(/\//g, '\\')) },
     { label: 'Copiar caminho', icon: I.copy, action: () => copyText(t.project + '\\' + t.path.replace(/\//g, '\\')) },
-    ...(S.remote || t.project !== S.project?.path ? [] : ['-', { label: 'Excluir arquivo…', icon: I.x, action: () => deletePath(t.path, false) }]),
+    ...(S.remote || t.project !== S.project?.path ? [] : ['-', { label: 'Renomear arquivo…', icon: I.edit, action: () => renamePath(t.path, false) }, { label: 'Excluir arquivo…', icon: I.x, action: () => deletePath(t.path, false) }]),
   ], t), t.path);
 }
 function commitMenu(e, c) {
@@ -746,6 +814,8 @@ function btnState() { document.querySelectorAll('#strip [data-tool]').forEach(b 
 function renderTool() {
   const t = BS.tools.get(S.tool) || BS.tools.get('project'); S.tool = t.id;
   $('#toolTitle').textContent = t.title; $('#toolSub').textContent = ''; $('#toolActions').innerHTML = ''; $('#toolBody').onscroll = null;
+  // painel de plugin que só funciona com um token do Cofre ("required" no plugin.json): a configuração no lugar dele
+  if (t.plugin && BS.vault && BS.vault.gate && BS.vault.gate(t.plugin, $('#toolBody'), t)) return;
   try { t.render(); }
   catch (e) { console.error(e); $('#toolBody').innerHTML = `<div class="errbox"><b>O painel ${esc(t.title)} falhou.</b><div>${esc(e.message)}</div></div>`; }
 }
@@ -921,6 +991,7 @@ function bindTree(el) {
     }
     else if ((e.key === 'Enter' || e.key === 'F4') && cur) treeActivate(cur.p);
     else if (e.key === 'Delete' && cur && cur.p && !S.remote) deletePath(cur.p, !!cur.dir);
+    else if ((e.key === 'F2' || (e.key === 'F6' && e.shiftKey)) && cur && cur.p && !S.remote) renamePath(cur.p, !!cur.dir);
     else return;
     e.preventDefault();
   };
@@ -1833,7 +1904,20 @@ const BS = window.BS = {
   // painéis da barra da esquerda: { id, title, icon, key: 'Alt+5', order, render(), bottom?, toggle?() }
   tools: {
     defs: new Map(),
-    register(def) { if (!def || !def.id || !def.title) throw new Error('tool precisa de id e title'); BS.tools.defs.set(def.id, def); if (def.key) BS.keys.add(def.key, () => setTool(def.id)); return def; },
+    register(def) {
+      if (!def || !def.id || !def.title) throw new Error('tool precisa de id e title');
+      // painel de plugin: de qual plugin é (a tela de configuração do Cofre usa isso)
+      if (BS.plugins.current && !def.plugin) def.plugin = BS.plugins.current;
+      BS.tools.defs.set(def.id, def);
+      if (def.key) {
+        // atalho repetido: fica com quem registrou por último (os plugins carregam depois dos painéis embutidos);
+        // o outro painel perde o atalho em vez de os dois disputarem a tecla
+        const k = normCombo(def.key);
+        for (const d of BS.tools.defs.values()) if (d !== def && d.key && normCombo(d.key) === k) { console.warn(`atalho ${def.key}: fica com ${def.title}, sai de ${d.title}`); d.key = undefined; }
+        BS.keys.add(def.key, () => setTool(def.id));
+      }
+      return def;
+    },
     get: (id) => BS.tools.defs.get(id) || null,
     list: () => [...BS.tools.defs.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100)),
   },
@@ -1874,7 +1958,9 @@ const BS = window.BS = {
       for (const p of BS.plugins.list) {
         const fn = BS.plugins.defs.get(p.id); if (!fn || !p.enabled || p.error) continue;
         Object.assign(p, pluginApi(p.id));
+        BS.plugins.current = p.id;
         try { fn(BS, p); p.loaded = true; } catch (e) { p.error = 'interface: ' + e.message; console.error('plugin ' + p.id, e); }
+        BS.plugins.current = null;
       }
     },
   },
@@ -2063,7 +2149,7 @@ function renderPlugins() {
     if (more) more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'menos' : 'mais'; };
     el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) },
       ...(p.settings && p.settings.length ? [{ label: 'Configurações…', icon: I.gear, action: () => pluginSettings(p.id) }] : []),
-      ...(BS.vault && p.vault && p.vault.length ? [{ label: 'Cofre…', icon: VAULT_ICON, action: () => BS.vault.open({ plugin: p.id, key: p.vault[0].key }) }] : []),
+      ...(BS.vault && p.vaultKeys && p.vaultKeys.length ? [{ label: 'Cofre…', icon: VAULT_ICON, action: () => BS.vault.open({ plugin: p.id, key: p.vaultKeys[0].key }) }] : []),
       { label: 'Pasta de dados', icon: I.explorer, action: async () => { try { const i = await api('plugin/info', { plugin: p.id }, { method: 'POST', body: '{}' }); if (!i.exists) return toast(`${p.name} ainda não guardou nada`); reveal(i.dataDir); } catch (e) { toast(e.message); } } },
       { label: 'Apagar dados do plugin…', icon: I.x, action: () => pluginWipe(p) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
   });

@@ -75,6 +75,8 @@ pub struct PluginStatus {
     pub settings: Value,
     /// ~/.bluescreen/plugin-data/<id>
     pub data_dir: String,
+    /// segredos do cofre que o plugin pede; "vaultKeys" porque plugin.vault, na página, é a API do cofre
+    #[serde(rename = "vaultKeys")]
     pub vault: Value,
 }
 

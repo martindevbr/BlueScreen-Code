@@ -17,12 +17,15 @@ const post = async (body, wait) => {
 };
 const load = async () => { V.data = await api('vault'); mark(); return V.data; };
 const pending = () => (V.data ? V.data.requests : []).filter(r => !r.granted || (r.reveal && !r.revealGranted));
-// número no ícone da barra lateral e faixa da aba Plugins: pedidos de plugins ainda não liberados
+// número no ícone da barra lateral e faixa da aba Plugins: pedidos de plugins ainda não liberados; e a tela de
+// configuração de um plugin (gate) aberta é redesenhada se o que ela mostra mudou
 function mark() {
   const n = pending().filter(r => !r.granted).length;
   const b = $('#badge-vault'); if (b) { b.hidden = !n; b.textContent = n; }
   const ban = $('.vt-wrap'); if (ban) ban.outerHTML = banner();
   bindBanner(document);
+  const t = G.tool && bs.tools.get(G.tool);
+  if (t && bs.S.tool === G.tool && gateSig(t.plugin) !== G.sig) bs.renderTool();
 }
 // faixa no topo da aba Plugins: o que tem no cofre e o que os plugins pedem
 function banner() {
@@ -38,14 +41,44 @@ const picon = (id) => bs.plugIcon(bs.plugins.list.find(p => p.id === id) || { id
 
 function requestCard(r) {
   const what = !r.granted ? (r.exists ? 'Permitir' : 'Criar…') : 'Deixar ver o valor';
+  const same = !r.exists ? (r.sameHosts || []) : [];
   return `<div class="vt-req ${V.focus && V.focus.plugin === r.plugin && V.focus.key === r.key ? 'focus' : ''}" data-plugin="${esc(r.plugin)}" data-key="${esc(r.key)}">
     ${picon(r.plugin)}
     <div class="vt-tx"><div><b>${esc(r.pluginName)}</b> pede <code>${esc(r.key)}</code>${r.label ? ` · ${esc(r.label)}` : ''}</div>
       ${r.why ? `<div class="vt-why">${esc(r.why)}</div>` : ''}
       ${r.hosts && r.hosts.length ? `<div class="vt-row">Sites: ${chips(r.hosts)}</div>` : ''}
+      ${r.exists && r.entry && r.entry !== r.key ? `<div class="vt-why">Usa o segredo <code>${esc(r.entry)}</code>.</div>` : ''}
       ${!r.granted && r.reveal ? '<div class="vt-warn">Também quer ver o valor (só servidores de plugin).</div>' : ''}
       ${r.granted && r.reveal && !r.revealGranted ? '<div class="vt-warn">Quer ver o valor: só libere para plugins em que você confia.</div>' : ''}</div>
-    <button class="chip ${r.granted ? '' : 'primary'}" data-req>${what}</button></div>`;
+    <div class="vt-gbtns">${same.map(n => `<button class="chip primary" data-use="${esc(n)}" title="Já existe um segredo para este site">Usar “${esc(n)}”</button>`).join('')}<button class="chip ${r.granted || same.length ? '' : 'primary'}" data-req>${what}</button></div></div>`;
+}
+// pedidos ainda sem segredo para os mesmos sites: um cartão só (um token serve a todos)
+const hostKey = (r) => (r.hosts || []).map(h => String(h).toLowerCase()).sort().join(',');
+function grouped(reqs) {
+  const out = [], by = new Map();
+  for (const r of reqs) {
+    const k = !r.exists && hostKey(r);
+    if (!k) { out.push({ list: [r] }); continue; }
+    if (!by.has(k)) { const g = { hosts: r.hosts, list: [] }; by.set(k, g); out.push(g); }
+    by.get(k).list.push(r);
+  }
+  return out;
+}
+// nome para o segredo comum: o fim igual dos nomes (rastro.dynatrace, drilltrace.dynatrace -> dynatrace) ou o site
+function suggestName(list) {
+  const tails = list.map(r => r.key.split(/[.\-_:]/).pop().toLowerCase());
+  if (tails.every(t => t === tails[0]) && tails[0].length > 2) return tails[0];
+  const h = String((list[0].hosts || [])[0] || '').replace(/^\*\./, '').split('.');
+  return h.length > 1 ? h[h.length - 2] : list[0].key;
+}
+function groupCard(g) {
+  const same = [...new Set(g.list.flatMap(r => r.sameHosts || []))];
+  return `<div class="vt-req vt-group" data-group="${esc(hostKey(g.list[0]))}">
+    <span class="vt-key">${KEY}</span>
+    <div class="vt-tx"><div><b>${g.list.length} plugins</b> pedem um token para ${chips(g.hosts)}</div>
+      ${g.list.map(r => `<div class="vt-gp">${picon(r.plugin)}<div><b>${esc(r.pluginName)}</b> chama de <code>${esc(r.key)}</code>${r.reveal ? ' <span class="vt-warn">· quer ver o valor</span>' : ''}${r.why ? `<div class="vt-why">${esc(r.why)}</div>` : ''}</div></div>`).join('')}
+      <div class="vt-why">Um segredo só serve a todos: cada plugin continua usando o nome dele.</div></div>
+    <div class="vt-gbtns">${same.map(n => `<button class="chip primary" data-guse="${esc(n)}">Usar “${esc(n)}”</button>`).join('')}<button class="chip ${same.length ? '' : 'primary'}" data-gnew>Criar um para todos…</button></div></div>`;
 }
 function entryCard(e) {
   const grants = Object.entries(e.grants || {});
@@ -64,7 +97,7 @@ function entryCard(e) {
     : `<div class="vt-row">Sites: ${chips(e.hosts, 'nenhum (só servidores de plugin usam)')}</div>
        <div class="vt-row">Programas: ${chips(e.programs, 'nenhum')}</div>
        ${e.note ? `<div class="vt-why">${esc(e.note)}</div>` : ''}`}
-    <div class="vt-grants">${grants.length ? grants.map(([id, g]) => `<div class="vt-g" data-plugin="${esc(id)}">${picon(id)}<span class="vt-gn">${esc(pname(id))}</span>
+    <div class="vt-grants">${grants.length ? grants.map(([id, g]) => `<div class="vt-g" data-plugin="${esc(id)}">${picon(id)}<span class="vt-gn">${esc(pname(id))}${g.as ? ` <em title="o nome que o plugin usa">como ${esc(g.as)}</em>` : ''}</span>
         <label title="O plugin usa sem ver o valor"><input type="checkbox" data-g="use" ${g.use ? 'checked' : ''}> usar</label>
         <label title="O plugin lê o valor (só servidores de plugin)"><input type="checkbox" data-g="reveal" ${g.reveal ? 'checked' : ''}> ver valor</label>
         <button class="icon-btn" data-g="off" title="Tirar o acesso">${bs.I.x}</button></div>`).join('') : '<div class="vt-none">Nenhum plugin pode usar ainda.</div>'}
@@ -78,7 +111,7 @@ function newForm() {
       <label class="fld">Descrição<input id="vtLabel" value="${esc(f.label || '')}" spellcheck="false" placeholder="Token do GitHub"></label></div>
     <label class="fld">Sites liberados <small class="pl-help">para onde o token pode ir, em HTTPS: api.github.com, *.atlassian.net</small><input id="vtHosts" value="${esc((f.hosts || []).join(', '))}" spellcheck="false"></label>
     <label class="fld">Programas liberados <small class="pl-help">opcional: recebem o token numa variável de ambiente (gh, git)</small><input id="vtProgs" value="${esc((f.programs || []).join(', '))}" spellcheck="false"></label>
-    ${f.plugin ? `<label class="chk vt-chk"><input type="checkbox" id="vtGrant" checked> Liberar para ${esc(pname(f.plugin))}</label>` : ''}
+    ${(f.plugins || []).map((p, i) => `<label class="chk vt-chk"><input type="checkbox" data-gp="${i}" checked> Liberar para ${esc(pname(p.plugin))} <span class="vt-mut">(como <code>${esc(p.as)}</code>${p.reveal ? ', vendo o valor' : ''})</span></label>`).join('')}
     <label class="chk vt-chk"><input type="checkbox" id="vtClear" checked> Limpar a área de transferência depois</label>
     <div class="vt-btns"><button class="chip primary" id="vtPaste">${KEY}Colar e guardar</button></div></div>`;
 }
@@ -88,7 +121,7 @@ function render() {
   const reqs = pending();
   return `<div class="dlg-hd"><span class="dlg-ic">${KEY}</span><div><h3>Cofre de credenciais</h3><p>Tokens que você guarda uma vez e libera para os plugins. Ficam cifrados neste PC, e os plugins usam sem ver o valor, só nos sites que você liberar.</p></div></div>
     <div class="vt-body">
-    ${reqs.length ? `<div class="vt-sub">Pedidos dos plugins</div>${reqs.map(requestCard).join('')}` : ''}
+    ${reqs.length ? `<div class="vt-sub">Pedidos dos plugins</div>${grouped(reqs).map(g => g.list.length > 1 ? groupCard(g) : requestCard(g.list[0])).join('')}` : ''}
     <div class="vt-sub">Segredos${d.entries.length ? ` <span class="vt-n">${d.entries.length}</span>` : ''}</div>
     ${d.entries.length ? d.entries.map(entryCard).join('') : '<div class="vt-none vt-empty">O cofre está vazio.</div>'}
     ${newForm()}
@@ -109,10 +142,20 @@ function draw() {
 function bind(el) {
   const val = (id) => (el.querySelector('#' + id) || {}).value || '';
   // pedidos: liberar ou criar já com os sites que o plugin sugeriu
-  el.querySelectorAll('.vt-req').forEach(c => c.querySelector('[data-req]').onclick = () => {
+  const toForm = (list, name) => { const r = list[0]; V.form = { name, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })) }; draw(); el.querySelector('#vtPaste')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); };
+  const grantAll = (name, list) => act(() => post({ action: 'grantMany', name, grants: list.map(x => ({ plugin: x.plugin, as: x.key, use: true, reveal: !!x.reveal })) }, true));
+  el.querySelectorAll('.vt-req:not(.vt-group)').forEach(c => {
     const r = V.data.requests.find(x => x.plugin === c.dataset.plugin && x.key === c.dataset.key);
-    if (!r.exists) { V.form = { name: r.key, label: r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugin: r.plugin }; draw(); el.querySelector('#vtPaste')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
-    act(() => post({ action: 'grant', name: r.key, plugin: r.plugin, use: true, reveal: r.granted ? true : undefined }, true));
+    c.querySelector('[data-req]').onclick = () => {
+      if (!r.exists) return toForm([r], r.key);
+      act(() => post({ action: 'grant', name: r.entry || r.key, plugin: r.plugin, as: r.key, use: true, reveal: r.granted ? true : undefined }, true));
+    };
+    c.querySelectorAll('[data-use]').forEach(b => b.onclick = () => grantAll(b.dataset.use, [r]));
+  });
+  el.querySelectorAll('.vt-group').forEach(c => {
+    const list = pending().filter(r => !r.exists && hostKey(r) === c.dataset.group);
+    c.querySelector('[data-gnew]').onclick = () => toForm(list, suggestName(list));
+    c.querySelectorAll('[data-guse]').forEach(b => b.onclick = () => grantAll(b.dataset.guse, list));
   });
   el.querySelectorAll('.vt-ent').forEach(c => {
     const name = c.dataset.name;
@@ -144,11 +187,12 @@ function bind(el) {
     const name = val('vtName').trim();
     V.form = { ...(V.form || {}), name, label: val('vtLabel'), hosts: val('vtHosts').split(',').map(s => s.trim()).filter(Boolean), programs: val('vtProgs').split(',').map(s => s.trim()).filter(Boolean) };
     if (!name) { toast('Dê um nome ao segredo (ex.: github)'); return; }
-    const grantTo = V.form.plugin && el.querySelector('#vtGrant')?.checked ? V.form.plugin : null;
+    // os plugins marcados recebem o segredo com o nome que cada um usa (uma confirmação só para todos)
+    const grants = (V.form.plugins || []).filter((_, i) => el.querySelector(`[data-gp="${i}"]`)?.checked);
     act(async () => {
       await post({ action: 'paste', name, label: V.form.label, hosts: V.form.hosts, programs: V.form.programs, clear: el.querySelector('#vtClear').checked }, true);
       V.form = null; toast(`"${name}" guardado no cofre`, 'ok');
-      if (grantTo) await post({ action: 'grant', name, plugin: grantTo, use: true }, true);
+      if (grants.length) await post({ action: 'grantMany', name, grants: grants.map(g => ({ plugin: g.plugin, as: g.as, use: true, reveal: g.reveal })) }, true);
     });
   };
 }
@@ -157,14 +201,61 @@ async function open(focus) {
   V.focus = focus || null;
   try { await load(); } catch (e) { return toast('Cofre: ' + e.message); }
   if (focus && focus.key) {
+    // sem segredo e sem outro do mesmo site: o formulário já vem pronto (com os outros plugins que pedem o mesmo site)
     const r = V.data.requests.find(x => x.plugin === focus.plugin && x.key === focus.key);
-    if (!V.data.entries.some(e => e.name === focus.key)) V.form = { name: focus.key, label: r?.label || '', hosts: r?.hosts || [], programs: r?.programs || [], plugin: focus.plugin };
+    if (r && !r.exists && !(r.sameHosts || []).length) {
+      const list = hostKey(r) ? pending().filter(x => !x.exists && hostKey(x) === hostKey(r)) : [r];
+      V.form = { name: list.length > 1 ? suggestName(list) : r.key, label: list.length > 1 ? String(r.label || '').replace(/^[^:]+:\s*/, '') : r.label || '', hosts: r.hosts || [], programs: r.programs || [], plugins: list.map(x => ({ plugin: x.plugin, as: x.key, reveal: !!x.reveal })) };
+    }
   }
   draw();
 }
 
-bs.vault = { open, refresh: load, banner, bindBanner };
-bs.actions.add({ label: 'Cofre de credenciais (tokens dos plugins)', icon: KEY, k: 'Alt+8', run: () => open() });
+// ---------- tela de configuração no lugar do painel de um plugin que só funciona com um token do Cofre ----------
+// O plugin marca o que é obrigatório no plugin.json: "vault": [{ "key": "...", "required": true, ... }]. Enquanto faltar
+// algo, o painel dele mostra os passos (criar, permitir, deixar ver o valor) e confere sozinho até ficar pronto.
+const G = { tool: null, timer: null, sig: '' };
+const needs = (id) => { const p = bs.plugins.list.find(x => x.id === id); return p && Array.isArray(p.vaultKeys) ? p.vaultKeys.filter(v => v && v.required && v.key) : []; };
+const ready = (r) => r.exists && r.granted && (!r.reveal || r.revealGranted);
+function gateItems(id) {
+  return needs(id).map(d => ({ ...d, ...((V.data && V.data.requests.find(r => r.plugin === id && r.key === d.key)) || { key: d.key, plugin: id, pluginName: pname(id), reveal: !!d.reveal, exists: false, granted: false }) , title: d.title, revealWhy: d.revealWhy }));
+}
+const gateSig = (id) => gateItems(id).map(r => [r.exists, r.granted, r.revealGranted].join()).join('|');
+function stopGate() { clearInterval(G.timer); G.timer = null; G.tool = null; }
+function gate(id, body, tool) {
+  if (!needs(id).length) return false;
+  if (!V.data) { body.innerHTML = '<div class="empty">Conferindo o Cofre…</div>'; load().then(() => { if (bs.S.tool === tool.id) bs.renderTool(); }).catch(() => {}); return true; }
+  const items = gateItems(id);
+  if (items.every(ready)) { if (G.tool === tool.id) stopGate(); return false; }
+  const name = pname(id);
+  const step = (n, on, cur, title, desc, extra = '') => `<li class="vg-st ${on ? 'done' : cur ? 'cur' : ''}"><span class="vg-n">${on ? '✓' : n}</span><div><b>${title}</b>${extra}<div class="vg-d">${desc}</div></div></li>`;
+  body.innerHTML = `<div class="vg">${items.map(r => {
+    const what = r.title || `Configure ${r.label ? 'o ' + String(r.label).replace(/^[^:]+:\s*/, '') : 'o segredo ' + r.key}`;
+    const same = !r.exists && (r.sameHosts || [])[0];
+    const s = [r.exists, r.granted, !r.reveal || r.revealGranted];
+    const cur = s.findIndex(x => !x);
+    let n = 0;
+    return `<div class="vg-card"><div class="vg-hd"><span class="vg-ic">${KEY}</span><div><h4>${esc(what)}</h4><p>O ${esc(name)} só abre com ele${r.why ? ': ' + esc(r.why) : ''}.</p></div></div>
+      <ol class="vg-steps">
+        ${step(++n, s[0], cur === 0, 'Criar o segredo', same ? `Já existe <b>${esc(same)}</b> para o mesmo site: no Cofre, “Usar ${esc(same)}”.` : 'Copie o token, Criar… e Colar e guardar.', `<div><code>${esc(r.key)}</code></div>`)}
+        ${step(++n, s[1], cur === 1, `Permitir o ${esc(name)}`, 'Libera o segredo para este plugin.')}
+        ${r.reveal ? step(++n, s[2], cur === 2, 'Deixar ver o valor', esc(r.revealWhy || `O servidor do ${name} usa o valor direto.`)) : ''}
+        ${step(++n, false, false, `Lido pelo ${esc(name)}`, 'Confere sozinho; não precisa reabrir nada.')}
+      </ol>
+      <button class="chip primary vg-go" data-key="${esc(r.key)}">${KEY}Abrir no Cofre</button></div>`;
+  }).join('')}</div>`;
+  body.querySelectorAll('.vg-go').forEach(b => b.onclick = () => open({ plugin: id, key: b.dataset.key }));
+  // confere sozinho: quando o que falta é liberado (aqui ou no Cofre), o painel do plugin aparece
+  G.tool = tool.id; G.sig = gateSig(id);
+  if (!G.timer) G.timer = setInterval(async () => {
+    if (bs.S.tool !== G.tool || document.hidden) { if (bs.S.tool !== G.tool) stopGate(); return; }
+    try { await load(); } catch {}
+  }, 2500);
+  return true;
+}
+
+bs.vault = { open, refresh: load, banner, bindBanner, gate };
+bs.actions.add({ label: 'Cofre de credenciais (tokens dos plugins)', icon: KEY, run: () => open() });
 // ícone próprio na barra da esquerda, junto de Plugins: abre o cofre (não é um painel)
 bs.tools.register({ id: 'vault', title: 'Cofre de credenciais', icon: KEY, key: 'Alt+8', order: 990, bottom: true, render() {}, toggle() { open(); } });
 bs.hooks.on('refresh', () => load().catch(() => {}));
