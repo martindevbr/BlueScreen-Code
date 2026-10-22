@@ -15,6 +15,16 @@ Para criar ou alterar plugins conversando com uma IA, sem escrever o código, us
 - `app/plugins/<id>/`: os que vêm com o BlueScreen.
 - `~/.bluescreen/plugins/<id>/`: os seus. Com o mesmo id, o seu ganha.
 
+Um lugar para cada coisa, e nenhum outro:
+
+| O quê | Onde |
+|---|---|
+| código dos seus plugins (inclusive os criados pelo IAMaker) | `~/.bluescreen/plugins/<id>/` |
+| dados de cada plugin (`plugin.data`, `plugin.files`, `plugin.secrets`, configurações) | `~/.bluescreen/plugin-data/<id>/` |
+| plugins desligados e servidores de plugins | `~/.bluescreen/plugins.json` |
+
+Não guarde dados de plugin em `localStorage`, `bs.store`, IndexedDB nem cookies: ficam presos à janela e sobram depois de remover o plugin. Remover com **Apagar também os dados do plugin** manda a pasta de dados junto para a Lixeira. Se um painel continua na barra depois de remover, ele é de outro plugin: o botão direito no ícone mostra de qual.
+
 Cada pasta tem:
 
 | Arquivo | |

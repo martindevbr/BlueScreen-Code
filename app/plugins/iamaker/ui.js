@@ -47,7 +47,7 @@ const EXAMPLES = [
 ];
 
 const M = {
-  cfg: null, ai: null, id: store.get('iamPlugin', null), conv: null, run: null, guide: null,
+  cfg: null, ai: null, id: null, conv: null, run: null, guide: null,
   made: [], fixes: 0, pending: false,
 };
 
@@ -146,7 +146,7 @@ function push(m) { m.at = Date.now(); M.conv.msgs.push(m); paint(m); return m; }
 
 async function pick(id) {
   if (M.run) return toast('Espere a IA terminar ou clique em Parar');
-  M.id = id || null; store.set('iamPlugin', M.id); M.fixes = 0; M.place = null;
+  M.id = id || null; plugin.data.set('sel', M.id); M.fixes = 0; M.place = null;
   await loadConv(M.id);
   render();
 }
@@ -521,7 +521,7 @@ async function send(text, opt = {}) {
   if (!M.id) {
     const name = ($('#iam-name') || {}).value?.trim();
     try { M.id = await createPlugin(name); } catch (e) { return toast('IAMaker: ' + e.message); }
-    store.set('iamPlugin', M.id); await loadConv(M.id);
+    plugin.data.set('sel', M.id); await loadConv(M.id);
     if (!name) M.conv.unnamed = true;
     render();
   }
@@ -555,7 +555,7 @@ async function send(text, opt = {}) {
     return saveConv();
   }
   run.h = h;
-  store.set('iamRun', { pid: h.id, id: M.id, ai, before, text });
+  plugin.data.set('run', { pid: h.id, id: M.id, ai, before, text });
   try { await h.write(await prompt(text, ai, !!sid, before)); await h.close(); }
   catch (e) { P.errors.push('não deu para mandar o pedido: ' + e.message); h.kill().catch(() => {}); }
 }
@@ -569,7 +569,7 @@ function placed(k) {
 async function finish(run, code) {
   if (M.run !== run) return;
   run.P.end();
-  M.run = null; store.set('iamRun', null); busy(false); unghost();
+  M.run = null; plugin.data.set('run', null); busy(false); unghost();
   bs.bubble.badge('iamaker', bs.bubble.isOpen('iamaker') ? null : 'dot');
   const A = AIS[run.ai];
   if (run.P.session && A.resume) { M.conv.sessions = { ...(M.conv.sessions || {}), [run.ai]: run.P.session }; }
@@ -613,7 +613,7 @@ async function christen(id) {
   await plugin.data.set('conv:' + to, { ...M.conv, msgs: M.conv.msgs.slice(-MAX_MSGS).map(({ el, ...x }) => x) });
   await plugin.data.remove('conv:' + id);
   M.made = [...new Set(M.made.map(x => x === id ? to : x))]; await plugin.data.set('made', M.made);
-  M.id = to; store.set('iamPlugin', to);
+  M.id = to; plugin.data.set('sel', to);
   push({ role: 'sys', text: `A IA chamou o plugin de "${name}" (pasta ${to}).` });
   await saveConv();
   render();
@@ -629,6 +629,8 @@ async function verify(id) {
   } catch (e) { out.push('plugin.json: ' + (e instanceof SyntaxError ? 'JSON inválido: ' + e.message : e.message)); }
   let ui = null; try { ui = (await api('file', { project: dir, file: 'ui.js' })).content; } catch {}
   if (ui != null) { try { new Function('bs', 'plugin', "'use strict';\n" + ui); } catch (e) { out.push('ui.js: erro de sintaxe: ' + e.message); } }
+  // os dados ficam só na pasta de dados do plugin (plugin.data), que vai embora junto quando ele é removido
+  if (ui != null && M.made.includes(id) && /\b(localStorage|sessionStorage|indexedDB)\b|\bbs\.store\b/.test(ui)) out.push('ui.js: guarda dados fora do plugin (localStorage ou bs.store); troque por await plugin.data.get/set');
   return out;
 }
 function broken(problems) {
@@ -700,14 +702,23 @@ plugin.settings.onChange((v) => { M.cfg = v; if (v && EFFORTS[v.effort]) M.effor
   try { M.cfg = await plugin.settings.get(); } catch { M.cfg = {}; }
   M.ai = AIS[M.cfg.provider] ? M.cfg.provider : 'claude';
   M.effort = EFFORTS[M.cfg.effort] ? M.cfg.effort : 'low';
-  try { M.made = (await plugin.data.get('made', [])).filter(Boolean); } catch {}
-  if (M.id && !editable().some(p => p.id === M.id)) M.id = null;
+  // tudo do IAMaker fica na pasta de dados dele (~/.bluescreen/plugin-data/iamaker); o localStorage de versões antigas migra uma vez
+  const old = { sel: store.get('iamPlugin', null), run: store.get('iamRun', null) };
+  ['iamPlugin', 'iamRun', 'iamReopen'].forEach(k => { try { localStorage.removeItem('bs.' + k); } catch {} });
+  let d = {}; try { d = (await plugin.data.all()) || {}; } catch {}
+  M.id = d.sel != null ? d.sel : old.sel;
+  const was = d.run != null ? d.run : old.run;
+  // plugin removido (aba Plugins ou à mão) some do IAMaker também: da lista, da seleção e a conversa dele
+  const here = new Set(bs.plugins.list.map(p => p.id));
+  const made = Array.isArray(d.made) ? d.made.filter(Boolean) : [];
+  const gone = made.filter(id => !here.has(id));
+  M.made = made.filter(id => here.has(id));
+  if (gone.length) { plugin.data.set('made', M.made); gone.forEach(id => plugin.data.remove('conv:' + id)); }
+  if (M.id && !editable().some(p => p.id === M.id)) { M.id = null; plugin.data.set('sel', null); }
+  if (old.sel && d.sel == null) plugin.data.set('sel', M.id);
   await loadConv(M.id);
 
-  store.set('iamReopen', null); // de versões que recarregavam a página
-
   // a página recarregou com a IA rodando: continua acompanhando
-  const was = store.get('iamRun', null);
   if (was && was.id === M.id && AIS[was.ai]) {
     let alive = null; try { alive = (await plugin.procs.list()).find(x => x.id === was.pid && !x.done); } catch {}
     if (alive) {
@@ -716,7 +727,7 @@ plugin.settings.onChange((v) => { M.cfg = v; if (v && EFFORTS[v.effort]) M.effor
       P.onPlace = (k) => placed(k); bs.bubble.badge('iamaker', 'busy');
       run.h = plugin.procs.attach(was.pid, { onData: (t, s) => { if (s === 'err') run.err = (run.err + t).slice(-4000); else P.feed(t); }, onExit: (code) => finish(run, code) });
       show(true);
-    } else store.set('iamRun', null);
+    } else plugin.data.set('run', null);
   }
   render();
 })();

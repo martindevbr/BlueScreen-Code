@@ -37,7 +37,8 @@ O usuário está esperando com a IDE aberta. Termine em poucas ações, sem perd
 9. **Registre tudo no topo do `ui.js`, de forma síncrona** (`bs.bubble.register`, `bs.tools.register`, `bs.status.add`, `bs.keys.add`, `bs.hooks.on`...), não dentro de um `await` ou `setTimeout`. Assim o IAMaker sabe o que tirar quando carregar a versão nova.
 10. **Limpe o que a IDE não sabe desfazer.** `setInterval`, `addEventListener` em `window`/`document` e elementos postos direto no `document` precisam de `plugin.onUnload(() => { ... })` que os desfaça. Sem isso, cada versão nova deixa uma cópia rodando.
 11. **O painel pode mudar de lugar e de tamanho.** O usuário arrasta painéis e janelas para cima, para os lados, para uma janela flutuante e de volta. Faça o layout se ajustar (flex, `min-width: 0`, rolagem), use `ResizeObserver` se o conteúdo depende do tamanho, e não prenda CSS a `#dockBody` nem a uma posição fixa da tela.
-12. **Responda curto no final:** o que mudou e como usar (atalho, onde fica o botão). Sem colar o código na resposta.
+12. **Os dados ficam num lugar só: `plugin.data`** (e `plugin.files` para arquivos, `plugin.secrets` para tokens). Tudo vai para `~/.bluescreen/plugin-data/<id>`, que a IDE apaga junto quando o usuário remove o plugin com "apagar os dados". Nunca use `localStorage`, `sessionStorage`, IndexedDB, cookies nem `bs.store`: o que fica lá sobra depois de remover o plugin. O código do plugin fica só na pasta atual (`~/.bluescreen/plugins/<id>`).
+13. **Responda curto no final:** o que mudou e como usar (atalho, onde fica o botão). Sem colar o código na resposta.
 
 ## Arquivos
 
@@ -60,7 +61,6 @@ O `ui.js` roda quando a página carrega e de novo a cada mudança: o IAMaker tir
 | `bs.$(seletor)` | `document.querySelector` |
 | `bs.esc(texto)` | escapa HTML. **Use sempre** ao pôr texto do usuário ou de fora em `innerHTML` |
 | `bs.toast(texto)` / `bs.toast(texto, 'ok')` | aviso rápido: sem o segundo argumento é aviso de erro, com `'ok'` é de sucesso |
-| `bs.store.get(chave, padrão)` / `set(chave, valor)` | preferências desta página (localStorage) |
 | `bs.I` | ícones SVG da IDE: `I.x`, `I.refresh`, `I.gear`, `I.explorer`, `I.lint`, `I.open`, `I.plug` |
 | `bs.openFile(rel, 'editor', linha)` | abre um arquivo do projeto atual |
 | `bs.editor` / `bs.monaco` | o editor (Monaco) e a API dele |

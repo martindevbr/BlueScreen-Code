@@ -823,7 +823,11 @@ function renderStrip() {
     b.onclick = (e) => { if (e.target.closest('.hide-t')) { stripHide(b.dataset.tool); return; } if (STRIP.on || STRIP.eat) { STRIP.eat = false; return; } setTool(b.dataset.tool); };
     b.onpointerdown = (e) => { if (!e.target.closest('.hide-t')) stripPress(e, b); };
     b.oncontextmenu = (e) => { e.preventDefault(); const d = BS.tools.get(b.dataset.tool); if (!d) return;
-      showMenu(e, [{ label: 'Ocultar da barra', icon: I.eyeOff, action: () => stripHide(d.id, true) }, { label: 'Reorganizar a barra…', icon: I.grip, action: () => stripArrange(true) }], d.title); };
+      // painel de plugin: de qual plugin ele é, para achar (e remover) quem o colocou na barra
+      const p = d.plugin && BS.plugins.list.find(x => x.id === d.plugin);
+      const mine = p ? [{ label: `Do plugin ${p.name}${p.user ? '' : ' (vem com o BlueScreen)'}`, icon: I.plug || I.gear, action: () => { setTool('plugins'); setTimeout(() => { const c = document.querySelector(`.plug[data-id="${CSS.escape(p.id)}"]`); if (c) { c.scrollIntoView({ block: 'center' }); c.classList.add('flash'); setTimeout(() => c.classList.remove('flash'), 1600); } }, 60); } },
+        ...(p.user ? [{ label: `Remover o plugin ${p.name}…`, icon: TRASH_ICON, action: () => pluginRemove(p) }] : [])] : [];
+      showMenu(e, [{ label: 'Ocultar da barra', icon: I.eyeOff, action: () => stripHide(d.id, true) }, { label: 'Reorganizar a barra…', icon: I.grip, action: () => stripArrange(true) }, ...mine], d.title); };
   });
   $('#btnRefresh').onclick = refreshAll;
   if (STRIP.on) { $('#stripDone').onclick = () => stripArrange(false); $('#stripReset').onclick = () => { store.set('stripOrder', null); store.set('stripHidden', []); toolKeys(); renderStrip(); }; }

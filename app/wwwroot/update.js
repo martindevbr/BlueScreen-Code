@@ -139,6 +139,15 @@ async function restart() {
 }
 
 bs.actions.add({ label: 'Procurar atualizações do BlueScreen', icon: IC.up, run: () => check(true, false) });
-if (!bs.doc) setTimeout(() => check(false), 6000);
+// quem deixa a IDE aberta o dia todo também recebe: pergunta de novo a cada 30 min e ao voltar para a janela
+// (no máximo a cada 15 min; o núcleo guarda a resposta por 10 min e o GitHub limita as consultas)
+if (!bs.doc) {
+  let last = 0;
+  const again = (ms) => { if (U.poll || Date.now() - last < ms) return; last = Date.now(); check(true); };
+  setTimeout(() => { last = Date.now(); check(false); }, 6000);
+  setInterval(() => again(25 * 60e3), 30 * 60e3);
+  addEventListener('focus', () => again(15 * 60e3));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) again(15 * 60e3); });
+}
 bs.update = { check, open: openDialog };
 })(window.BS);

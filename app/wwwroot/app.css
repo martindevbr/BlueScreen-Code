@@ -558,6 +558,8 @@ body.ly-dragging, body.ly-dragging * { cursor: grabbing !important; user-select:
 .plug.off .pl-icon { filter: grayscale(1); opacity: .55; }
 .plug.off .pl-name, .plug.off .ds { opacity: .7; }
 .plug.bad { border-color: color-mix(in srgb, var(--del) 45%, transparent); }
+.plug.flash { animation: plug-flash 1.6s ease; }
+@keyframes plug-flash { 0%, 60% { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); } }
 .pl-icon { flex: none; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; overflow: hidden; transition: filter .2s, opacity .2s; }
 .pl-icon img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .pl-icon.def { font: 700 14px/1 var(--sans, inherit); letter-spacing: .02em; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
