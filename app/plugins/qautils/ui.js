@@ -58,11 +58,37 @@ function rx(lang) {
   };
 }
 // idioma: "# language: pt" ou o das palavras-chave usadas (muita feature em português usa Feature/Scenario)
-function langOf(text) {
+function detLang(text) {
   const m = /^\s*#\s*language\s*:\s*([\w-]+)/m.exec(text);
   if (m) { const l = m[1].toLowerCase().split('-')[0]; return KW[l] ? l : 'en'; }
   for (const ln of text.split('\n', 400)) for (const l of ['en', 'pt', 'es']) if (rx(l).head.test(ln)) return l;
-  return 'en';
+  return null;
+}
+const langOf = (text) => detLang(text) || 'en';
+// idioma de um arquivo ainda sem palavras-chave: o da configuração ou o da maioria das features do projeto (sem features: português)
+function projLang() {
+  if (P.settings.lang && P.settings.lang !== 'auto') return P.settings.lang;
+  const c = { pt: 0, en: 0, es: 0 }; for (const f of P.files.values()) c[f.doc.lang]++;
+  return c.pt >= c.en ? 'pt' : 'en';
+}
+const unaccent = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+// troca as palavras-chave de idioma (Feature -> Funcionalidade, Given -> Dado...) e acerta o "# language:"
+function translate(text, to) {
+  const A = rx(langOf(text)); const T = KW[to]; let inSc = false, inDoc = null;
+  const out = [];
+  for (const raw of text.split('\n')) {
+    const cr = raw.endsWith('\r') ? '\r' : ''; const ln = raw.slice(0, raw.length - cr.length); const t = ln.trim();
+    if (inDoc) { if (t.startsWith(inDoc)) inDoc = null; out.push(raw); continue; }
+    if (t.startsWith('"""') || t.startsWith('```')) { inDoc = t.slice(0, 3); out.push(raw); continue; }
+    if (/^#\s*language\s*:/.test(t)) continue;
+    let m = A.head.exec(ln);
+    if (m) { const k = A.headOf.get(m[2]); inSc = ['background', 'scenario', 'outline'].includes(k); out.push(m[1] + T[k][0] + ':' + (m[3] ? ' ' + m[3] : '') + cr); continue; }
+    m = inSc && A.step.exec(ln);
+    if (m && m[2] !== '*') { out.push(m[1] + T[A.stepOf.get(m[2])][0] + ' ' + m[3] + cr); continue; }
+    out.push(raw);
+  }
+  const s = out.join('\n');
+  return to === 'en' ? s : `# language: ${to}${text.includes('\r\n') ? '\r\n' : '\n'}${s}`;
 }
 const cells = (ln) => ln.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split(/(?<!\\)\|/).map(c => c.trim());
 // lê a feature: funcionalidade, contexto, cenários (com passos, tags e Exemplos), tags e comentários
@@ -533,6 +559,8 @@ function diagnose(model) {
       if (s) mk(st.line, c1, c2, monaco.MarkerSeverity.Info, `Parecido com o passo padrão “${s.e.text}” (usado ${s.e.n} vezes no projeto). Alt+Enter troca.`, 'similar', { to: s.e.text });
     }
   }
+  // palavras-chave em português/espanhol sem "# language:": o Cucumber lê como inglês e não acha nada
+  if (d.lang !== 'en' && d.feature && !/^\s*#\s*language\s*:/m.test(model.getValue())) mk(d.feature.line, 1, d.lines[d.feature.line].length + 1, auto ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Hint, `Falta "# language: ${d.lang}" na primeira linha: sem ele o Cucumber não reconhece ${KW[d.lang].feature[0]}, ${KW[d.lang].scenario[0]}, ${KW[d.lang].given[0]}... Alt+Enter adiciona.`, 'no-language', { lang: d.lang });
   // comentário que parece uma tag (#Sistema_E2E_...): vira @tag
   for (const c of d.comments) if (/^#[A-Za-zÀ-ú][\w.\-À-ú]{3,}$/.test(c.text) && !/^#\s*language/i.test(c.text)) mk(c.line, 1, d.lines[c.line].length + 1, monaco.MarkerSeverity.Hint, 'Comentário com cara de tag: como tag (@...) ele filtra execução e aparece no painel QA. Alt+Enter converte.', 'comment-tag', { tag: '@' + c.text.slice(1) });
   monaco.editor.setModelMarkers(model, 'cucumber', marks);
@@ -714,7 +742,7 @@ function monthFolder(parent) {
 async function newFeature(dirHint) {
   await index();
   const dirs = [...new Set([...P.files.keys()].map(dirOf).flatMap(d => { const out = []; const a = d.split('/'); for (let i = 1; i <= a.length; i++) out.push(a.slice(0, i).join('/')); return out; }).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  const flang = P.settings.lang && P.settings.lang !== 'auto' ? P.settings.lang : (() => { const c = { pt: 0, en: 0, es: 0 }; for (const f of P.files.values()) c[f.doc.lang]++; return c.pt > c.en ? 'pt' : c.en ? 'en' : 'pt'; })();
+  const flang = projLang();
   const start = dirHint ?? (S.active && isFeature(S.active) ? dirOf(S.active.path) : '');
   dialog('qaNew', `<div class="dlg-hd"><span class="dlg-ic">${ICO.feat}</span><div><h3>Nova feature</h3><p>Arquivo no padrão do time: <code>CHAMADO - Título.feature</code></p></div></div>
     <div class="qa-2"><label class="fld">Chamado / card<input id="qaTk" placeholder="INC1753202, PRB0068833, SDIG-123" spellcheck="false" autocomplete="off"></label>
@@ -809,9 +837,10 @@ function setup() {
   L.registerCompletionItemProvider('gherkin', {
     triggerCharacters: ['@', '<', ' '],
     provideCompletionItems(model, pos) {
-      const K = KW[langOf(model.getValue())]; const M = L.CompletionItemKind; const S2 = L.CompletionItemInsertTextRule.InsertAsSnippet;
+      const text = model.getValue(); const lang = detLang(text) || projLang(); const K = KW[lang];
+      const M = L.CompletionItemKind; const S2 = L.CompletionItemInsertTextRule.InsertAsSnippet;
       const ln = model.getLineContent(pos.lineNumber); const before = ln.slice(0, pos.column - 1);
-      const d = parse(model.getValue()); const R2 = rx(d.lang);
+      const d = parse(text); const R2 = rx(lang);
       const items = []; const add = (o) => items.push(o);
       // @tag
       const tg = /(^|\s)@([\w.\-À-ú]*)$/.exec(before);
@@ -847,21 +876,46 @@ function setup() {
         }
         return { suggestions: items };
       }
+      // primeira linha: "# language: pt"
+      const lines0 = text.split('\n');
+      if (/^\s*#\s*[\w:\s]*$/.test(before) && lines0.slice(0, pos.lineNumber - 1).every(x => !x.trim() || x.trim().startsWith('#'))
+        && !/^\s*#\s*language\s*:/m.test(lines0.filter((x, j) => j !== pos.lineNumber - 1).join('\n'))) {
+        const range = new R(pos.lineNumber, 1, pos.lineNumber, ln.length + 1);
+        [['pt', 'Português: Funcionalidade, Cenário, Dado, Quando, Então'], ['es', 'Espanhol: Característica, Escenario, Dado, Cuando, Entonces']].forEach(([l, det], i) =>
+          add({ label: `# language: ${l}`, kind: M.Keyword, insertText: `# language: ${l}`, filterText: `# language: ${l} idioma`, range, detail: det, sortText: (l === lang ? '0' : '1') + i }));
+        return { suggestions: items };
+      }
       // começo da linha: palavras-chave (passos dentro de cenário; cabeçalhos fora)
       if (/^\s*[\wÀ-ú]*$/.test(before)) {
         const w = /[\wÀ-ú]*$/.exec(before)[0]; const range = new R(pos.lineNumber, pos.column - w.length, pos.lineNumber, pos.column);
         const inSc = !!d.scenarios.concat(d.background || []).find(s => s.line < pos.lineNumber - 1 && (s.end == null || s.end >= pos.lineNumber - 2));
         let i = 0; const o = (n) => String(n).padStart(3, '0');
-        const steps = [...K.given.slice(0, 1), ...K.when, ...K.then.slice(0, 1), ...K.and, ...K.but];
-        steps.forEach(k => add({ label: k, kind: M.Keyword, insertText: k + ' ', range, sortText: (inSc ? 'a' : 'b') + o(i++), command: { id: 'editor.action.triggerSuggest', title: '' } }));
-        add({ label: `${K.scenario[0]}: ${nextId(d)}`, kind: M.Snippet, insertText: `${K.scenario[0]}: ${nextId(d)} \${1:título}\n\t${K.given[0]} \${2}\n\t${K.when[0]} \${3}\n\t${K.then[0]} \${4}`, insertTextRules: S2, range, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'cenário novo com o próximo número', filterText: K.scenario[0] });
-        add({ label: `${K.outline[0]}`, kind: M.Snippet, insertText: `${K.outline[0]}: ${nextId(d)} \${1:título}\n\t${K.given[0]} \${2:passo com <valor>}\n\n\t${K.examples[0]}:\n\t\t| valor |\n\t\t| \${3:a}     |`, insertTextRules: S2, range, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'esquema com Exemplos' });
-        if (!d.background) add({ label: K.background[0], kind: M.Snippet, insertText: `${K.background[0]}:\n\t${K.given[0]} \${1}`, insertTextRules: S2, range, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'passos que valem para todos os cenários' });
-        add({ label: K.examples[0], kind: M.Keyword, insertText: `${K.examples[0]}:\n\t| \${1:coluna} |\n\t| \${2:valor}  |`, insertTextRules: S2, range, sortText: 'c' + o(i++) });
-        if (!d.feature) add({ label: K.feature[0], kind: M.Snippet, insertText: `${K.feature[0]}: \${1:título}\n`, insertTextRules: S2, range, sortText: 'a000' });
-        add({ label: K.rule[0], kind: M.Keyword, insertText: `${K.rule[0]}: \${1:regra}\n`, insertTextRules: S2, range, sortText: 'd' + o(i++) });
+        // em português sem "# language: pt" o Cucumber lê o arquivo como inglês: a primeira palavra-chave escolhida já põe o cabeçalho
+        const hdr = lang !== 'en' && !/^\s*#\s*language\s*:/m.test(text) ? `# language: ${lang}\n` : '';
+        const first = hdr && pos.lineNumber === 1;
+        const head = (o2) => {
+          if (!hdr) return o2;
+          if (first) return { ...o2, insertText: hdr.replace(/\$/g, '\\$') + o2.insertText, insertTextRules: S2 };
+          return { ...o2, additionalTextEdits: [{ range: new R(1, 1, 1, 1), text: hdr }] };
+        };
+        // o filtro aceita o termo sem acento e o equivalente em inglês: "cenario" e "scen" acham Cenário
+        const kw = (k, word, o2) => add(head({ ...o2, label: o2.label || word, filterText: o2.filterText || [word, unaccent(word), lang !== 'en' ? KW.en[k][0] : ''].filter(Boolean).join(' '), detail: [o2.detail, lang !== 'en' ? KW.en[k][0] : ''].filter(Boolean).join(' · ') }));
+        const steps = lang === 'pt' ? [['given', 'Dado'], ['when', 'Quando'], ['then', 'Então'], ['and', 'E'], ['but', 'Mas'], ['given', 'Dada'], ['given', 'Dados'], ['given', 'Dadas']]
+          : [['given', K.given[0]], ['when', K.when[0]], ['then', K.then[0]], ['and', K.and[0]], ['but', K.but[0]]];
+        steps.forEach(([k, word]) => kw(k, word, { kind: M.Keyword, insertText: word + ' ', sortText: (inSc ? 'a' : 'b') + o(i++), command: { id: 'editor.action.triggerSuggest', title: '' }, detail: lang === 'pt' && /^Dad/.test(word) && word !== 'Dado' ? { Dada: 'feminino', Dados: 'plural', Dadas: 'feminino plural' }[word] : '' }));
+        kw('scenario', K.scenario[0], { label: `${K.scenario[0]}: ${nextId(d)}`, kind: M.Snippet, insertText: `${K.scenario[0]}: ${nextId(d)} \${1:título}\n\t${K.given[0]} \${2}\n\t${K.when[0]} \${3}\n\t${K.then[0]} \${4}`, insertTextRules: S2, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'cenário novo com o próximo número' });
+        kw('outline', K.outline[0], { kind: M.Snippet, insertText: `${K.outline[0]}: ${nextId(d)} \${1:título}\n\t${K.given[0]} \${2:passo com <valor>}\n\n\t${K.examples[0]}:\n\t\t| valor |\n\t\t| \${3:a}     |`, insertTextRules: S2, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'esquema com Exemplos' });
+        if (!d.background) kw('background', K.background[0], { kind: M.Snippet, insertText: `${K.background[0]}:\n\t${K.given[0]} \${1}`, insertTextRules: S2, sortText: (inSc ? 'c' : 'a') + o(i++), detail: 'passos que valem para todos os cenários' });
+        kw('examples', K.examples[0], { kind: M.Keyword, insertText: `${K.examples[0]}:\n\t| \${1:coluna} |\n\t| \${2:valor}  |`, insertTextRules: S2, sortText: 'c' + o(i++) });
+        if (!d.feature) {
+          const story = { pt: ['Como', 'Quero', 'Para'], es: ['Como', 'Quiero', 'Para'], en: ['As a', 'I want', 'So that'] }[lang];
+          kw('feature', K.feature[0], { kind: M.Snippet, insertText: `${K.feature[0]}: \${1:título}\n`, insertTextRules: S2, sortText: 'a000' });
+          kw('feature', K.feature[0], { label: `${K.feature[0]} com história`, kind: M.Snippet, insertText: `${K.feature[0]}: \${1:título}\n\t${story[0]} \${2:perfil}\n\t${story[1]} \${3:ação}\n\t${story[2]} \${4:benefício}\n\n`, insertTextRules: S2, sortText: 'a001', detail: story.join(' / ') });
+        }
+        kw('rule', K.rule[0], { kind: M.Keyword, insertText: `${K.rule[0]}: \${1:regra}\n`, insertTextRules: S2, sortText: 'd' + o(i++) });
         add({ label: 'tabela', kind: M.Snippet, insertText: '| ${1:coluna} | ${2:coluna} |\n| ${3:valor}  | ${4:valor}  |', insertTextRules: S2, range, sortText: 'd' + o(i++), detail: 'tabela de dados' });
         add({ label: 'docstring', kind: M.Snippet, insertText: '"""\n${1}\n"""', insertTextRules: S2, range, sortText: 'd' + o(i++), detail: 'texto em várias linhas' });
+        items.forEach(x => { x.range = x.range || range; });
         return { suggestions: items };
       }
       return { suggestions: [] };
@@ -917,6 +971,7 @@ function setup() {
       for (const mk of ctx.markers.filter(m => m.source === 'Cucumber')) {
         const info = st && st.data.find(x => x.line === mk.startLineNumber - 1 && x.code === mk.code);
         if (mk.code === 'similar' && info) actions.push({ title: `Trocar por “${info.to}”`, kind: 'quickfix', diagnostics: [mk], isPreferred: true, edit: { edits: [{ resource: model.uri, textEdit: { range: new R(mk.startLineNumber, mk.startColumn, mk.endLineNumber, mk.endColumn), text: info.to }, versionId: undefined }] } });
+        if (mk.code === 'no-language' && info) actions.push({ title: `Adicionar "# language: ${info.lang}"`, kind: 'quickfix', diagnostics: [mk], isPreferred: true, edit: { edits: [{ resource: model.uri, textEdit: { range: new R(1, 1, 1, 1), text: `# language: ${info.lang}\n` } }] } });
         if (mk.code === 'undefined' && rel) actions.push({ title: 'Criar definição do passo…', kind: 'quickfix', diagnostics: [mk], isPreferred: true, command: { id: 'qa.createDef', title: '', arguments: [rel, mk.startLineNumber - 1] } });
         if (mk.code === 'comment-tag' && info && d.feature) {
           actions.push({ title: `Transformar em tag ${info.tag} (acima da funcionalidade)`, kind: 'quickfix', diagnostics: [mk], edit: { edits: [
@@ -933,6 +988,13 @@ function setup() {
         if (common.length) { const edits = toBackgroundEdits(model, d); if (edits) actions.push({ title: `Mover ${common.length} passo(s) repetido(s) para o ${KW[d.lang].background[0]}`, kind: 'refactor', edit: { edits: edits.map(e => ({ resource: model.uri, textEdit: e })) } }); }
         const ren = renumberEdits(d); if (ren.length) actions.push({ title: 'Renumerar cenários (' + (P.settings.prefix || 'CT') + '001, 002...)', kind: 'refactor', edit: { edits: ren.map(e => ({ resource: model.uri, textEdit: e })) } });
         const f = format(model.getValue()); if (f !== model.getValue()) actions.push({ title: 'Formatar e alinhar tabelas', kind: 'refactor', edit: { edits: [{ resource: model.uri, textEdit: { range: model.getFullModelRange(), text: f } }] } });
+      }
+      if (d.feature && d.feature.line === line) {
+        for (const [to, name] of [['pt', 'português (Funcionalidade, Cenário, Dado...)'], ['en', 'inglês (Feature, Scenario, Given...)']]) {
+          if (to === d.lang) continue;
+          const t = translate(model.getValue(), to);
+          if (t !== model.getValue()) actions.push({ title: `Converter palavras-chave para ${name}`, kind: 'refactor', edit: { edits: [{ resource: model.uri, textEdit: { range: model.getFullModelRange(), text: t } }] } });
+        }
       }
       return { actions, dispose() {} };
     },

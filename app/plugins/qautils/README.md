@@ -65,7 +65,9 @@ No **+** do painel, no botão direito numa pasta (**Nova feature aqui…**) ou n
 - **Acima de cada cenário:** o status (**○ Não executado → ✓ Passou / ✗ Falhou / ⊘ Bloqueado**, com anotação), as **📷 Evidências** e **Copiar**, que copia o cenário em texto pronto para colar no chamado, com o resultado.
 - **Acima da funcionalidade:** o resumo da execução, o **Relatório de evidências** e o **Exportar CSV**.
 - **Autocompletar:**
-  - palavras-chave no idioma do arquivo;
+  - palavras-chave no idioma do arquivo; num arquivo novo, no idioma da configuração ou das features do projeto (sem features: **português**);
+  - em português: `Funcionalidade`, `Contexto`, `Cenário`, `Esquema do Cenário`, `Exemplos`, `Regra`, `Dado`/`Dada`/`Dados`/`Dadas`, `Quando`, `Então`, `E`, `Mas`. Dá para digitar sem acento (`cenario`, `entao`) ou o termo em inglês (`feat`, `scen`, `then`): a sugestão já vem em português;
+  - a primeira palavra-chave em português põe o `# language: pt` na primeira linha (sem ele o Cucumber lê o arquivo como inglês). Arquivo sem esse cabeçalho ganha um aviso, e **Alt+Enter** o adiciona;
   - cenário novo já com o próximo número (`CT006`);
   - os passos já escritos no projeto (os mais usados e os do mesmo tipo Dado/Quando/Então primeiro);
   - as step definitions, com os parâmetros para preencher;
@@ -74,6 +76,7 @@ No **+** do painel, no botão direito numa pasta (**Nova feature aqui…**) ou n
 - **Passo parecido:** quando um passo é quase igual a um padrão do projeto (outra grafia, um acento, uma palavra trocada), o editor avisa e **Alt+Enter** troca pelo padrão.
 - **Alt+Enter no cabeçalho da funcionalidade ou de um cenário:**
   - **mover os passos repetidos para o `Contexto`:** os que abrem todos os cenários do mesmo jeito; o primeiro passo que sobra vira "Quando/Então" se começava com "E";
+  - **converter as palavras-chave** para português ou inglês (Feature ↔ Funcionalidade, Given ↔ Dado...), sem mexer na descrição, nas tabelas nem nas docstrings (só no cabeçalho da funcionalidade);
   - **renumerar os cenários** (`CT001`, `CT002`… mantendo o prefixo e a largura);
   - **formatar e alinhar as tabelas**.
 - **Shift+Alt+F:** formata (recuo padrão, tabelas alinhadas, docstrings preservadas).
