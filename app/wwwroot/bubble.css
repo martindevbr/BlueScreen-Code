@@ -2,33 +2,26 @@
 .bb, .bb-menu, .bb-win { --bb-glass: color-mix(in srgb, var(--panel-2) 78%, transparent); --bb-edge: color-mix(in srgb, var(--fg) 11%, transparent);
   --bb-shadow: 0 18px 50px -14px rgba(0, 0, 0, .55), 0 4px 14px -6px rgba(0, 0, 0, .35); --bb-ease: cubic-bezier(.2, .9, .25, 1); }
 
-/* o balão: botão sólido na cor de destaque do tema, três linhas brancas que viram um X */
-.bb { position: fixed; left: 0; top: 0; z-index: 49; width: 52px; height: 52px; padding: 0; border-radius: 16px; display: grid; place-items: center;
-  color: #fff; cursor: grab; touch-action: none; user-select: none; border: 1px solid color-mix(in srgb, #fff 22%, transparent);
-  background: linear-gradient(145deg, color-mix(in srgb, #fff 14%, var(--accent-2)), var(--accent) 55%, color-mix(in srgb, #000 18%, var(--accent)));
-  box-shadow: 0 12px 28px -8px color-mix(in srgb, var(--accent) 75%, transparent), 0 3px 8px -2px rgba(0, 0, 0, .45),
-    inset 0 1px 0 color-mix(in srgb, #fff 35%, transparent), inset 0 -2px 0 color-mix(in srgb, #000 18%, transparent);
-  transition: transform .18s var(--bb-ease), box-shadow .25s, filter .2s, border-radius .3s var(--bb-ease); will-change: transform; }
+/* o balão: um botão médio, levemente tingido pela cor de destaque, fácil de achar sem chamar atenção demais */
+.bb { position: fixed; left: 0; top: 0; z-index: 49; width: 42px; height: 42px; padding: 0; border-radius: 12px; display: grid; place-items: center;
+  color: var(--accent); cursor: grab; touch-action: none; user-select: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--bb-edge)); background: color-mix(in srgb, var(--accent) 14%, var(--panel-2));
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, .5);
+  transition: transform .18s var(--bb-ease), background .2s, color .2s, border-color .2s; will-change: transform; }
 .bb[hidden] { display: none; }
-/* halo suave em volta, para o balão não sumir no fundo */
-.bb::after { content: ""; position: absolute; inset: -6px; border-radius: 20px; border: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); opacity: 0; pointer-events: none; animation: bb-halo 3.2s ease-out infinite; }
-@keyframes bb-halo { 0% { opacity: .9; transform: scale(.9); } 70%, 100% { opacity: 0; transform: scale(1.25); } }
-.bb.on::after, .bb.dragging::after { animation: none; }
-.bb:hover { filter: brightness(1.08); box-shadow: 0 16px 34px -8px color-mix(in srgb, var(--accent) 85%, transparent), 0 3px 8px -2px rgba(0, 0, 0, .45),
-    inset 0 1px 0 color-mix(in srgb, #fff 35%, transparent), inset 0 -2px 0 color-mix(in srgb, #000 18%, transparent); }
-.bb:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
-.bb.on { border-radius: 50%; filter: brightness(1.05); }
-.bb.dragging { transition: none; cursor: grabbing; filter: brightness(1.12); box-shadow: 0 26px 60px -12px color-mix(in srgb, var(--accent) 70%, transparent), 0 8px 18px rgba(0, 0, 0, .45); }
-.bb.springing { transition: transform .45s cubic-bezier(.34, 1.56, .64, 1), border-radius .3s; }
-.bb-burger { position: relative; width: 20px; height: 14px; display: block; }
-.bb-burger i { position: absolute; left: 0; width: 100%; height: 2px; border-radius: 2px; background: currentColor; transition: transform .32s var(--bb-ease), opacity .2s, width .3s var(--bb-ease), top .32s var(--bb-ease); }
-.bb-burger i:nth-child(1) { top: 0; } .bb-burger i:nth-child(2) { top: 6px; width: 70%; } .bb-burger i:nth-child(3) { top: 12px; }
-.bb:hover .bb-burger i:nth-child(2) { width: 100%; }
-.bb.on .bb-burger i:nth-child(1) { top: 6px; transform: rotate(45deg); }
-.bb.on .bb-burger i:nth-child(2) { opacity: 0; transform: translateX(-6px); }
-.bb.on .bb-burger i:nth-child(3) { top: 6px; transform: rotate(-45deg); }
+.bb:hover, .bb.on, .bb.dragging, .bb:focus-visible { background: color-mix(in srgb, var(--accent) 24%, var(--panel-2)); border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+.bb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bb.on { color: var(--accent); }
+.bb.dragging { transition: none; cursor: grabbing; }
+.bb.springing { transition: transform .45s cubic-bezier(.34, 1.56, .64, 1); }
+.bb-burger { position: relative; width: 16px; height: 12px; display: block; }
+.bb-burger i { position: absolute; left: 0; width: 100%; height: 2px; border-radius: 2px; background: currentColor; transition: transform .25s var(--bb-ease), opacity .2s, top .25s var(--bb-ease); }
+.bb-burger i:nth-child(1) { top: 0; } .bb-burger i:nth-child(2) { top: 5px; } .bb-burger i:nth-child(3) { top: 10px; }
+.bb.on .bb-burger i:nth-child(1) { top: 5px; transform: rotate(45deg); }
+.bb.on .bb-burger i:nth-child(2) { opacity: 0; }
+.bb.on .bb-burger i:nth-child(3) { top: 5px; transform: rotate(-45deg); }
 .bb.gulp { animation: bb-gulp .45s var(--bb-ease); }
-@keyframes bb-gulp { 40% { scale: 1.14; } }
+@keyframes bb-gulp { 40% { scale: 1.08; } }
 /* trabalhando: um anel do destaque girando em volta */
 .bb.busy::before { content: ""; position: absolute; inset: -3px; border-radius: inherit; padding: 2px;
   background: conic-gradient(from var(--bb-a, 0deg), transparent 0 60%, var(--accent), var(--accent-2), transparent);
@@ -36,7 +29,7 @@
   animation: bb-spin 1.1s linear infinite; }
 @property --bb-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
 @keyframes bb-spin { to { --bb-a: 360deg; } }
-.bb-badge { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border-radius: 50%; background: #ff5d73; box-shadow: 0 0 0 2px var(--bg); }
+.bb-badge { position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%; background: #ff5d73; box-shadow: 0 0 0 2px var(--bg); }
 .bb-badge[hidden] { display: none; }
 
 /* a lista de janelas */

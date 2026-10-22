@@ -8,7 +8,7 @@ Cria e altera plugins do BlueScreen conversando com uma IA de linha de comando, 
 2. Escolha a IA no topo: **Claude Code**, **Gemini CLI** ou **Codex CLI**.
 3. Em **Novo plugin…**, descreva o que você quer. O nome é opcional: em branco, a IA escolhe um nome curto e o IAMaker renomeia a pasta para combinar. Para mudar um plugin que já existe, escolha ele na lista ou clique no ✦ (**Editar com o IAMaker**) no cartão dele, na aba Plugins.
 4. A IA avisa onde o componente vai aparecer: balão flutuante, barra de status, barra da esquerda, painel de baixo, resumo do projeto... Esse lugar mostra um carregamento enquanto ela trabalha.
-5. Quando ela termina, o IAMaker confere o plugin e carrega ele na IDE aberta, **sem recarregar a página**: o que você tinha aberto continua como estava. O componente aparece no lugar com um brilho e faíscas, e uma janela nova no balão já abre.
+5. Quando ela termina, o IAMaker confere o plugin e carrega ele na IDE aberta, **sem recarregar a página**: o que você tinha aberto continua como estava. O componente aparece no lugar com um contorno de destaque rápido, e uma janela nova no balão já abre.
 
 Peça mudanças na mesma conversa ("deixe o texto verde", "acrescente um atalho"). Cada plugin tem a sua conversa, guardada na pasta de dados do IAMaker. O ＋ no topo começa uma conversa nova e o plugin continua como está.
 

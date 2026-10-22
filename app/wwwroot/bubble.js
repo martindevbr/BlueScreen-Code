@@ -12,7 +12,7 @@
   const MIN = '<svg class="i" viewBox="0 0 24 24"><path d="M6 12h12"/></svg>';
   const MAX = '<svg class="i" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>';
   const RESTORE = '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="8" width="12" height="12" rx="2"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/></svg>';
-  const SIZE = 52, EDGE = 12, SNAP = 48, MINW = 300, MINH = 220, TOP = 44, BOTTOM = 30;
+  const SIZE = 42, EDGE = 12, SNAP = 48, MINW = 300, MINH = 220, TOP = 44, BOTTOM = 30;
   const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   document.body.insertAdjacentHTML('beforeend', `

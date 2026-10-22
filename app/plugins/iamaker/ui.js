@@ -253,12 +253,10 @@ setInterval(() => {
   $('#iam-state').title = `${AIS[M.run.ai].name} trabalhando há ${t}`;
 }, 1000);
 
-// ----- o lugar: carregamento enquanto a IA trabalha, revelação quando o plugin carrega -----
+// ----- o lugar: um marcador discreto enquanto a IA trabalha, um destaque rápido quando o plugin carrega -----
 const G = { els: [], place: null };
 function ghost(place) {
-  // a moldura da IDE continua a mesma (recriar reiniciaria a animação); o resto é refeito
-  const keep = G.aura && G.aura.isConnected && G.place === place ? G.aura : null;
-  unghost(keep); G.place = place;
+  unghost(); G.place = place;
   const add = (el) => { G.els.push(el); return el; };
   const mk = (tag, cls, html) => { const e = document.createElement(tag); e.className = cls; e.innerHTML = html; return add(e); };
   if (place === 'status' && $('#stDirty')) $('#stDirty').before(mk('span', 's iam-ghost iam-ghost-st', `${ICO.spark}<span>criando…</span>`));
@@ -267,165 +265,55 @@ function ghost(place) {
     const g = mk('div', 'iam-ghost iam-ghost-tool', ICO.spark); g.title = 'O IAMaker está criando este painel';
     if (place === 'esquerda') grow.before(g); else grow.after(g);
   }
-  // no balão: um item "criando…" na lista de janelas, e o balão com o anel girando
+  // no balão: um item "criando…" na lista de janelas
   if (place === 'balao') add(bs.bubble.placeholder('Janela nova'));
-  // a IDE inteira (ou o editor): moldura de luz, a planta sendo revelada e as peças chegando
-  if (place === 'outro' || place === 'editor') { if (keep) { G.aura = keep; add(keep); } else add(aura(place)); }
+  // a IDE inteira (ou o editor): só um aviso pequeno embaixo, com o passo atual e o tempo
+  if (place === 'outro' || place === 'editor') G.aura = add(mk('div', 'iam-aura', `${ICO.spark}<span class="iam-aura-tx">Montando ${esc(IN[place] || 'na IDE')}</span><span class="iam-aura-step"></span><span class="iam-aura-t"></span>`));
+  if (G.aura) { G.aura.setAttribute('aria-hidden', 'true'); document.body.appendChild(G.aura); fitAura(); }
   const card = document.querySelector('[data-card]');
   if (place === 'resumo' && card) card.parentElement.appendChild(mk('div', 'iam-ghost iam-ghost-card', '<i></i><i></i><i></i>'));
   // na conversa, sempre: "Montando na barra de status…"
   log.insertAdjacentElement('beforeend', mk('div', 'iam-m iam-build', `${ICO.spark}<span>Montando ${esc(IN[place] || 'na IDE')}…</span>`)); log.scrollTop = log.scrollHeight;
 }
-function unghost(keep) { G.els.forEach(e => { if (e !== keep) e.remove(); }); G.els = []; G.place = null; G.aura = null; }
-
-// ----- a IDE em construção (lugar "outro" ou "editor"). Nada bloqueia o clique: é só luz por cima -----
-// uma moldura que percorre a borda, uma linha que desce revelando uma grade de planta, dois brilhos que flutuam e,
-// embaixo, o andamento ("Montando na IDE · Escreveu ui.js · 0:52"); cada arquivo escrito vira uma peça que entra nele
-function aura(place) {
-  const el = document.createElement('div');
-  el.className = 'iam-aura' + (place === 'editor' ? ' iam-aura-ed' : '');
-  el.setAttribute('aria-hidden', 'true');
-  const whole = place !== 'editor';
-  el.innerHTML = `${whole ? '<canvas class="iam-rain"></canvas><div class="iam-wires"></div>' : ''}<div class="iam-aura-frame"></div><div class="iam-aura-glow g1"></div><div class="iam-aura-glow g2"></div>
-    <div class="iam-aura-scan"></div><div class="iam-aura-grid"></div>
-    <div class="iam-aura-tick"><span class="iam-aura-ic">${ICO.spark}</span><span class="iam-aura-tx">Montando ${esc(IN[place] || 'na IDE')}</span><span class="iam-aura-step"></span>
-      <span class="iam-aura-bar"><i></i></span><span class="iam-aura-n"></span><span class="iam-aura-t"></span></div>`;
-  document.body.appendChild(el);
-  G.aura = el; G.steps = 0; fitAura();
-  if (whole) { wires(el.querySelector('.iam-wires')); rain(el.querySelector('.iam-rain')); }
-  return el;
-}
-// as áreas da IDE que ganham contorno de obra (e que "travam" no fim)
-const AREAS = ['#top', '#strip', '#tool', '#editor', '#dock', '.dk-region', '#status'];
-function areas() {
-  return AREAS.flatMap(sel => [...document.querySelectorAll(sel)]).filter(e => !e.hidden && e.offsetParent !== null)
-    .map(e => e.getBoundingClientRect()).filter(r => r.width > 24 && r.height > 16);
-}
-// um contorno tracejado que anda e quatro cantoneiras por área; lock = o encaixe do fim, um depois do outro
-function wires(box, lock) {
-  if (!box) return;
-  box.innerHTML = areas().map((r, i) => `<div class="iam-wire${lock ? ' lock' : ''}" style="left:${r.left + 2}px;top:${r.top + 2}px;width:${r.width - 4}px;height:${r.height - 4}px;--i:${i}"><b></b><b></b><b></b><b></b></div>`).join('');
-}
-// chuva de código bem fraca, só pelas bordas (o meio fica limpo: a máscara do CSS)
-function rain(cv) {
-  if (!cv || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const TOK = '{}()<>=;:.,[]+-*/&|!?$#%@'.split('').concat(['const', 'let', '=>', 'bs', 'plugin', 'await', 'async', 'ui.js', 'css', 'fn', '0', '1', '✦']);
-  const ctx = cv.getContext('2d'), F = 14;
-  let cols = [], last = 0, color = getComputedStyle(document.documentElement).getPropertyValue('--accent-2').trim() || '#6CA2FF';
-  const size = () => {
-    const d = devicePixelRatio || 1; cv.width = innerWidth * d; cv.height = innerHeight * d; cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
-    ctx.setTransform(d, 0, 0, d, 0, 0); ctx.font = `${F}px "JetBrains Mono", Consolas, monospace`;
-    cols = Array.from({ length: Math.ceil(innerWidth / 22) }, () => ({ y: -Math.random() * innerHeight, v: 40 + Math.random() * 90, t: TOK[(Math.random() * TOK.length) | 0] }));
-  };
-  size(); addEventListener('resize', size);
-  const tick = (now) => {
-    if (!cv.isConnected) { removeEventListener('resize', size); return; }
-    requestAnimationFrame(tick);
-    if (now - last < 33) return; // ~30 quadros por segundo bastam
-    const dt = Math.min(0.1, (now - last) / 1000); last = now;
-    ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.globalCompositeOperation = 'destination-out'; ctx.fillRect(0, 0, innerWidth, innerHeight);
-    ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = color;
-    cols.forEach((c, i) => {
-      c.y += c.v * dt;
-      if (c.y > innerHeight + 20) { c.y = -20 - Math.random() * 200; c.v = 40 + Math.random() * 90; }
-      if (Math.random() < 0.08) c.t = TOK[(Math.random() * TOK.length) | 0];
-      ctx.globalAlpha = 0.55; ctx.fillText(c.t, i * 22 + 4, c.y);
-    });
-    ctx.globalAlpha = 1;
-  };
-  requestAnimationFrame(tick);
-}
-// a versão do editor acompanha o tamanho dele
+function unghost() { G.els.forEach(e => e.remove()); G.els = []; G.place = null; G.aura = null; }
+// o aviso fica embaixo do editor (lugar "editor") ou da janela
 function fitAura() {
   const el = G.aura; if (!el) return;
-  if (!el.classList.contains('iam-aura-ed')) { const w = el.querySelector('.iam-wires'); if (w && w.children.length !== areas().length) wires(w); return; }
-  const r = $('#editor').getBoundingClientRect();
-  Object.assign(el.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+  const r = (G.place === 'editor' && $('#editor') ? $('#editor') : document.documentElement).getBoundingClientRect();
+  Object.assign(el.style, { left: (r.left + r.width / 2) + 'px', top: (r.bottom - 44) + 'px' });
 }
-// um passo da IA: o texto do andamento muda e uma peça com o nome do arquivo voa até ele
+// um passo da IA: o texto do aviso muda
 function auraStep(text) {
-  const el = G.aura; if (!el || !text) return;
-  const step = el.querySelector('.iam-aura-step'), tick = el.querySelector('.iam-aura-tick');
-  step.textContent = text; step.classList.remove('in'); void step.offsetWidth; step.classList.add('in');
-  G.steps = (G.steps || 0) + 1;
-  const n = el.querySelector('.iam-aura-n'); if (n) n.textContent = G.steps + (G.steps === 1 ? ' passo' : ' passos');
-  const bar = el.querySelector('.iam-aura-bar i'); if (bar) bar.style.width = Math.round(92 * (1 - Math.exp(-G.steps / 3))) + '%';
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const tr = tick.getBoundingClientRect(), box = el.getBoundingClientRect();
-  const piece = document.createElement('div'); piece.className = 'iam-aura-piece';
-  piece.innerHTML = `${ICO.tool}<span>${esc(text)}</span>`;
-  // nasce num ponto acima do andamento, de um lado ou do outro, e voa até ele
-  const sx = (Math.random() < 0.5 ? -1 : 1) * (120 + Math.random() * Math.min(320, box.width / 3)), sy = -(70 + Math.random() * Math.min(220, box.height / 3));
-  piece.style.left = (tr.left + tr.width / 2 - box.left) + 'px'; piece.style.top = (tr.top - box.top) + 'px';
-  piece.style.setProperty('--sx', sx.toFixed(0) + 'px'); piece.style.setProperty('--sy', sy.toFixed(0) + 'px');
-  el.appendChild(piece);
-  setTimeout(() => { tick.classList.remove('gulp'); void tick.offsetWidth; tick.classList.add('gulp'); }, 1050);
-  setTimeout(() => piece.remove(), 1400);
+  const step = G.aura && G.aura.querySelector('.iam-aura-step');
+  if (step && text) step.textContent = text;
 }
-// o fim: uma onda de luz sai do centro e atravessa a IDE (ou o editor), com uma explosão de faíscas
-function wave(target) {
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const r = (target || document.documentElement).getBoundingClientRect();
-  const w = document.createElement('div'); w.className = 'iam-wave';
-  Object.assign(w.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
-  const big = Math.hypot(r.width, r.height);
-  w.style.setProperty('--r', big + 'px');
-  let html = '<b class="iam-wave-ring"></b><b class="iam-wave-ring r2"></b><b class="iam-wave-flash"></b><div class="iam-wave-fx">';
-  for (let i = 0, n = 34; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + Math.random() * 0.3, d = 80 + Math.random() * Math.min(420, big / 4);
-    html += `<i style="--dx:${(Math.cos(a) * d).toFixed(0)}px;--dy:${(Math.sin(a) * d).toFixed(0)}px;--d:${(Math.random() * 0.25).toFixed(2)}s;--s:${(0.7 + Math.random() * 1.2).toFixed(2)}"></i>`;
-  }
-  w.innerHTML = html + '</div>';
-  document.body.appendChild(w);
-  setTimeout(() => w.remove(), 1800);
-}
-// a barra da esquerda e a conversa são redesenhadas às vezes: o carregamento volta para o lugar
+// a barra da esquerda e a conversa são redesenhadas às vezes: o marcador volta para o lugar
 const reghost = () => { if (M.run && G.place && G.els.some(e => !e.isConnected)) ghost(G.place); };
 
-// brilho e faíscas em volta de um elemento que acabou de aparecer
+// um contorno de destaque que some sozinho em volta de um elemento que acabou de aparecer
 function magic(el) {
   if (!el || !el.isConnected) return;
-  const r = el.getBoundingClientRect(); if (!r.width && !r.height) return;
   el.classList.remove('iam-magic'); void el.offsetWidth; el.classList.add('iam-magic');
-  setTimeout(() => el.classList.remove('iam-magic'), 1500);
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const fx = document.createElement('div'); fx.className = 'iam-fx';
-  fx.style.left = (r.left + r.width / 2) + 'px'; fx.style.top = (r.top + r.height / 2) + 'px';
-  fx.style.setProperty('--w', Math.max(r.width, 26) + 'px'); fx.style.setProperty('--h', Math.max(r.height, 26) + 'px');
-  const big = Math.min(Math.max(r.width, r.height), 400) / 3;
-  let html = '<b class="iam-ring"></b>';
-  for (let i = 0, n = 18; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + Math.random() * 0.5, d = 24 + Math.random() * 40 + big;
-    html += `<i style="--dx:${(Math.cos(a) * d).toFixed(1)}px;--dy:${(Math.sin(a) * d).toFixed(1)}px;--d:${(Math.random() * 0.18).toFixed(2)}s;--s:${(0.6 + Math.random() * 0.9).toFixed(2)}"></i>`;
-  }
-  fx.innerHTML = html; document.body.appendChild(fx);
-  setTimeout(() => fx.remove(), 1700);
+  setTimeout(() => el.classList.remove('iam-magic'), 1300);
 }
 
 // depois de carregar: o núcleo sabe o que o plugin registrou (bs.plugins.owned): itens de status, painéis, ferramentas
-// da barra, do balão e cards. Abre o painel novo, se for o lugar dele, e faz cada um aparecer com brilho
+// da barra, do balão e cards. Abre o painel novo, se for o lugar dele, e destaca cada um
 async function reveal(id, place) {
   const o = (bs.plugins.owned || {})[id] || {};
   const tools = o.tools || [], bubbles = o.bubbles || [];
   if (place === 'esquerda' || place === 'baixo') tools.forEach(t => { try { bs.openTool(t); } catch {} });
-  // janela nova no balão: abre (saindo do balão) e fica na frente
+  // janela nova no balão: abre e fica na frente
   if (bubbles.length && (place === 'balao' || !tools.length)) bubbles.forEach(b => bs.bubble.open(b));
   await new Promise(r => setTimeout(r, 200));
   const els = [...(o.els || [])];
   tools.forEach(t => { const b = document.querySelector(`#strip [data-tool="${CSS.escape(t)}"]`); if (b) els.push(b); });
   bubbles.forEach(b => { const w = bs.bubble.windowOf(b); if (w && bs.bubble.isOpen(b)) els.push(w); });
   (o.cards || []).forEach(c => { const e = document.querySelector(`[data-card="${CSS.escape(c.id)}"]`); if (e) els.push(e); });
-  // ferramenta nova no balão fechado: quem brilha é o próprio balão
+  // ferramenta nova no balão fechado: quem é destacado é o próprio balão
   if (bubbles.length && !bubbles.some(b => bs.bubble.isOpen(b))) els.push(bs.bubble.button);
   const seen = [...new Set(els)].filter(e => e && e.isConnected && !e.hidden && e.getClientRects().length);
-  // a IDE inteira (ou nada para apontar): a onda de luz; senão, o brilho em cada coisa nova
-  if (place === 'outro' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const box = document.createElement('div'); box.className = 'iam-wires iam-lockin'; document.body.appendChild(box);
-    wires(box, true); setTimeout(() => box.remove(), 1600);
-    await new Promise(r => setTimeout(r, 520));
-  }
-  if (place === 'outro' || place === 'editor' || !seen.length) wave(place === 'editor' ? $('#editor') : null);
-  seen.forEach((e, i) => setTimeout(() => magic(e), 250 + i * 170));
+  seen.forEach(magic);
   return seen.length;
 }
 

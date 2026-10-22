@@ -2,7 +2,7 @@
   "id": "iamaker",
   "name": "IAMaker",
   "description": "Cria e altera plugins do BlueScreen conversando com uma IA (Claude Code, Gemini CLI ou Codex CLI), sem compilar. Fica no balão flutuante (Alt+0): você descreve o que quer, a IA escreve o plugin na sua pasta de plugins e ele aparece na IDE aberta, sem recarregar a página. Confere o plugin antes de carregar e pede a correção sozinha quando o código tem erro.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "BlueScreen",
   "icon": "icon.svg",
   "order": 40,
