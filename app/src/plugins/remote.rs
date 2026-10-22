@@ -155,19 +155,21 @@ async fn install(server: &str, id: &str, version: Option<&str>) -> Result<Value,
 }
 
 /// Remove da pasta do usuário um plugin instalado (o do app, se houver, volta a valer).
-fn uninstall(id: &str) -> Result<(), String> {
+/// Remove um plugin da pasta do usuário mandando a pasta para a Lixeira (dá para restaurar). Com `data`, a pasta de
+/// dados (~/.bluescreen/plugin-data/<id>: atributos, tokens, configurações, arquivos) vai junto.
+fn uninstall(id: &str, data: bool) -> Result<(), String> {
     let p = host().get().list.iter().find(|p| p.id == id).cloned().ok_or(format!("plugin desconhecido: {id}"))?;
-    if !p.user { return Err("este plugin vem com o BlueScreen; dá para desligar, não para desinstalar".into()); }
+    if !p.user { return Err("este plugin vem com o BlueScreen; dá para desligar, não para remover".into()); }
     host().unload(id);
-    let trash = user_dir().join("plugin-staging").join(format!("{id}-del-{}", stamp()));
-    let _ = std::fs::create_dir_all(trash.parent().unwrap_or(Path::new(".")));
-    let mut res = Err(std::io::Error::other("?"));
-    for _ in 0..30 { res = std::fs::rename(&p.path, &trash); if res.is_ok() { break; } std::thread::sleep(Duration::from_millis(100)); }
-    let _ = std::fs::remove_dir_all(&trash);
-    let _ = std::fs::remove_dir(user_dir().join("plugin-staging")); // só sai se ficou vazia
+    // o servidor do plugin pode levar um instante para soltar os arquivos depois de encerrado
+    let mut res = Err(String::from("?"));
+    for _ in 0..30 { res = crate::server::to_trash(&[Path::new(&p.path).to_path_buf()]); if res.is_ok() { break; } std::thread::sleep(Duration::from_millis(100)); }
+    let dir = super::data::dir(id);
+    let data_res = if data && res.is_ok() && dir.exists() { crate::server::to_trash(&[dir]) } else { Ok(()) };
     host().load();
     *LAST.lock() = None;
-    res.map_err(|e| format!("não deu para remover {}: {e}", p.path))
+    res.map_err(|e| format!("não deu para remover {}: {e}", p.path))?;
+    data_res.map_err(|e| format!("o plugin foi para a Lixeira, mas os dados não: {e}"))
 }
 
 pub fn routes() -> Vec<(&'static str, RouteFn)> {
@@ -208,7 +210,8 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             r.local_only()?;
             let b: Value = r.body_json()?;
             let id = b["id"].as_str().unwrap_or("").to_string();
-            tokio::task::spawn_blocking(move || uninstall(&id)).await.map_err(|e| fail(e.to_string(), 500))?.map_err(|e| fail(e, 400))?;
+            let data = b["data"].as_bool().unwrap_or(false);
+            tokio::task::spawn_blocking(move || uninstall(&id, data)).await.map_err(|e| fail(e.to_string(), 500))?.map_err(|e| fail(e, 400))?;
             ok(json!({ "removed": true }))
         })),
     ]

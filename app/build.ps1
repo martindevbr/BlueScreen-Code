@@ -11,7 +11,7 @@ Set-Location $PSScriptRoot
 function Copy-Plugin([string]$id, [string]$dest) {
   $src = Join-Path $PSScriptRoot "plugins\$id"
   New-Item -ItemType Directory -Force $dest | Out-Null
-  foreach ($f in 'plugin.json', 'ui.js', 'style.css', 'icon.svg', 'icon.png') { if (Test-Path "$src\$f") { Copy-Item "$src\$f" $dest } }
+  foreach ($f in 'plugin.json', 'ui.js', 'style.css', 'icon.svg', 'icon.png', 'GUIA.md') { if (Test-Path "$src\$f") { Copy-Item "$src\$f" $dest } }
   # plugin com servidor próprio: o programa vira server.exe na pasta do plugin
   $exe = Join-Path $PSScriptRoot "target\release\bluescreen-$id.exe"
   if (Test-Path "$src\Cargo.toml") { Copy-Item $exe (Join-Path $dest 'server.exe') }

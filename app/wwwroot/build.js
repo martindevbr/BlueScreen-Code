@@ -271,14 +271,68 @@ function bcLineHtml(l, idx) {
   });
   return `<div class="bl ${cls}" data-i="${idx}">${html || '&nbsp;'}</div>`;
 }
+// linhas do próprio BlueScreen (cabeçalho, "===== passo", "$ comando") e a saída dos passos de preparo (javac, mvn...)
+// ficam recolhidas num bloco por passo, como os detalhes do build no IntelliJ: à vista fica a saída do programa e o
+// resultado. Bloco com erro ou aviso, ou o passo que falhou, abre sozinho.
+const BC_STEP = /^\[BlueScreen\] ===== passo (\d+)\/(\d+): (.*?) =====\s*$/;
+const BC_END = /^\[BlueScreen\] (Concluído com sucesso|Falhou|Interrompido)\b/;
+const BC_BAD = /^\[BlueScreen\] (Falha ao iniciar|.+ não encontrado\.)/;
+function bcFold(out, kind, sum, title) {
+  const g = document.createElement('details');
+  g.className = 'bgrp ' + kind + (kind === 'step' || kind === 'head' ? ' live' : '');
+  g.innerHTML = `<summary title="${esc(title || '')}"><span class="gst"></span>${sum}<span class="gn"></span></summary><div class="bgb"></div>`;
+  out.appendChild(g);
+  return { g, body: g.lastElementChild, kind, n: 0 };
+}
+function bcFoldDone(F, cur) {
+  if (!cur) return;
+  if (cur.kind !== 'head') cur.g.classList.remove('live'); // o passo do programa segue "rodando" até a execução acabar
+  cur.g.querySelector('.gn').textContent = cur.n ? cur.n + (cur.n === 1 ? ' linha' : ' linhas') : '';
+  if (F.g === cur) F.g = null;
+}
 function bcAppend(from) {
   const r = BC.run; const out = $('#bcOut'); if (!r || !out) return;
   const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 30;
-  const lines = r.lines; let html = '';
+  const lines = r.lines;
   const start = Math.max(from, lines.length - 8000); // DOM: no máximo as últimas 8000 linhas
-  if (from === 0 && start > 0) html += `<div class="bl bs">… ${start} linhas anteriores ocultas (use Copiar para ver tudo)</div>`;
-  for (let k = start; k < lines.length; k++) { if (BC.view === 'issues' && !/err|warn|ok|step/.test(bcClass(lines[k]))) continue; html += bcLineHtml(lines[k], k); }
-  if (from === 0) out.innerHTML = html; else { $('#bcPrompt')?.remove(); out.insertAdjacentHTML('beforeend', html); }
+  const issues = BC.view === 'issues', fold = r.kind === 'local' && !issues;
+  if (from === 0) { out.innerHTML = start > 0 ? `<div class="bl bs">… ${start} linhas anteriores ocultas (use Copiar para ver tudo)</div>` : ''; r.fold = { g: null, last: null, began: false }; }
+  else $('#bcPrompt')?.remove();
+  const F = r.fold || (r.fold = { g: null, last: null, began: false });
+  // junta o HTML e só escreve no DOM quando o destino (solto ou dentro de um bloco) muda
+  let buf = '', tgt = out;
+  const flush = () => { if (buf) tgt.insertAdjacentHTML('beforeend', buf); buf = ''; };
+  const to = (el) => { if (el !== tgt) { flush(); tgt = el; } };
+  const open = (cur) => { if (cur) { cur.g.open = true; cur.g.classList.add('bad'); } };
+  for (let k = start; k < lines.length; k++) {
+    const l = lines[k], cls = bcClass(l);
+    if (issues) { if (/err|warn|ok|step/.test(cls)) buf += bcLineHtml(l, k); continue; }
+    if (!fold) { buf += bcLineHtml(l, k); continue; }
+    let m;
+    if ((m = BC_STEP.exec(l))) {
+      bcFoldDone(F, F.g); flush();
+      const label = m[3], prog = (label.split(/\s+/)[0] || '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '');
+      // último passo é o programa: recolhe só o comando; os de antes (compilar, empacotar) recolhem inteiros
+      F.g = F.last = bcFold(out, +m[1] === +m[2] ? 'head' : 'step', `<span class="gp">passo ${m[1]}/${m[2]}</span><b>${esc(prog)}</b><span class="gl">${esc(label.slice(label.indexOf(prog) + prog.length).replace(/^\.(exe|cmd|bat)/i, ''))}</span>`, label);
+      F.began = true; tgt = F.g.body; continue;
+    }
+    if (BC_END.test(l)) {
+      bcFoldDone(F, F.g); to(out);
+      if (!/^\[BlueScreen\] Concluído/.test(l)) open(F.last);
+      buf += bcLineHtml(l, k); continue;
+    }
+    // cabeçalho do BlueScreen antes do primeiro passo (o que roda, pasta, Maven/JDK)
+    if (!F.began && cls === 'bs') { flush(); F.g = bcFold(out, 'pre', `<b>${esc(l.replace(/^\[BlueScreen\]\s*/, ''))}</b>`, ''); F.began = true; tgt = F.g.body; }
+    F.began = true;
+    const blank = !l.trim();
+    if (F.g && F.g.kind !== 'step' && !blank && cls !== 'bs' && cls !== 'cmd') bcFoldDone(F, F.g);
+    if (F.g) { to(F.g.body); F.g.n += blank ? 0 : 1; if (cls === 'err' || cls === 'warn' || BC_BAD.test(l)) open(F.g); }
+    else to(out);
+    buf += bcLineHtml(l, k);
+  }
+  flush();
+  if (F.g) F.g.g.querySelector('.gn').textContent = F.g.n ? F.g.n + (F.g.n === 1 ? ' linha' : ' linhas') : '';
+  if (fold && r.status && r.status !== 'running') { bcFoldDone(F, F.g); out.querySelectorAll('.bgrp.live').forEach(g => g.classList.remove('live')); }
   if (stick || from === 0) out.scrollTop = out.scrollHeight;
 }
 // resumo do build: resultado, módulos, erros de compilação, dependências faltando, testes

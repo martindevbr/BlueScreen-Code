@@ -14,7 +14,9 @@ const GROUPS = [
   ['Estados', [['add', 'Adicionado / sucesso'], ['mod', 'Modificado'], ['del', 'Removido / erro'], ['warn', 'Aviso'], ['unk', 'Desconhecido']]],
   ['Ícones', [['ico', 'Pasta e arquivo'], ['ico-src', 'Código-fonte'], ['ico-test', 'Testes'], ['ico-res', 'Resources'], ['ico-web', 'Web'], ['j-class', 'Classe'], ['j-int', 'Interface'], ['j-enum', 'Enum'], ['j-exc', 'Exceção']]],
 ];
-const SYNTAX = [['comment', 'Comentários'], ['keyword', 'Palavras-chave'], ['string', 'Textos'], ['number', 'Números'], ['type', 'Tipos'], ['function', 'Variáveis e membros'], ['annotation', 'Anotações'], ['tag', 'Tags (HTML/XML)'], ['attr', 'Atributos'], ['delimiter', 'Pontuação'], ['plain', 'Código comum']];
+const SYNTAX = [['plain', 'Código comum'], ['comment', 'Comentários'], ['doc', 'Documentação (/** */, docstring)'], ['keyword', 'Palavras-chave'], ['string', 'Textos'], ['escape', 'Escapes e formatação (\\n, %s)'], ['number', 'Números'],
+  ['constant', 'Constantes e enums'], ['type', 'Tipos e classes'], ['fn', 'Declaração de função'], ['call', 'Chamada de função'], ['field', 'Campos e propriedades'], ['function', 'Variáveis'], ['param', 'Parâmetros'],
+  ['annotation', 'Anotações e macros'], ['tag', 'Tags (HTML/XML)'], ['attr', 'Atributos'], ['key', 'Chaves (JSON/YAML/TOML)'], ['regexp', 'Expressões regulares'], ['operator', 'Operadores'], ['delimiter', 'Pontuação']];
 const UI_FONTS = ['IBM Plex Sans', 'Segoe UI Variable Text', 'Segoe UI', 'Inter', 'Bahnschrift', 'Calibri', 'Verdana', 'Tahoma', 'Arial', 'system-ui'];
 const CODE_FONTS = ['JetBrains Mono', 'Cascadia Code', 'Cascadia Mono', 'Fira Code', 'Source Code Pro', 'Consolas', 'Lucida Console', 'Courier New'];
 
@@ -48,6 +50,27 @@ const PRESETS = [
     { comment: '#9AE6B4', keyword: '#4DC3FF', string: '#FFD866', number: '#E59BFF', type: '#3DFF7A', function: '#FFFFFF', annotation: '#FFB000', tag: '#4DC3FF', attr: '#FFD866', delimiter: '#FFFFFF', plain: '#FFFFFF' },
     { shape: { radius: 4, gap: 4 } }),
 ];
+// paleta completa de cada predefinição: além das 11 cores de base, declaração x chamada de função, campos, constantes,
+// parâmetros, documentação, escapes, chaves de dados, regex e operadores. Harmonizadas por matiz: palavra-chave quente,
+// texto verde, número frio, tipo dourado, função azul, membro orquídea; os parênteses por nível saem destas cores
+const RICH = {
+  bluescreen: { plain: '#C4C9D4', comment: '#687083', doc: '#7D8BA6', keyword: '#EE9B72', string: '#8FCB8F', escape: '#F2A7C3', number: '#5CC8D8', constant: '#C79BF0', type: '#E9C37E', fn: '#5FB2FF', call: '#A8CBF2', field: '#DA9DDB', function: '#C4C9D4', param: '#DCC6A8', annotation: '#C3D27A', tag: '#E9C37E', attr: '#DA9DDB', key: '#DA9DDB', regexp: '#6FD6C2', operator: '#B5BCC8', delimiter: '#8C93A1' },
+  'bluescreen-claro': { plain: '#1F2430', comment: '#8B92A0', doc: '#6A7C96', keyword: '#B4461E', string: '#2E7D32', escape: '#B3306D', number: '#0A7FA3', constant: '#7A3EC2', type: '#946200', fn: '#1B5FD6', call: '#3767A6', field: '#8B2FA0', function: '#1F2430', param: '#7A5A35', annotation: '#6F7D0A', tag: '#946200', attr: '#8B2FA0', key: '#8B2FA0', regexp: '#0E7C6B', operator: '#3C4350', delimiter: '#5D6472' },
+  'meia-noite': { plain: '#D6D2F0', doc: '#8A84B8', escape: '#89DDFF', constant: '#FFB38A', fn: '#82AAFF', call: '#A9C1FF', field: '#FF9CAC', function: '#D6D2F0', param: '#E8C9A0', key: '#C792EA', regexp: '#89DDFF', operator: '#89DDFF' },
+  floresta: { doc: '#7A9283', escape: '#E6C46A', constant: '#E8B489', fn: '#7FC4E0', call: '#B4D6E3', field: '#D9A6C9', function: '#D2DED5', param: '#E3CFA6', key: '#8DC5B8', regexp: '#9FD4B8', operator: '#B7C7BB' },
+  aurora: { doc: '#6A9AA0', escape: '#FFC857', constant: '#FFA98A', fn: '#7CC4FF', call: '#B2DCFF', field: '#C9A7FF', function: '#D2EEEF', param: '#F0D6A8', key: '#5EE6DA', regexp: '#FFB86B', operator: '#9FD0D4' },
+  grafite: { type: '#4EC9B0', doc: '#8A8A8A', escape: '#D7BA7D', constant: '#C8A2FF', fn: '#DCDCAA', call: '#E6E1B8', field: '#9CDCFE', function: '#D4D4D4', param: '#C6C6C6', key: '#9CDCFE', regexp: '#D16969', operator: '#C8C8C8' },
+  cafe: { doc: '#9A8574', escape: '#E8B04B', constant: '#EFC27E', fn: '#8FB8DE', call: '#BDD2E6', field: '#E6A3A3', function: '#E3D4C6', param: '#E9C9A8', key: '#C9A0DC', regexp: '#9FC7B4', operator: '#C4B2A2' },
+  papel: { doc: '#7E8A6E', escape: '#B0471E', constant: '#B0471E', fn: '#0F7A6E', call: '#3B6F68', field: '#8E3B6B', function: '#2B2620', param: '#6E5530', key: '#8E3B6B', regexp: '#2E7C8C', operator: '#4E463B' },
+  solar: { doc: '#8FA1A3', escape: '#DC322F', constant: '#DC322F', fn: '#268BD2', call: '#4A8FC2', field: '#6C71C4', function: '#586E75', param: '#8A7A4A', key: '#6C71C4', regexp: '#CB4B16', operator: '#657B83' },
+  contraste: { doc: '#B4F0CC', escape: '#FF9E64', constant: '#E59BFF', fn: '#FF9E64', call: '#FFC9A0', field: '#FF8AD8', function: '#FFFFFF', param: '#FFFFFF', key: '#FF8AD8', regexp: '#FF9E64', operator: '#FFFFFF' },
+};
+// as cores de antes da paleta completa: um tema salvo que ainda as usa (sem a cor "fn") passa para as novas; o que o usuário mudou fica
+const OLD_SYNTAX = Object.fromEntries(PRESETS.map(p => [p.id, { ...p.syntax }]));
+PRESETS.forEach(p => Object.assign(p.syntax, RICH[p.id] || {}));
+// cores novas que um tema antigo (ou importado) não tem: derivadas das que ele tem
+const fillSyntax = (s) => ({ ...s, doc: s.doc || s.comment, escape: s.escape || s.number, constant: s.constant || s.number, fn: s.fn || s.function, call: s.call || s.plain,
+  field: s.field || s.attr || s.type, param: s.param || s.plain, key: s.key || s.attr, regexp: s.regexp || s.string, operator: s.operator || s.delimiter });
 
 // ---------- estado ----------
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -55,6 +78,7 @@ const A = { settings: { theme: null, presets: [], dark: 'bluescreen', light: 'bl
 const allPresets = () => [...PRESETS, ...(A.settings.presets || [])];
 const normalize = (t) => {
   const b = PRESETS.find(p => p.id === (t && t.from)) || PRESETS.find(p => p.mode === (t && t.mode)) || PRESETS[0];
+  if (t && t.syntax && !t.syntax.fn) { const o = OLD_SYNTAX[b.id], sx = { ...t.syntax }; for (const k in sx) if (o[k] && String(sx[k]).toUpperCase() === o[k].toUpperCase()) delete sx[k]; t = { ...t, syntax: sx }; }
   return { ...clone(b), ...clone(t || {}), ui: { ...b.ui, ...((t && t.ui) || {}) }, syntax: { ...b.syntax, ...((t && t.syntax) || {}) }, fonts: { ...b.fonts, ...((t && t.fonts) || {}) }, shape: { ...b.shape, ...((t && t.shape) || {}) }, builtin: false };
 };
 
@@ -72,18 +96,31 @@ function cssVars(t) {
   v.shadow = t.mode === 'light' ? `0 12px 32px ${hexA(t.ui.fg, .16)}, 0 0 0 1px ${hexA(t.ui.fg, .05)}` : '0 12px 32px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04)';
   v.ui = `${q(t.fonts.ui)}, 'Segoe UI', system-ui, sans-serif`;
   v.mono = `${q(t.fonts.code)}, 'Cascadia Code', Consolas, monospace`;
+  // cores do código para a interface (valores no depurador, condições...)
+  const sx = fillSyntax(t.syntax); for (const k of ['string', 'number', 'keyword', 'fn', 'field', 'type', 'comment', 'constant']) v['sx-' + k] = sx[k];
   v.r = t.shape.radius + 'px'; v['r-sm'] = Math.max(2, Math.round(t.shape.radius * .6)) + 'px'; v.gap = t.shape.gap + 'px';
   return v;
 }
 function monacoTheme(t) {
-  const s = t.syntax, u = t.ui, x = (c) => (c || '').replace('#', '');
+  const s = fillSyntax(t.syntax), u = t.ui, x = (c) => (c || '').replace('#', '');
   const it = (tok, c, style) => ({ token: tok, foreground: x(c), ...(style ? { fontStyle: style } : {}) });
   return {
-    base: t.mode === 'light' ? 'vs' : 'vs-dark', inherit: true,
-    rules: [it('', s.plain), it('comment', s.comment, 'italic'), it('keyword', s.keyword), it('string', s.string), it('string.escape', s.number), it('number', s.number), it('regexp', s.string),
-      it('type', s.type), it('type.identifier', s.type), it('identifier', s.function), it('variable', s.function), it('variable.predefined', s.keyword), it('constant', s.number), it('predefined', s.keyword),
-      it('delimiter', s.delimiter), it('operator', s.delimiter), it('tag', s.tag), it('metatag', s.annotation), it('annotation', s.annotation), it('attribute.name', s.attr), it('attribute.value', s.string),
-      ...(typeof semRules === 'function' ? semRules({ fn: s.function, type: s.type, field: s.attr || s.type, konst: s.number, macro: s.annotation, lifetime: s.number, kw: s.keyword, comment: s.comment, str: s.string, num: s.number, delim: s.delimiter }) : [])],
+    base: t.mode === 'light' ? 'vs' : 'vs-dark', inherit: true, semanticHighlighting: true,
+    // nomes dos tokens das gramáticas do Monaco (o sufixo da linguagem, ".java", casa sozinho pelo prefixo)
+    rules: [it('', s.plain), it('identifier', s.function), it('variable', s.function), it('variable.predefined', s.keyword), it('variable.language', s.keyword), it('variable.parameter', s.param),
+      it('comment', s.comment, 'italic'), it('comment.doc', s.doc, 'italic'), it('comment.block.documentation', s.doc, 'italic'), it('comment.doc.param', s.annotation, 'italic'),
+      it('keyword', s.keyword), it('keyword.operator', s.operator),
+      it('string', s.string), it('string.escape', s.escape), it('string.escape.invalid', u.del), it('string.invalid', u.del), it('string.key.json', s.key), it('string.value.json', s.string), it('string.link', s.fn, 'underline'),
+      it('number', s.number), it('constant', s.constant, 'italic'), it('constant.language', s.keyword), it('regexp', s.regexp), it('regexp.escape', s.escape), it('regexp.invalid', u.del),
+      it('type', s.type), it('type.identifier', s.type), it('typeof', s.keyword), it('namespace', s.plain), it('key', s.key), it('keys', s.key), it('type.yaml', s.key), it('label', s.constant, 'italic'),
+      it('function', s.fn), it('function.call', s.call), it('predefined', s.call), it('macro', s.annotation),
+      it('delimiter', s.delimiter), it('operator', s.operator), it('operators', s.operator),
+      it('tag', s.tag), it('tag.python', s.annotation), it('tag.yaml', s.annotation), it('tag.id', s.fn), it('tag.class', s.attr), it('metatag', s.annotation), it('metatag.content', s.string), it('annotation', s.annotation),
+      it('attribute.name', s.attr), it('attribute.value', s.string), it('attribute.value.number', s.number), it('attribute.value.unit', s.number), it('attribute.value.hex', s.number), it('attribute.delimiter', s.delimiter),
+      // Markdown: títulos fortes na cor de declaração, código em linha como texto, ênfases com estilo
+      it('keyword.md', s.fn, 'bold'), it('variable.md', s.string), it('variable.source.md', s.plain), it('strong', s.plain, 'bold'), it('emphasis', s.plain, 'italic'), it('string.target.md', s.call, 'underline'),
+      it('invalid', u.del),
+      ...(typeof semRules === 'function' ? semRules({ fn: s.fn, call: s.call, type: s.type, field: s.field, konst: s.constant, macro: s.annotation, lifetime: s.constant, kw: s.keyword, comment: s.comment, str: s.string, num: s.number, delim: s.delimiter, param: s.param }) : [])],
     colors: {
       'editor.background': u.bg, 'editor.foreground': s.plain, 'editorGutter.background': u.bg, 'minimap.background': u.bg,
       'editorLineNumber.foreground': hexM(u.muted, .7), 'editorLineNumber.activeForeground': u['fg-2'], 'editorCursor.foreground': u.fg,
@@ -94,6 +131,10 @@ function monacoTheme(t) {
       'editorWidget.background': u['panel-2'], 'editorWidget.border': u['line-2'], 'editorSuggestWidget.background': u['panel-2'], 'editorSuggestWidget.selectedBackground': u.sel, 'editorHoverWidget.background': u['panel-2'], 'editorHoverWidget.border': u['line-2'],
       'scrollbarSlider.background': hexM(u.muted, .28), 'scrollbarSlider.hoverBackground': hexM(u.muted, .45), 'editorOverviewRuler.border': u.bg, 'editorOverviewRuler.background': u.bg,
       'diffEditor.insertedTextBackground': hexM(u.add, .22), 'diffEditor.removedTextBackground': hexM(u.del, .22), 'diffEditor.insertedLineBackground': hexM(u.add, .1), 'diffEditor.removedLineBackground': hexM(u.del, .1), 'diffEditor.border': u.line,
+      'editorBracketHighlight.foreground1': hexM(s.tag, .9), 'editorBracketHighlight.foreground2': hexM(s.field, .9), 'editorBracketHighlight.foreground3': hexM(s.fn, .9),
+      'editorBracketHighlight.foreground4': hexM(s.tag, .9), 'editorBracketHighlight.foreground5': hexM(s.field, .9), 'editorBracketHighlight.foreground6': hexM(s.fn, .9), 'editorBracketHighlight.unexpectedBracket.foreground': u.del,
+      'editorBracketPairGuide.activeBackground1': hexM(s.tag, .4), 'editorBracketPairGuide.activeBackground2': hexM(s.field, .4), 'editorBracketPairGuide.activeBackground3': hexM(s.fn, .4),
+      'editorInlayHint.foreground': hexM(s.comment, .95), 'editorInlayHint.background': hexM(u.fg, .05), 'editorLink.activeForeground': s.fn,
       'stickyScroll.background': u.bg, 'editorStickyScrollHover.background': u.hover,
     },
   };
@@ -129,6 +170,8 @@ function usePreset(id) {
 
 // ---------- integração com o núcleo ----------
 // o núcleo chama applyTheme() ao criar o editor; aqui o tema vem da Aparência
+// tema de uma predefinição para o Monaco (os temas de partida bs-dark/bs-light do núcleo, antes da Aparência carregar)
+window.bsPresetMonaco = (id) => monacoTheme(normalize(PRESETS.find(p => p.id === id) || PRESETS[0]));
 window.applyTheme = function () { if (A.theme) apply(A.theme, false); else if (window.monaco) monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'bs-light' : 'bs-dark'); };
 // zoom da fonte do código (Ctrl+roda, Ctrl+0...): vira o tamanho do código no tema atual
 window.codeFont = function (size, quiet) {
@@ -151,7 +194,7 @@ function renderPanel() {
   const color = (path, key, label) => { const val = (path === 'ui' ? t.ui : t.syntax)[key] || '#000000'; return `<label class="crow"><span>${esc(label)}</span><input type="color" data-p="${path}" data-k="${esc(key)}" value="${esc(val.slice(0, 7))}"><input class="hex" data-p="${path}" data-k="${esc(key)}" value="${esc(val)}" spellcheck="false" maxlength="9"></label>`; };
   let body = '';
   if (A.tab === 'cores') body = GROUPS.map(([g, list]) => `<div class="cgrp"><h4>${esc(g)}</h4>${list.map(([k, l]) => color('ui', k, l)).join('')}</div>`).join('');
-  else if (A.tab === 'sintaxe') body = `<div class="cgrp"><h4>Cores do código</h4>${SYNTAX.map(([k, l]) => color('syntax', k, l)).join('')}</div><pre class="apr-prev" id="aprPrev"></pre>`;
+  else if (A.tab === 'sintaxe') body = `<div class="cgrp"><h4>Cores do código</h4>${SYNTAX.map(([k, l]) => color('syntax', k, l)).join('')}</div><div class="apr-prev" id="aprPrev"></div>`;
   else if (A.tab === 'fontes') body = `<div class="fgrid">
       <label>Fonte da interface<input list="aprUiFonts" data-f="ui" value="${esc(t.fonts.ui)}" spellcheck="false"></label>
       <label>Tamanho da interface<span class="rng"><input type="range" min="80" max="150" step="5" data-f="uiZoom" value="${t.fonts.uiZoom || 100}"><b>${t.fonts.uiZoom || 100}%</b></span></label>
@@ -180,10 +223,19 @@ function renderPanel() {
   bindPanel(box);
   if (A.tab === 'sintaxe') previewCode();
 }
+// prévia num editor de verdade (só leitura): mostra também as cores pelo significado (método, campo, constante), que o
+// colorize do Monaco não aplica
+let prevEd = null;
 function previewCode() {
   const el = document.getElementById('aprPrev'); if (!el || !window.monaco) return;
-  const src = '// Calcula o total das parcelas\n@Service\npublic class ParcelasController implements Repositorio {\n    private static final int LIMITE = 12;\n    public long total(List<Parcela> itens) {\n        String msg = "total: " + itens.size();\n        return itens.stream().mapToLong(Parcela::valor).sum();\n    }\n}';
-  monaco.editor.colorize(src, 'java', {}).then(h => { el.innerHTML = h; });
+  const src = '/** Soma as parcelas em aberto. */\n@Service\npublic class ParcelasService implements Repositorio {\n    private static final int LIMITE = 12;\n\n    public long total(List<Parcela> itens) {\n        System.out.printf("total: %d\n", itens.size());\n        return itens.stream().filter(p -> p.valor > 0).mapToLong(Parcela::valor).sum();\n    }\n}';
+  if (prevEd && prevEd.getContainerDomNode() === el) return;
+  prevEd?.getModel()?.dispose(); prevEd?.dispose();
+  const f = A.theme.fonts;
+  prevEd = monaco.editor.create(el, { model: monaco.editor.createModel(src, 'java'), readOnly: true, domReadOnly: true, minimap: { enabled: false }, lineNumbers: 'off', folding: false, glyphMargin: false,
+    scrollBeyondLastLine: false, renderLineHighlight: 'none', overviewRulerLanes: 0, scrollbar: { vertical: 'hidden', horizontal: 'auto', alwaysConsumeMouseWheel: false }, contextmenu: false,
+    fontFamily: cssVars(A.theme).mono, fontSize: f.codeSize, lineHeight: Math.round(f.codeSize * f.lineHeight), fontLigatures: !!f.ligatures, 'semanticHighlighting.enabled': true,
+    bracketPairColorization: { enabled: true }, guides: { indentation: false }, automaticLayout: true, padding: { top: 8, bottom: 8 } });
 }
 function changed() { A.dirty = true; apply(A.theme); persist(); }
 function bindPanel(box) {

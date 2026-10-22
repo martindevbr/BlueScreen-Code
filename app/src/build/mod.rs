@@ -156,6 +156,59 @@ fn pick_jdk(info: &Info, want: Option<&str>) -> Option<Jdk> {
         .or_else(|| info.jdks.first().cloned())
 }
 
+/// `java Arquivo.java` pelo JDK escolhido (o java do PATH pode ser outra versão). Arquivo compacto (main fora de uma
+/// classe, Java 21+): do 21 ao 24 é preview e precisa de --enable-preview --source N; com um JDK anterior ao 21 não
+/// roda, então vai o mais novo achado
+fn java_single(file: &Path, info: &Info, jdk: &mut Option<Jdk>, steps: &mut [Step]) {
+    let compact = top_level_main(&std::fs::read_to_string(file).unwrap_or_default());
+    if compact && jdk.as_ref().is_none_or(|j| j.major > 0 && j.major < 21) {
+        if let Some(n) = info.jdks.iter().filter(|j| j.major >= 21).max_by_key(|j| j.major) { *jdk = Some(n.clone()); }
+    }
+    let Some(j) = jdk.as_ref() else { return };
+    let bin = Path::new(&j.home).join("bin").join(if cfg!(windows) { "java.exe" } else { "java" });
+    for s in steps.iter_mut().filter(|s| s.java && s.program == "java") {
+        if bin.is_file() { s.program = path_str(&bin); }
+        if compact && (21..25).contains(&j.major) { s.args.splice(0..0, ["--enable-preview".to_string(), "--source".into(), j.major.to_string()]); }
+        s.label = format!("java {}", s.args.join(" "));
+    }
+}
+
+/// um `main(` fora de qualquer chave (sem contar comentários, strings e text blocks): arquivo compacto do Java 21+
+fn top_level_main(src: &str) -> bool {
+    let b = src.as_bytes();
+    let (mut i, mut depth) = (0usize, 0i32);
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => { while i < b.len() && b[i] != b'\n' { i += 1; } }
+            b'/' if b.get(i + 1) == Some(&b'*') => { i += 2; while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') { i += 1; } i += 1; }
+            b'"' if b[i..].starts_with(b"\"\"\"") => { i += 3; while i < b.len() && !b[i..].starts_with(b"\"\"\"") { if b[i] == b'\\' { i += 1; } i += 1; } i += 2; }
+            q @ (b'"' | b'\'') => { i += 1; while i < b.len() && b[i] != q && b[i] != b'\n' { if b[i] == b'\\' { i += 1; } i += 1; } }
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            b'm' if depth == 0 && b[i..].starts_with(b"main") && (i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'$')) => {
+                let mut k = i + 4;
+                while k < b.len() && b[k].is_ascii_whitespace() { k += 1; }
+                if b.get(k) == Some(&b'(') { return true; }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_level_main;
+    #[test]
+    fn compact_java() {
+        assert!(top_level_main("public static void main(String[] args) {\n  System.out.println(\"x\");\n}\n"));
+        assert!(top_level_main("// class A {\nvoid main() { IO.println(\"{\"); }\n"));
+        assert!(!top_level_main("public class A {\n  public static void main(String[] a) {}\n}\n"));
+        assert!(!top_level_main("/* main( */ class A { void main() {} }\nrecord P(int x) {}\n"));
+    }
+}
+
 static CACHE: LazyLock<Arc<TtlCache<PathBuf, Info>>> = LazyLock::new(|| Arc::new(TtlCache::new(Duration::from_secs(120))));
 
 /// Rotas do build (entram na tabela de rotas do núcleo).
@@ -183,8 +236,9 @@ pub fn routes() -> Vec<(&'static str, RouteFn)> {
             // arquivo solto: roda pela extensão (Python, Node, Java, Go, C#...)
             if let Some(file) = body["file"].as_str().filter(|x| !x.is_empty()) {
                 let (title, ts) = detect::run_file(&project, file).ok_or_else(|| fail("Não sei executar esse tipo de arquivo", 400))?;
-                let jdk = pick_jdk(&info, body["jdk"].as_str());
-                let steps = ts.into_iter().map(Step::from).collect();
+                let mut jdk = pick_jdk(&info, body["jdk"].as_str());
+                let mut steps: Vec<Step> = ts.into_iter().map(Step::from).collect();
+                if file.to_lowercase().ends_with(".java") { java_single(&project.join(file), &info, &mut jdk, &mut steps); }
                 let id = maven::start(maven::StartOpts { dir: path_str(&project), root: project.clone(), steps, mvn: None, jdk, title, extra: maven::Extra { env: vec![], jvm: vec![] }, note: String::new(), interactive: true });
                 return ok(json!({ "id": id }));
             }

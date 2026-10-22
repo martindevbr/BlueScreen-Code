@@ -114,10 +114,6 @@ function menu(p) {
   const items = [];
   const o = P.remote && P.remote.plugins.find(x => x.id === p.id);
   if (o && o.update) items.push({ label: `Atualizar para v${o.version}`, icon: bs.I.refresh, action: () => install([o]) });
-  if (p.user) items.push({ label: 'Desinstalar', icon: bs.I.x, action: async () => {
-    try { await post('plugins/uninstall', { id: p.id }); store.set('reopenTool', 'plugins'); toast('Desinstalado. Recarregando…'); setTimeout(() => location.reload(), 300); }
-    catch (e) { toast(e.message); }
-  } });
   return items.length ? ['-', ...items] : [];
 }
 

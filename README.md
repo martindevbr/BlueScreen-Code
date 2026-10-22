@@ -29,8 +29,8 @@ BlueScreen.exe --doc dados.xlsx    # só o documento, numa janela leve (.csv, .t
 
 | Atalho | O que faz |
 |---|---|
-| `Shift` `Shift` | buscar classes, arquivos, texto e ações |
-| `Ctrl+B` / `Ctrl`+clique | ir para a definição |
+| `Shift` `Shift` | buscar classes (também as das dependências: JDK, jars, crates, node_modules...), arquivos, texto e ações |
+| `Ctrl+B` / `Ctrl`+clique | ir para a definição (inclusive em bibliotecas e no JDK, com código descompilado quando não há fonte) |
 | `Alt+F7` | encontrar usos |
 | `Shift+F6` | renomear em todos os arquivos |
 | `Alt+Enter` | ações rápidas e refatorações |
@@ -79,6 +79,8 @@ Outra ferramenta ou outro caminho: liste em `~/.bluescreen/tools.json`.
 - **BDD e testes automatizados:** `.feature` do Cucumber, Behave e SpecFlow com cores e lint ao vivo (estrutura que o parser do Cucumber cobra, tabelas, docstrings, tags, colunas dos Exemplos, cenários repetidos ou vazios; palavras-chave em inglês, português e espanhol pelo `# language:`). Nos testes, teste focado esquecido (`it.only`, `fit`, `fdescribe`, RSpec `fit`) vira aviso com correção.
 - **Terminal:** PowerShell, cmd, Git Bash, WSL e os prompts do Visual Studio; `arquivo:linha` na saída abre o arquivo.
 - **Arquivos gigantes:** logs e CSVs de vários GB abrem na hora, com busca no arquivo inteiro.
+- **IAMaker (`Alt+0`), plugins feitos conversando:** numa janela do balão flutuante, você descreve o que quer e o Claude Code, o Gemini CLI ou o Codex CLI escreve o plugin, sem compilar. Ele aparece funcionando no lugar escolhido, sem recarregar a IDE. O nome é opcional (a IA escolhe), e ele também edita os plugins que já existem (plugin [`iamaker`](app/plugins/iamaker/README.md)).
+- **Tela dividida do seu jeito:** arraste a aba de qualquer painel (Terminal, Build, Depurar, Problemas, painéis de plugins), o topo de uma janela flutuante ou o cabeçalho do painel de arquivos para cima, para os lados ou para uma janela flutuante. Uma rosa de alvos mostra onde ele vai ficar, e a IDE lembra a arrumação.
 - **QAutils (`Alt+9`), o kit do QA:** plugin [`qautils`](app/plugins/qautils/README.md), com duas abas:
   - **Cenários (Gherkin/Cucumber):** painel por pasta e por chamado, nova feature no padrão do time, autocompletar com os passos do projeto, passo parecido, `Contexto` automático, execução manual (Passou/Falhou/Bloqueado, com a cor na margem do cenário) com evidências coladas, relatório de evidências (HTML) e casos de teste (CSV); em projetos automatizados, step definitions, F12, gerar a definição e ▶ executar.
   - **Kit:** dados de teste com dígito válido (CPF, CNPJ, RG, PIS, CNH, título, Renavam, placa, CEP, celular, cartão de teste), massa de dados, validar documentos, valores limite, entradas especiais, JSON, Base64/URL/JWT, data e hora, texto com N caracteres, hash, regex, comparar textos, relatório de bug e ambientes.

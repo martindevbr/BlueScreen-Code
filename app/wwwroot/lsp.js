@@ -43,6 +43,7 @@ class RpcClient {
     return new Promise((ok, fail) => {
       const u = new URL('/api/rpc/ws', location.origin); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
       u.searchParams.set('tool', this.tool.id); u.searchParams.set('root', this.root);
+      for (const [k, v] of Object.entries(this.params || {})) u.searchParams.set(k, v); // ex.: port do java-debug
       const ws = this.ws = new WebSocket(u); let opened = false;
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch { return; }
@@ -77,11 +78,11 @@ class LspClient extends RpcClient {
   }
   async serverRequest(method, p) {
     switch (method) {
-      case 'workspace/configuration': return (p.items || []).map(() => ({}));
+      case 'workspace/configuration': return (p.items || []).map(it => cfgSection(this.tool.id, it.section));
       case 'workspace/workspaceFolders': return [{ uri: pathToUri(this.root), name: this.root.split(/[\\/]/).pop() }];
       case 'workspace/applyEdit': { const n = await applyWorkspaceEdit(p.edit, this); return { applied: n >= 0 }; }
       case 'window/showMessageRequest': toast(p.message); return null;
-      case 'window/showDocument': if (p.uri) goTo(p.uri, p.selection); return { success: true };
+      case 'window/showDocument': if (p.uri) goTo(p.uri, p.selection, this); return { success: true };
       case 'client/registerCapability': case 'client/unregisterCapability': case 'window/workDoneProgress/create': return null;
       // o servidor terminou de analisar o projeto (ou mudou algo): pede para o editor pedir de novo
       case 'workspace/inlayHint/refresh': LS.ev.hints && LS.ev.hints.fire(); return null;
@@ -104,6 +105,21 @@ class LspClient extends RpcClient {
   }
 }
 
+// configurações mandadas a cada servidor (initializationOptions, workspace/configuration e didChangeConfiguration).
+// Busca de símbolos (Shift Shift) incluindo as dependências do projeto: o rust-analyzer só olha o workspace por padrão;
+// o gopls e o tsserver já incluem, mas fica explícito (versões antigas/configurações do usuário mudam o padrão)
+const CFG = {
+  'rust-analyzer': { 'rust-analyzer': { workspace: { symbol: { search: { scope: 'workspace_and_dependencies' } } } } },
+  gopls: { gopls: { symbolScope: 'all' } },
+  tsserver: { typescript: { preferences: { excludeLibrarySymbolsInNavTo: false } }, javascript: { preferences: { excludeLibrarySymbolsInNavTo: false } } },
+};
+function cfgSection(id, section) {
+  let v = CFG[id] || {};
+  for (const k of (section || '').split('.').filter(Boolean)) { v = v && typeof v === 'object' ? v[k] : undefined; }
+  return v === undefined ? {} : v;
+}
+const INIT_OPTS = { 'rust-analyzer': () => CFG['rust-analyzer']['rust-analyzer'], gopls: () => CFG.gopls.gopls, tsserver: () => ({ preferences: { excludeLibrarySymbolsInNavTo: false } }) };
+
 // tipos e modificadores de token semântico do protocolo (o servidor manda os dele na legenda)
 const SEM_TYPES = ['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'event', 'function', 'method', 'macro', 'keyword', 'modifier', 'comment', 'string', 'number', 'regexp', 'operator', 'decorator'];
 const SEM_MODS = ['declaration', 'definition', 'readonly', 'static', 'deprecated', 'abstract', 'async', 'modification', 'documentation', 'defaultLibrary'];
@@ -119,7 +135,13 @@ async function clientFor(tool, root) {
   c.ready = (async () => {
     lsStatus();
     await c.connect();
+    // jdtls: carrega o plugin de depuração (java-debug), se baixado; sem ele o Java não depura (ver debug.js)
+    const jd = tool.id === 'jdtls' ? (await lsTools()).find(t => t.id === 'java-debug' && t.installed) : null;
+    c.bundles = jd ? [jd.command] : [];
+    // classFileContentsSupport: sem ele o jdtls não aponta para classes do JDK e de jars (Ctrl+clique em System não
+    // levaria a lugar nenhum); com ele vêm endereços jdt:// cujo texto (fonte ou descompilado) se pede em java/classFileContents
     const init = await c.request('initialize', {
+      ...(tool.id === 'jdtls' ? { initializationOptions: { bundles: c.bundles, extendedClientCapabilities: { classFileContentsSupport: true } } } : INIT_OPTS[tool.id] ? { initializationOptions: INIT_OPTS[tool.id]() } : {}),
       processId: null, clientInfo: { name: 'BlueScreen', version: BS.version || '' }, locale: 'pt-br',
       rootUri: pathToUri(root), rootPath: root, workspaceFolders: [{ uri: pathToUri(root), name: root.split(/[\\/]/).pop() }],
       capabilities: {
@@ -147,7 +169,7 @@ async function clientFor(tool, root) {
     lateProviders(c);
     c.notify('initialized', {});
     // vários servidores (pyright, por exemplo) só terminam de iniciar depois de receber a configuração
-    c.notify('workspace/didChangeConfiguration', { settings: {} });
+    c.notify('workspace/didChangeConfiguration', { settings: CFG[tool.id] || {} });
     builtinOff(tool);
     lsStatus();
     return c;
@@ -175,7 +197,7 @@ function builtinOff(tool) {
 
 // ----- documentos abertos -----
 async function openDoc(tab) {
-  if (!tab || tab.mode !== 'editor' || !tab.model || LS.docs.has(tab.model.id)) return;
+  if (!tab || tab.mode !== 'editor' || tab.virtual || !tab.model || LS.docs.has(tab.model.id)) return;
   await lsTools();
   const tool = serverFor(tab.lang); if (!tool) { lsStatus(); return; }
   let c; try { c = await clientFor(tool, tab.project); } catch { return; }
@@ -222,27 +244,83 @@ const md = (c) => {
   return [];
 };
 const docText = (d) => d == null ? undefined : typeof d === 'string' ? d : { value: d.value, isTrusted: false };
-// modelo do Monaco para uma URI do servidor: a aba aberta, ou um modelo só para a espiada (referências, definição)
-async function modelFor(uri) {
+// modelo do Monaco para uma URI do servidor: a aba aberta, um modelo só para a espiada (referências, definição) ou,
+// fora do projeto, o código da biblioteca (client: o servidor que apontou para ela)
+async function modelFor(uri, client) {
+  if (!/^file:/i.test(uri)) return libModel(uri, client);
   const abs = uriToPath(uri); const tab = editorTabFor(abs);
   if (tab) return tab.model;
+  const rel = S.project ? relOf(abs, S.project.path) : null;
+  if (rel == null) return libModel(uri, client, abs);
   const mu = monaco.Uri.parse(pathToUri(abs));
   let m = monaco.editor.getModel(mu);
-  if (!m && S.project) {
-    const rel = relOf(abs, S.project.path);
-    try { const f = rel != null ? await api('file', { project: S.project.path, file: rel }) : null; if (f && !f.binary && !f.tooBig) m = monaco.editor.createModel(f.content, langOf(abs), mu); } catch {}
-  }
+  if (!m) try { const f = await api('file', { project: S.project.path, file: rel }); if (!f.binary && !f.tooBig) m = monaco.editor.createModel(f.content, langOf(abs), mu); } catch {}
   return m;
 }
-async function locations(res) {
+async function locations(res, client) {
   if (!res) return [];
   const list = Array.isArray(res) ? res : [res];
   const out = [];
   for (const l of list.slice(0, 200)) {
     const uri = l.targetUri || l.uri; const range = l.targetSelectionRange || l.range; if (!uri || !range) continue;
-    const m = await modelFor(uri); if (m) out.push({ uri: m.uri, range: R(range) });
+    const m = await modelFor(uri, client); if (m) out.push({ uri: m.uri, range: R(range) });
   }
   return out;
+}
+
+// ----- código de fora do projeto (Ctrl+clique em System, String, Vec, fmt.Println, printf, Console...) -----
+// O servidor aponta para um arquivo de biblioteca no disco (std do Rust, GOROOT, typeshed do pyright, headers do
+// clangd, lib.d.ts, fontes descompiladas pelo Kotlin LS) ou para um endereço só dele, cujo texto ele mesmo entrega:
+// jdt:// (jdtls: a fonte anexada ou a classe descompilada pelo Fernflower) e csharp:/metadata (csharp-ls: o assembly
+// descompilado pelo ILSpy). Abre numa aba só de leitura ligada ao mesmo servidor: lá dentro o Ctrl+clique continua.
+const LIB_TEXT = {
+  jdt: (c, uri) => c.request('java/classFileContents', { uri }, 30000),
+  csharp: async (c, uri) => { const r = await c.request('csharp/metadata', { textDocument: { uri } }, 30000); return r && r.source; },
+  kls: (c, uri) => c.request('kotlin/jarClassContents', { textDocument: { uri } }, 30000),
+};
+async function libModel(uri, client, abs) {
+  const mu = monaco.Uri.parse('bs-lib:/' + encodeURIComponent(uri));
+  let m = monaco.editor.getModel(mu); if (m) return m;
+  let text = null;
+  try {
+    if (abs) { const dir = abs.replace(/[\\/][^\\/]*$/, ''); const f = await api('file', { project: dir, file: abs.slice(dir.length + 1) }); if (!f.binary && !f.tooBig) text = f.content; }
+    else { const get = LIB_TEXT[uri.split(':')[0].toLowerCase()]; if (get && client && client.alive) text = await get(client, uri); }
+  } catch {}
+  if (typeof text !== 'string' || !text) return null;
+  // headers sem extensão (<vector>, <iostream>) e endereços do servidor: a linguagem é a do servidor
+  const byName = abs ? langOf(abs) : 'plaintext';
+  const lang = byName !== 'plaintext' || !client ? byName : client.tool.langs[0];
+  m = monaco.editor.getModel(mu) || monaco.editor.createModel(text, lang, mu);
+  m._lib = { uri, client, abs };
+  return m;
+}
+// nome na aba e dica: "System.class" · "JDK java.base · java.lang.System"
+function libLabel(L) {
+  const u = decodeURIComponent(L.uri);
+  let m = u.match(/^jdt:\/\/contents\/([^/]+)\/([^/]+)\/([^?]+)/);
+  if (m) return { name: m[3], title: `${/^java\./.test(m[1]) || m[1] === 'rt.jar' ? 'JDK ' : ''}${m[1]} · ${m[2]}.${m[3].replace(/\.class$/, '')}` };
+  m = u.match(/^csharp:\/?\/?metadata\/.*?assemblies\/([^/]+)\/symbols\/([^?]+)/);
+  if (m) return { name: m[2].split('.').slice(-2).join('.'), title: `${m[1]} · ${m[2].replace(/\.cs$/, '')}` };
+  const p = L.abs || u.replace(/^[a-z]+:/i, '').replace(/[?#].*$/, '');
+  return { name: p.split(/[\\/!]/).filter(Boolean).pop() || p, title: p };
+}
+function openLibrary(m, line, col) {
+  const L = m._lib; const key = 'lib:' + L.uri;
+  let tab = S.tabs.find(t => t.key === key);
+  if (!tab) {
+    const lb = libLabel(L);
+    tab = { key, path: lb.name, title: lb.title + (L.abs ? '' : ' (descompilado/fonte do servidor)'), mode: 'editor', virtual: true, lib: true, editable: false, project: S.project ? S.project.path : '', lang: m.getLanguageId(), model: m, saved: m.getValue() };
+    m._tab = tab; S.tabs.push(tab);
+    // o servidor passa a conhecer o documento: hover, Ctrl+clique e usos funcionam dentro da biblioteca também
+    const c = L.client;
+    if (c && c.alive && !LS.docs.has(m.id)) {
+      LS.docs.set(m.id, { client: c, uri: L.uri, version: 1, tab, timer: null, kind: 0, changes: [], full: false });
+      c.notify('textDocument/didOpen', { textDocument: { uri: L.uri, languageId: ext(tab.lang), version: 1, text: m.getValue() } });
+    }
+  }
+  activate(tab);
+  if (line) revealAt(editor, line, col || 1);
+  return tab;
 }
 
 // ----- provedores do Monaco (um registro por linguagem, valem para todo servidor daquela linguagem) -----
@@ -261,9 +339,9 @@ function registerProviders(lang) {
   };
   L.registerHoverProvider(lang, { provideHover: async (model, pos, token) => { const r = await ask(model, 'textDocument/hover', { position: P(pos) }, 'hoverProvider', token); return r && r.contents ? { contents: md(r.contents), range: r.range ? R(r.range) : undefined } : null; } });
   for (const [prov, method, cap] of [['registerDefinitionProvider', 'textDocument/definition', 'definitionProvider'], ['registerDeclarationProvider', 'textDocument/declaration', 'declarationProvider'], ['registerTypeDefinitionProvider', 'textDocument/typeDefinition', 'typeDefinitionProvider'], ['registerImplementationProvider', 'textDocument/implementation', 'implementationProvider']]) {
-    L[prov](lang, { [prov.replace('register', 'provide').replace('Provider', '')]: async (model, pos, token) => locations(await ask(model, method, { position: P(pos) }, cap, token)) });
+    L[prov](lang, { [prov.replace('register', 'provide').replace('Provider', '')]: async (model, pos, token) => locations(await ask(model, method, { position: P(pos) }, cap, token), docOf(model)?.client) });
   }
-  L.registerReferenceProvider(lang, { provideReferences: async (model, pos, ctx) => locations(await ask(model, 'textDocument/references', { position: P(pos), context: { includeDeclaration: ctx.includeDeclaration } }, 'referencesProvider')) });
+  L.registerReferenceProvider(lang, { provideReferences: async (model, pos, ctx) => locations(await ask(model, 'textDocument/references', { position: P(pos), context: { includeDeclaration: ctx.includeDeclaration } }, 'referencesProvider'), docOf(model)?.client) });
   L.registerDocumentHighlightProvider(lang, { provideDocumentHighlights: async (model, pos, token) => ((await ask(model, 'textDocument/documentHighlight', { position: P(pos) }, 'documentHighlightProvider', token)) || []).map(h => ({ range: R(h.range), kind: (h.kind || 1) - 1 })) });
   L.registerDocumentSymbolProvider(lang, { provideDocumentSymbols: async (model) => {
     const r = await ask(model, 'textDocument/documentSymbol', {}, 'documentSymbolProvider'); if (!r) return [];
@@ -427,11 +505,14 @@ function diagnostics(c, p) {
 }
 
 // ----- ir para um arquivo (definição em outro arquivo, "abrir" das espiadas) -----
-async function goTo(uri, range) {
-  const abs = uriToPath(uri); const line = range ? (range.startLineNumber || (range.start && range.start.line + 1) || 1) : 1;
-  const rel = S.project && relOf(abs, S.project.path);
-  if (rel != null) await openFile(rel, 'editor', line);
-  else { const root = abs.replace(/[\\/][^\\/]*$/, ''); openOutside(root, abs.slice(root.length + 1), line); }
+// fora do projeto (biblioteca, JDK): aba só de leitura, sem trocar de projeto
+async function goTo(uri, range, client) {
+  const line = range ? (range.startLineNumber || (range.start && range.start.line + 1) || 1) : 1;
+  const col = range ? (range.startColumn || (range.start && range.start.character + 1) || 1) : 1;
+  const rel = /^file:/i.test(uri) && S.project ? relOf(uriToPath(uri), S.project.path) : null;
+  if (rel != null) return openFile(rel, 'editor', line);
+  const m = await modelFor(uri, client);
+  if (m && m._lib) openLibrary(m, line, col); else toast('Não foi possível abrir ' + decodeURIComponent(uri));
 }
 
 // ----- status bar: servidor do arquivo aberto -----
@@ -624,7 +705,29 @@ async function lsInstallDone(tool, row, bar, fill, step, after) {
 }
 
 // ----- símbolos do projeto inteiro (busca geral: Shift Shift / Ctrl+N) -----
-// pergunta a todos os servidores ligados neste projeto; uma busca nova cancela a anterior
+// pergunta a todos os servidores ligados neste projeto; uma busca nova cancela a anterior.
+// Os de fora do projeto são as dependências dele, do jeito que o servidor de cada linguagem as enxerga (JDK e jars do
+// Maven/Gradle no jdtls, crates no rust-analyzer, módulos do go.mod no gopls, headers incluídos no clangd, node_modules e
+// lib.d.ts no tsserver, vendor/ no Intelephense...): só os tipos (classe, interface, enum, struct) entram, com ext: true
+const EXT_KINDS = new Set([5, 10, 11, 23]);
+// onde fica a classe externa: módulo/jar do JDK, assembly, pacote do node_modules, crate, módulo Go, site-packages...
+function libWhere(uri) {
+  const u = decodeURIComponent(uri);
+  let m = u.match(/^jdt:\/\/contents\/([^/]+)\//); if (m) return m[1];
+  m = u.match(/assemblies\/([^/]+)\//); if (m) return m[1];
+  const p = u.replace(/^file:\/\/\/?/i, '').replace(/\\/g, '/');
+  m = p.match(/\/(node_modules\/(?:@[^/]+\/)?[^/]+|site-packages\/[^/]+|dist-packages\/[^/]+|typeshed[^/]*\/stdlib|registry\/src\/[^/]+\/[^/]+|pkg\/mod\/[^@]+@[^/]+|rustlib\/src\/rust\/library\/[^/]+|vendor\/[^/]+\/[^/]+|include)\//i);
+  if (m) return m[1].replace(/^registry\/src\/[^/]+\//, '').replace(/^rustlib\/src\/rust\/library\//, 'std/').replace(/^pkg\/mod\//, '');
+  return p.split('/').slice(-3, -1).join('/');
+}
+async function openSymbol(s) {
+  let loc = s.loc;
+  // LSP 3.17: o servidor pode mandar só a URI e completar o lugar depois (workspaceSymbol/resolve)
+  if (!loc.range && s.client.alive && s.client.caps.workspaceSymbolProvider && s.client.caps.workspaceSymbolProvider.resolveProvider) {
+    try { const r = await s.client.request('workspaceSymbol/resolve', s.raw, 10000); if (r && r.location) loc = r.location; } catch {}
+  }
+  return goTo(loc.uri, loc.range, s.client);
+}
 let symAbort = null;
 async function workspaceSymbols(q) {
   if (symAbort) symAbort.cancel();
@@ -633,14 +736,16 @@ async function workspaceSymbols(q) {
   const clients = [...LS.clients.values()].filter(c => c.alive && c.caps && c.caps.workspaceSymbolProvider && keyOf(c.root) === keyOf(proj));
   const res = await Promise.all(clients.map(c => c.request('workspace/symbol', { query: q }, 8000, src.token).catch(() => null)));
   if (src.token.isCancellationRequested) return null;
-  const out = [];
-  for (const list of res) for (const s of list || []) {
-    const loc = s.location; if (!loc || !loc.uri || !loc.range) continue;
-    const rel = relOf(uriToPath(loc.uri), proj); if (rel == null) continue; // dependências (std, crates) ficam de fora
-    out.push({ name: s.name, kind: s.kind, container: s.containerName || '', p: rel, line: loc.range.start.line + 1, col: loc.range.start.character + 1 });
-    if (out.length >= 200) break;
-  }
-  return out;
+  const out = [], ext = [], seen = new Set();
+  res.forEach((list, i) => { for (const s of list || []) {
+    const loc = s.location; if (!loc || !loc.uri) continue;
+    const rel = /^file:/i.test(loc.uri) ? relOf(uriToPath(loc.uri), proj) : null;
+    if (rel != null) { if (loc.range && out.length < 200) out.push({ name: s.name, kind: s.kind, container: s.containerName || '', p: rel, line: loc.range.start.line + 1, col: loc.range.start.character + 1 }); continue; }
+    if (!EXT_KINDS.has(s.kind) || ext.length >= 200) continue;
+    const k = s.name + '|' + loc.uri; if (seen.has(k)) continue; seen.add(k);
+    ext.push({ ext: true, name: s.name, kind: s.kind, container: s.containerName || '', lib: libWhere(loc.uri), uri: loc.uri, loc, raw: s, client: clients[i] });
+  } });
+  return out.concat(ext);
 }
 
 // arquivos mudados fora do editor (git checkout, Cargo.toml, gerado pelo build): o servidor relê sem reiniciar
@@ -684,10 +789,13 @@ const boot = setInterval(() => {
   if (!window.monaco) return; clearInterval(boot);
   monaco.editor.registerCommand('bs.lsp.codeAction', (_, d, a) => runCodeAction(d, a));
   // Monaco abrindo outro arquivo (definição, referência, espiada): vira uma aba do BlueScreen
+  // código de biblioteca (bs-lib:): abre a aba só de leitura dela
   monaco.editor.registerEditorOpener({ openCodeEditor(src, resource, sel) {
-    if (resource.scheme === 'file') { goTo(resource.toString(), sel); return true; }
     const m = monaco.editor.getModel(resource); const tab = m && m._tab;
-    if (tab) { activate(tab); if (sel) revealAt(editor, sel.startLineNumber || sel.lineNumber || 1, sel.startColumn || sel.column || 1); return true; }
+    const line = sel ? sel.startLineNumber || sel.lineNumber || 1 : 0, col = sel ? sel.startColumn || sel.column || 1 : 1;
+    if (tab && S.tabs.includes(tab)) { activate(tab); if (line) revealAt(editor, line, col); return true; }
+    if (m && m._lib) { openLibrary(m, line, col); return true; }
+    if (resource.scheme === 'file') { goTo(resource.toString(), sel); return true; }
     return false;
   } });
   stEl = bs.status.add({ id: 'stLsp', title: 'Análise da linguagem', onclick: (e) => lsMenu(e) });
@@ -707,5 +815,5 @@ bs.actions.add([
 window.addEventListener('beforeunload', () => LS.clients.forEach(c => c.close()));
 // procura de novo e liga a análise nas abas abertas (depois de instalar um servidor ou um SDK)
 async function lsRefresh() { await lsTools(true); S.tabs.filter(t => t.mode === 'editor').forEach(openDoc); lsStatus(); }
-bs.lsp = { tools: lsTools, refresh: lsRefresh, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient, workspaceSymbols, install, checkProject: lsCheckProject };
+bs.lsp = { tools: lsTools, refresh: lsRefresh, clientFor: (tab) => { const t = serverFor(tab.lang); return t ? clientFor(t, tab.project) : null; }, restart, pathToUri, uriToPath, RpcClient, workspaceSymbols, openSymbol, install, checkProject: lsCheckProject };
 })(window.BS);

@@ -9,6 +9,7 @@
 <link rel="preload" href="vendor/fonts/jetbrains-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="build.css">
+<link rel="stylesheet" href="bubble.css">
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
 <script>/* pinta o tema salvo antes de tudo (sem piscar); a Aparência (theme.js) confirma depois */
 try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStorage.getItem('bs.theme')) || 'dark'; const v = JSON.parse(localStorage.getItem('bs.themeCache') || 'null'); if (v) for (const k in v) r.style.setProperty('--' + k, v[k]); } catch {}</script>
@@ -180,7 +181,9 @@ try { const r = document.documentElement; r.dataset.theme = JSON.parse(localStor
 <script src="vendor/xterm/addon-unicode11.js"></script>
 <script src="vendor/monaco/vs/loader.js"></script>
 <script src="app.js"></script>
+<script src="syntax.js"></script>
 <script src="dock.js"></script>
+<script src="bubble.js"></script>
 <script src="preview.js"></script>
 <script src="sync.js"></script>
 <script src="share.js"></script>

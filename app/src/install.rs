@@ -26,6 +26,8 @@ pub enum Recipe {
     Github(&'static str, &'static str),
     /// pacote num endereço fixo (zip ou tar.gz)
     Url(&'static str),
+    /// arquivo único num endereço fixo (ex.: um .jar), guardado como veio em tools/<id>
+    File(&'static str),
 }
 
 pub fn recipes(id: &str) -> &'static [Recipe] {
@@ -48,6 +50,9 @@ pub fn recipes(id: &str) -> &'static [Recipe] {
         "yaml" => &[Cmd("npm", &["install", "-g", "yaml-language-server"], "Node.js (npm)")],
         "bash" => &[Cmd("npm", &["install", "-g", "bash-language-server"], "Node.js (npm)")],
         "zls" => &[Github("zigtools/zls", r"x86_64-windows\.zip$")],
+        "js-debug" => &[Github("microsoft/vscode-js-debug", r"^js-debug-dap-v[\d.]+\.tar\.gz$")],
+        "rdbg" => &[Cmd("gem", &["install", "debug"], "Ruby (gem)")],
+        "java-debug" => &[File("https://repo1.maven.org/maven2/com/microsoft/java/com.microsoft.java.debug.plugin/0.53.1/com.microsoft.java.debug.plugin-0.53.1.jar")],
         "jdtls" => &[Url("https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz")],
         _ => &[],
     }
@@ -55,14 +60,14 @@ pub fn recipes(id: &str) -> &'static [Recipe] {
 
 /// a receita que dá para usar neste PC (o gerenciador existe, ou é download direto)
 pub fn pick(id: &str) -> Option<Recipe> {
-    recipes(id).iter().copied().find(|r| match r { Recipe::Cmd(p, ..) => which(p).is_some(), Recipe::Github(..) | Recipe::Url(_) => true })
+    recipes(id).iter().copied().find(|r| match r { Recipe::Cmd(p, ..) => which(p).is_some(), Recipe::Github(..) | Recipe::Url(_) | Recipe::File(_) => true })
 }
 /// como a IDE vai instalar (para mostrar antes de clicar), ou o que falta para poder instalar
 pub fn describe(id: &str) -> (Option<String>, Option<String>) {
     match pick(id) {
         Some(Recipe::Cmd(p, a, _)) => (Some(format!("{p} {}", a.join(" "))), None),
         Some(Recipe::Github(repo, _)) => (Some(format!("download do GitHub ({repo})")), None),
-        Some(Recipe::Url(url)) => (Some(format!("download de {}", url.split('/').nth(2).unwrap_or(url))), None),
+        Some(Recipe::Url(url) | Recipe::File(url)) => (Some(format!("download de {}", url.split('/').nth(2).unwrap_or(url))), None),
         None => (None, recipes(id).iter().find_map(|r| if let Recipe::Cmd(_, _, need) = r { Some(format!("precisa de {need} instalado")) } else { None })),
     }
 }
@@ -133,7 +138,7 @@ pub fn start(id: &str) -> Result<Value, String> {
     if let Some(running) = begin(id) { return Ok(running); }
     let id2 = id.to_string();
     tokio::spawn(async move {
-        let r = match recipe { Recipe::Cmd(p, a, _) => run_cmd(&id2, p, a).await, Recipe::Github(repo, pat) => github(&id2, repo, pat).await, Recipe::Url(url) => from_url(&id2, url).await };
+        let r = match recipe { Recipe::Cmd(p, a, _) => run_cmd(&id2, p, a).await, Recipe::Github(repo, pat) => github(&id2, repo, pat).await, Recipe::Url(url) => from_url(&id2, url).await, Recipe::File(url) => save_file(&id2, url).await };
         crate::build::detect::forget_which();
         let tools = tokio::task::spawn_blocking(|| crate::rpc::tools(true)).await.ok();
         let ok = tools.as_ref().is_some_and(|t| t.iter().any(|t| t.id == id2 && t.installed));
@@ -179,6 +184,21 @@ async fn github(id: &str, repo: &str, pat: &str) -> Result<(), String> {
 async fn from_url(id: &str, url: &str) -> Result<(), String> {
     let http = reqwest::Client::builder().user_agent("BlueScreen-IDE").build().map_err(|e| e.to_string())?;
     download(id, &http, url, url.rsplit('/').next().unwrap_or("pacote"), 0).await
+}
+
+/// baixa um arquivo só (pequeno) para tools/<id>/<nome>, trocando de uma vez
+async fn save_file(id: &str, url: &str) -> Result<(), String> {
+    let http = reqwest::Client::builder().user_agent("BlueScreen-IDE").build().map_err(|e| e.to_string())?;
+    let name = url.rsplit('/').next().unwrap_or("arquivo");
+    let dir = tools_dir().join(id);
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    upd(id, |j| j.step = format!("Baixando {name}…"));
+    let bytes = http.get(url).send().await.and_then(|r| r.error_for_status()).map_err(|e| format!("download: {e}"))?.bytes().await.map_err(|e| format!("download: {e}"))?;
+    let tmp = dir.join(format!("{name}.download"));
+    tokio::fs::write(&tmp, &bytes).await.map_err(|e| e.to_string())?;
+    tokio::fs::rename(&tmp, dir.join(name)).await.map_err(|e| e.to_string())?;
+    line(id, &format!("Instalado em {}", dir.join(name).display()));
+    Ok(())
 }
 
 /// baixa o pacote e extrai em tools/<id>

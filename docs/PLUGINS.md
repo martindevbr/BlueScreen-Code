@@ -2,7 +2,13 @@
 
 Um plugin acrescenta coisas ao BlueScreen sem mexer no núcleo: painéis, atalhos, ações do Buscar em tudo, itens da status bar, cards do resumo do projeto, tarefas de build. Boa parte do que antes pedia um servidor próprio o núcleo já faz pelo plugin: guardar atributos, tokens e arquivos, mostrar uma tela de configurações, rodar programas e fazer HTTP de qualquer site (veja [Sem servidor próprio](#sem-servidor-próprio)). Quando precisar mesmo de lógica fora da página, o servidor pode ser um script em Node.js, Python ou PowerShell, sem compilar nada, ou um programa à parte em qualquer linguagem.
 
+O padrão é o plugin sem compilação (`ui.js`, e `server.js` / `server.py` quando precisar). Servidor compilado (`server.exe`) é para os casos em que o nativo faz diferença: veja [PLUGINS-NATIVOS.md](PLUGINS-NATIVOS.md). Para levar um plugin antigo com `server.exe` para a arquitetura sem compilação, ou decidir que ele fica nativo, veja [MIGRACAO-PLUGINS.md](MIGRACAO-PLUGINS.md).
+
 Plugins ligam e desligam na aba **Plugins** (`Alt+7`), sem recompilar o BlueScreen. Desligado, um plugin some por inteiro: painel, atalhos, status bar, card, marcas na árvore, ações, contribuições ao build, rotas da API e o processo do servidor. A escolha fica em `~/.bluescreen/plugins.json`.
+
+Os plugins da sua pasta também podem ser **removidos**: a lixeira no cartão (ou botão direito › **Remover…**) manda a pasta para a Lixeira do Windows, e dá para restaurar de lá. Se você marcar a opção, a pasta de dados do plugin vai junto. Os plugins que vêm com o BlueScreen só desligam. Se você tiver uma cópia sua de um deles (o IAMaker cria uma ao editar), remover a cópia devolve a versão original. Pela API: `POST plugins/uninstall { id, data }`.
+
+Para criar ou alterar plugins conversando com uma IA, sem escrever o código, use o plugin [IAMaker](../app/plugins/iamaker/README.md) (`Alt+0`).
 
 ## Onde ficam
 
@@ -70,6 +76,7 @@ O `plugin` que o `ui.js` recebe (e `bs.plugin(id)`, de qualquer lugar) já vem l
 | `plugin.procs.list()` / `procs.attach(id, { onData, onExit })` | os processos do plugin que continuam rodando depois de a página recarregar |
 | `plugin.fetch(url, { method, headers, body \| json, as: 'base64', timeout })` | HTTP de qualquer site, sem CORS: `{ status, ok, headers, body, json(), bodyBase64 }` |
 | `plugin.info()` / `plugin.wipe()` | onde ficam os dados / apagar tudo |
+| `plugin.onUnload(fn)` | roda `fn` antes de o plugin ser recarregado sem recarregar a página (veja [Recarregar sem recarregar a página](#recarregar-sem-recarregar-a-página)): pare `setInterval`, tire `addEventListener` de `window`/`document`, remova o que pôs direto no `document` |
 
 No `fetch`, `{{secret:nome}}` em `url`, `headers` e corpo é trocado pelo segredo **dentro do núcleo**: o token nunca passa pela página.
 
@@ -241,14 +248,15 @@ O objeto `bs` (também em `window.BS`):
 | `bs.actions.add([{ label, k, run, icon }])` | ações do Buscar em tudo (`Shift` `Shift`) |
 | `bs.status.add({ id, title, onclick })` | item na status bar (devolve o `<span>`) |
 | `bs.dashboard.card({ id, order, wide, html(), bind(el) })` / `bs.dashboard.action({ label, icon, go })` | card e botão no resumo do projeto |
-| `bs.ui.panel(html)` | painel na área do editor, abaixo do código |
+| `bs.ui.panel(html)` | painel na área do editor, abaixo do código. Como os outros painéis, dá para arrastar a aba dele para cima, para os lados ou para uma janela flutuante (veja [Dividir a tela](#dividir-a-tela-bslayout)). A aba usa o `.head .ttl` do painel como título; `data-dock-title`, `data-dock-icon` (SVG) e `data-dock-tool` (o id do `bs.tools.register` que abre o painel) no elemento mudam isso |
+| `bs.bubble.register({ id, title, icon, order, width, height, render(el), show(), hide() })` | **janela no balão flutuante**: o balão (canto da tela, arrastável) lista as janelas; cada uma abre na própria janela, que o usuário move, redimensiona, maximiza, minimiza no balão, fecha ou encaixa numa região da tela. `render(el)` roda uma vez, no registro, e desenha dentro de `el`. `bs.bubble.open(id)` / `minimize(id)` / `close(id)` / `toggle(id)` / `isOpen(id)` / `windowOf(id)`; `bs.bubble.badge(id, 'busy' \| 'dot' \| null)` marca o balão (anel girando, ponto) |
 | `bs.build.info()` / `selected()` / `run(task, cmd)` / `showLog(log)` / `current()` / `render()` | painel Build (embaixo do editor): estrutura, escolhas (Maven, JDK, repositório), rodar tarefa, mostrar um log de fora no console |
 | `bs.build.runSteps({ title, steps, jdk })` / `runFile()` | roda passos prontos no console (`{ program, args, cwd, env, java }`, ou `kind: "maven"` com os argumentos do mvn), com uma linha para a entrada do programa; `runFile()` é o "Executar arquivo" pela extensão |
 | `bs.terminal.open(pasta, shell)` / `run(comando, pasta)` / `shells()` | terminal |
 | `bs.lsp.tools()` / `clientFor(aba)` / `restart(ferramenta, raiz)` | servidores de linguagem: lista, cliente da aba (para pedidos LSP próprios) e reinício |
 | `bs.debug.start(aba)` / `stop()` / `session()` | depurador |
 | `bs.hooks.on(evento, fn)` | `project:select`, `project:refresh`, `tab:open`, `tab:activate`, `tab:close`, `tab:save`, `editor:ready(editor, diffEditor)`, `dashboard:render(el)`, `build:render(body, info)`, `codefont(tamanho)`, `refresh`, `escape` |
-| `bs.hooks.filter(nome, fn)` | `tree:marks`, `menu:file`, `menu:tab`, `menu:project`, `menu:commit`, `build:path(rel, caminho)` |
+| `bs.hooks.filter(nome, fn)` | `tree:marks`, `menu:file`, `menu:tab`, `menu:project`, `menu:commit`, `build:path(rel, caminho)`, `plugin:buttons(itens, p)` (botões `{ label, icon, action }` no cartão e no botão direito de cada plugin da aba Plugins, como o "Editar com o IAMaker") |
 
 Funções do núcleo declaradas com `function` também podem ser trocadas: `window.renderTree = function () { ... }`.
 
@@ -262,6 +270,40 @@ bs.hooks.filter('menu:file', (items, ctx) => [...items, '-', {
   action: async () => { const f = await bs.api('file', { project: bs.S.project.path, file: ctx.rel }); bs.toast(f.content.split('\n').length + ' linhas'); },
 }]);
 ```
+
+## Dividir a tela (`bs.layout`)
+
+Em volta do editor há quatro regiões: embaixo (a de sempre, com Terminal, Build, Depurar e Problemas), em cima, à esquerda e à direita. Cada uma tem abas, recolhe com um clique na aba da frente e muda de tamanho pela borda. Uma região sem painéis não aparece.
+
+O usuário leva um painel para outro lugar arrastando:
+- a **aba** dele;
+- o **topo** de uma janela do balão;
+- o **cabeçalho** do painel de arquivos (Projeto, Alterações...), que troca entre a esquerda e a direita da janela.
+
+Durante o arraste aparece uma rosa de alvos no meio do editor (cima, esquerda, flutuar, direita, baixo) e uma prévia de onde o painel vai ficar. Chegar perto da borda do editor também vale. Esc cancela. Um painel que vai para "flutuar" vira uma janela do balão; fechar essa janela devolve o painel para a região de onde ele veio. Onde cada painel ficou é lembrado.
+
+Os painéis de `bs.ui.panel` e as janelas de `bs.bubble.register` já participam sozinhos. Para o resto:
+
+| | |
+|---|---|
+| `bs.layout.move(id, lado)` | leva o painel (`id` do elemento, ou da janela do balão) para `'bottom'`, `'top'`, `'left'`, `'right'` ou `'float'`. `'tool'` é o painel de arquivos (só `'left'` e `'right'`) |
+| `bs.layout.sideOf(id)` | onde ele está agora |
+| `bs.layout.draggable(alça, { id, title, icon, sides, drop(lado) })` | qualquer elemento vira alça de arrastar com os mesmos alvos; `sides` limita os lados, `drop` decide o que fazer |
+| `bs.layout.show(opt)` / `hover(x, y)` / `hide()` | para quem já arrasta por conta própria: mostrar os alvos, acompanhar o ponteiro (devolve o lado sob ele) e soltar (devolve o lado escolhido) |
+| `bs.hooks.on('layout:move', (id, de, para) => ...)` | um painel mudou de lugar. A página também recebe um `resize`, para editores e terminais se ajustarem |
+
+Um painel que muda de lugar continua sendo o mesmo elemento: ids, eventos e estado ficam. Use `ResizeObserver` (ou o evento `resize`) se o conteúdo depende do tamanho, e evite CSS preso a `#dockBody`.
+
+## Recarregar sem recarregar a página
+
+`BS.plugins.reload(id)` relê a lista de plugins no núcleo, desfaz o que o plugin registrou nesta página e roda o `ui.js` dele de novo, sem recarregar a IDE. O IAMaker usa isso a cada mudança. O núcleo desfaz sozinho o que passou pela API, desde que o registro tenha sido feito **no topo do `ui.js`**, não depois de um `await`:
+- painéis (`bs.tools.register`), janelas do balão e painéis de `bs.ui.panel`;
+- itens de status, atalhos (`bs.keys.add`) e ações;
+- cards e botões do resumo;
+- ganchos (`bs.hooks.on`, `bs.hooks.filter`);
+- o `style.css`.
+
+O resto (`setInterval`, `addEventListener` em `window`, elementos postos direto no `document`) vai em `plugin.onUnload(fn)`. `BS.plugins.owned[id]` mostra o que o núcleo anotou de cada plugin.
 
 ## Servidor do plugin
 

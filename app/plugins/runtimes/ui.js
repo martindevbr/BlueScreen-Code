@@ -26,10 +26,10 @@ const ICO = {
 };
 // extensões que o plugin conhece (as mesmas do catálogo do servidor, langs.rs)
 const EXTS = new Set('java kt kts scala sc groovy gvy clj cljc py pyw js mjs cjs jsx ts mts cts tsx go rs cs csx fs fsx vb c cpp cc cxx c++ zig rb php pl pm lua r jl dart swift ex exs erl hs nim ml d sh bash tex'.split(' '));
-// linguagens em que o depurador da IDE (Shift+F9) funciona
-const DEBUG = new Set(['python', 'go', 'rust', 'c', 'cpp', 'csharp']);
+// linguagens em que "Depurar" funciona (depurador da IDE, debug.js; o que falta instalar ele oferece na hora)
+const DEBUG = new Set(['java', 'python', 'javascript', 'typescript', 'go', 'rust', 'c', 'cpp', 'csharp', 'ruby']);
 const extOf = (p) => String(p || '').toLowerCase().split('/').pop().split('.').slice(1).pop() || '';
-const known = (t) => t && t.mode === 'editor' && t.model && EXTS.has(extOf(t.path));
+const known = (t) => t && t.mode === 'editor' && !t.virtual && t.model && EXTS.has(extOf(t.path));
 const LEFT = () => bs.monaco.editor.GlyphMarginLane.Left;
 
 // ---------- ▶ na margem ----------
@@ -86,7 +86,7 @@ function menu(ev, t, en) {
     { label: `Executar '${en.label}'`, k: 'Ctrl+Shift+F10', icon: ICO.play, action: () => run(t, en) },
     { label: 'Executar com argumentos…', icon: ICO.args, action: () => askArgs(t, en) },
   ];
-  if (bs.debug && DEBUG.has(t.lang)) items.push({ label: `Depurar '${en.label}'`, k: 'Shift+F9', icon: ICO.bug, action: async () => { if (t.dirty) await bs.save(); bs.debug.start(t); } });
+  if (bs.debug && DEBUG.has(t.lang)) items.push({ label: `Depurar '${en.label}'`, k: 'Shift+F9', icon: ICO.bug, action: () => debug(t, en) });
   items.push('-', { label: 'Copiar o comando', icon: ICO.copy, action: () => copyCommand(t, en) });
   bs.showMenu(ev, items, en.label);
 }
@@ -131,6 +131,142 @@ function askArgs(t, en) {
       };
     });
 }
+// ---------- depurar ----------
+// O plano de execução é o mesmo do Executar; muda como ele roda:
+// - Java: o programa roda no console do Build com o agente JDWP (javac/java, Maven exec:java, Gradle bsRun) e o
+//   java-debug (plugin do jdtls, o mesmo do VS Code) se liga nele. Entrada do programa continua no console.
+// - Ruby: o mesmo, com o rdbg abrindo a porta junto do programa.
+// - C, C++ e Rust (rustc / cargo): compila no console do Build e o LLDB abre o executável.
+// - Python (debugpy), JavaScript/TypeScript (js-debug) e Go (Delve): o depurador abre o programa com os mesmos
+//   interpretador, argumentos, pasta e ambiente do Executar.
+// - C#: o caminho de sempre do debug.js (pergunta a .dll).
+const freePort = () => 20000 + Math.floor(Math.random() * 40000);
+const isProg = (p, n) => String(p || '').split(/[\\/]/).pop().toLowerCase().replace(/\.(exe|cmd|bat)$/, '') === n;
+// lê o console de uma execução até achar `re` (devolve o match) ou ela acabar (devolve o estado, ou null com re)
+async function waitRun(id, re, ms = 300000) {
+  let from = 0; const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    let r; try { r = await api('build/read', { id, from }); } catch { return null; }
+    for (const l of r.lines || []) { const m = re && re.exec(l); if (m) return m; }
+    from = r.from + (r.lines || []).length;
+    if (r.status !== 'running') return re ? null : r.status;
+    await new Promise(ok => setTimeout(ok, 200));
+  }
+  return null;
+}
+async function planFor(t, en, args) {
+  let r;
+  try { r = await api('runtimes/plan', {}, { method: 'POST', body: JSON.stringify({ project: t.project, file: t.path, line: en ? en.line : 0, args }) }); }
+  catch (e) { toast(e.message); return null; }
+  if (r.missing) { needDialog(r, () => debug(t, en)); return false; }
+  return r.plan || null;
+}
+async function debug(t, en) {
+  if (!S.project || !t || !bs.debug) return;
+  if (t.dirty) await bs.save();
+  if (bs.debug.session()) await bs.debug.stop();
+  const userArgs = store.get('rtArgs', {})[argKey(t, en)] || '';
+  const title = `Depurar ${en ? en.label : t.path.split('/').pop()}`;
+  // sem plano próprio (ou C#): o caminho de sempre do debug.js
+  const plain = () => bs.debug.start(t, {}); // com o: {} o debug.js não chama o lançador de novo
+  if (t.lang === 'csharp') return plain();
+  const plan = await planFor(t, en, userArgs); if (plan === false) return; if (!plan) return plain();
+  const steps = plan.steps.map(x => ({ ...x, args: [...(x.args || [])], env: { ...(x.env || {}) } }));
+  const last = steps[steps.length - 1];
+  const B = bs.build;
+  const runInConsole = async (st, tt) => { const id = B && B.runSteps ? await B.runSteps({ title: tt, steps: st, jdk: plan.jdk }) : null; if (!id) toast('O console de Build não está disponível'); return id; };
+  switch (t.lang) {
+    case 'java': {
+      const jd = await bs.debug.need('java-debug'); if (!jd) return;
+      // o programa espera parado o depurador se ligar (suspend=y)
+      const port = freePort(), agent = `-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:${port}`;
+      if (last.kind === 'maven') last.env.MAVEN_OPTS = ((last.env.MAVEN_OPTS || '') + ' ' + agent).trim();
+      else if (last.args.some(a => /:bsRun$/.test(a))) last.args.push('--debug-jvm'); // Gradle: porta 5005
+      else if (isProg(last.program, 'java')) last.args.unshift(agent);
+      else { toast('Este projeto roda por ' + (last.label || last.program).split(' ')[0] + ': a depuração de Java funciona com javac/java, Maven e Gradle'); return; }
+      const dap = await javaDap(t); if (!dap) return;
+      const id = await runInConsole(steps, title); if (!id) return;
+      const m = await waitRun(id, /Listening for transport dt_socket at address: ?(?:[\d.]+:)?(\d+)/);
+      if (!m) { toast('O programa não chegou a esperar o depurador (veja o console do Build)'); return; }
+      return bs.debug.start(t, { tool: 'java-debug', params: { port: dap }, request: 'attach', title, args: { type: 'java', request: 'attach', name: title, hostName: '127.0.0.1', port: +m[1], timeout: 30000,
+        // F7 não entra no JDK nem em código gerado (como o IntelliJ): System.out.println passa direto
+        stepFilters: { classNameFilters: ['java.*', 'javax.*', 'jdk.*', 'sun.*', 'com.sun.*', 'junit.*', 'org.junit.*'], skipSynthetics: true, skipStaticInitializers: true, skipConstructors: false } } });
+    }
+    case 'ruby': {
+      if (!await bs.debug.need('rdbg')) return;
+      const port = freePort();
+      const st = { ...last, program: 'rdbg', args: ['--open', `--port=${port}`, '--host=127.0.0.1', '--command', '--', last.program, ...last.args], label: `rdbg ${last.label}` };
+      const id = await runInConsole([...steps.slice(0, -1), st], title); if (!id) return;
+      if (!await waitRun(id, /Debugger can attach via TCP\/IP|wait for debugger connection/i)) { toast('O rdbg não abriu a porta (veja o console do Build)'); return; }
+      return bs.debug.start(t, { tool: 'rdbg', params: { port }, request: 'attach', title, args: { type: 'rdbg', request: 'attach', name: title } });
+    }
+    case 'c': case 'cpp': case 'rust': {
+      const tool = await bs.debug.need(t.lang); if (!tool) return;
+      let build = steps.slice(0, -1), program = last.program, args = last.args, cwd = last.cwd;
+      if (isProg(last.program, 'cargo')) {
+        // cargo run -> cargo build; o executável fica em target/debug (exemplos em target/debug/examples)
+        const a = last.args, cut = a.indexOf('--'), sel = a.slice(1, cut < 0 ? a.length : cut);
+        args = cut < 0 ? [] : a.slice(cut + 1);
+        build = [{ ...last, args: ['build', ...sel], label: 'cargo build ' + sel.join(' ') }];
+        const bin = sel[sel.indexOf('--bin') + 1], ex = sel[sel.indexOf('--example') + 1];
+        program = sel.includes('--bin') ? `${cwd}/target/debug/${bin}.exe` : sel.includes('--example') ? `${cwd}/target/debug/examples/${ex}.exe` : null;
+      } else if (isProg(build[0] && build[0].program, 'rustc')) build[0].args.push('-g');
+      if (build.length) {
+        const id = await runInConsole(build, 'Compilar para depurar'); if (!id) return;
+        if (await waitRun(id, null) !== 'ok') { toast('A compilação falhou (veja o console do Build)'); return; }
+      }
+      if (!program) return plain(); // cargo sem --bin: pergunta o executável (debug.js)
+      const cfg = tool.id === 'codelldb' ? { type: 'lldb', request: 'launch', program, args, cwd } : { request: 'launch', program, args, cwd, stopOnEntry: false };
+      return bs.debug.start(t, { tool: tool.id, title, args: cfg });
+    }
+    case 'python': {
+      const tool = await bs.debug.need('python'); if (!tool) return;
+      let a = last.args.filter(x => x !== '-u'); const pi = a.indexOf('python');
+      if (pi >= 0 && !/python/i.test(last.program)) a = a.slice(pi + 1); // uv run python / poetry run python
+      const mi = a.indexOf('-m');
+      const target = mi >= 0 ? { module: a[mi + 1], args: a.slice(mi + 2) } : { program: a[0], args: a.slice(1) };
+      // .venv do projeto: o programa roda com o Python dele (uv/poetry/py ficam com o Python do debugpy)
+      const python = /python(\.exe)?$/i.test(last.program) && /[\\/]/.test(last.program) ? last.program : undefined;
+      return bs.debug.start(t, { tool: tool.id, title, args: { type: 'python', request: 'launch', name: title, ...target, python, cwd: last.cwd, env: last.env, console: 'internalConsole', justMyCode: true, redirectOutput: true } });
+    }
+    case 'javascript': case 'typescript': {
+      const tool = await bs.debug.need('js-debug'); if (!tool) return;
+      const f = last.args.find(x => /\.[cm]?[jt]sx?$/i.test(x)) || ''; const rest = last.args.slice(last.args.indexOf(f) + 1);
+      const rt = isProg(last.program, 'node') ? {} : isProg(last.program, 'npx') ? { runtimeExecutable: last.program, runtimeArgs: last.args.slice(0, last.args.indexOf(f)) }
+        : isProg(last.program, 'tsx') ? { runtimeExecutable: last.program } : null;
+      if (!rt) { toast('O js-debug depura programas do Node.js (este roda por ' + last.program + ')'); return; }
+      return bs.debug.start(t, { tool: tool.id, title, args: { type: 'pwa-node', request: 'launch', name: title, program: f, args: rest, cwd: last.cwd, env: last.env, console: 'internalConsole', outputCapture: 'std', skipFiles: ['<node_internals>/**'], ...rt } });
+    }
+    case 'go': {
+      const tool = await bs.debug.need('go'); if (!tool) return;
+      const a = last.args; // run <arquivo|.> [args]
+      const program = a[1] === '.' ? last.cwd : a[1];
+      return bs.debug.start(t, { tool: tool.id, title, args: { request: 'launch', mode: 'debug', program, args: a.slice(2), cwd: last.cwd } });
+    }
+    default: return plain();
+  }
+}
+// porta DAP do java-debug: o jdtls precisa ter subido com o plugin (senão reinicia com ele)
+async function javaDap(t) {
+  const L = bs.lsp; let c = L && await L.clientFor(t).catch(() => null);
+  if (!c) { toast('A depuração de Java precisa do jdtls (servidor de linguagem do Java) ligado'); return null; }
+  if (!(c.bundles || []).length) {
+    toast('Reiniciando o jdtls com o depurador…');
+    const tools = await L.tools(true); const jt = tools.find(x => x.id === 'jdtls');
+    await L.restart(jt, t.project); c = await L.clientFor(t).catch(() => null);
+    if (!c || !(c.bundles || []).length) { toast('O jdtls não carregou o plugin de depuração'); return null; }
+  }
+  try { return await c.request('workspace/executeCommand', { command: 'vscode.java.startDebugSession', arguments: [] }, 60000); }
+  catch (e) { toast('O jdtls não abriu o depurador: ' + e.message); return null; }
+}
+// Shift+F9 e "Depurar este arquivo": o main mais perto do cursor; arquivo sem main segue o caminho de sempre
+for (const l of DEBUG) if (l !== 'csharp') bs.debug && (bs.debug.launchers[l] = (t) => {
+  if (!known(t) || !S.project || t.project !== S.project.path) return false;
+  const list = entriesOf(t); if (!list.length) return false;
+  const line = (bs.editor && bs.editor.getPosition() && bs.editor.getPosition().lineNumber) || 1;
+  return debug(t, nearest(list, line));
+});
+
 // Ctrl+Shift+F10: o main mais perto do cursor; arquivo sem main nem runtime faltando segue o "Executar arquivo" do núcleo
 const prevRun = bs.keys.map.get('Ctrl+Shift+F10');
 bs.keys.add('Ctrl+Shift+F10', () => {

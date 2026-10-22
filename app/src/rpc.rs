@@ -83,7 +83,16 @@ const DEFS: &[Def] = &[
     dap("lldb-dap", "LLDB (C, C++ e Rust)", &["c", "cpp", "rust"], &["lldb-dap", "lldb-vscode"], &[], "winget install LLVM.LLVM", false),
     dap("codelldb", "CodeLLDB (C, C++ e Rust)", &["c", "cpp", "rust"], &["codelldb"], &["--port", "{port}"], "baixe o CodeLLDB (github.com/vadimcn/codelldb) e ponha adapter/ no PATH", true),
     dap("netcoredbg", "netcoredbg (.NET)", &["csharp"], &["netcoredbg"], &["--interpreter=vscode"], "scoop install netcoredbg", false),
+    // Java: o depurador oficial (o mesmo do VS Code) é um plugin carregado dentro do jdtls; ele abre a porta DAP quando
+    // pedido (vscode.java.startDebugSession) e a ponte só conecta nela (ver attach_session())
+    dap("java-debug", "Java Debug (jdtls)", &["java"], &[], &[], "a IDE baixa o plugin de depuração do jdtls (com.microsoft.java.debug.plugin)", true),
+    // JavaScript e TypeScript: o depurador do VS Code (js-debug) em modo servidor DAP, rodando no Node
+    dap("js-debug", "js-debug (Node.js)", &["javascript", "typescript"], &["node"], &["{tools}/js-debug/js-debug/src/dapDebugServer.js", "{port}", "127.0.0.1"], "a IDE baixa o js-debug do GitHub (microsoft/vscode-js-debug)", true),
+    // Ruby: rdbg (gem debug, vem com o Ruby 3.1+) abre a porta junto com o programa; a ponte só conecta
+    dap("rdbg", "rdbg (Ruby)", &["ruby"], &["rdbg"], &[], "gem install debug", true),
 ];
+/// depuradores que não são abertos pela ponte: a porta já vem aberta (pelo jdtls ou pelo programa) em &port=
+const ATTACH_ONLY: &[&str] = &["java-debug", "rdbg"];
 
 fn tools_dir() -> PathBuf { crate::install::tools_dir() }
 
@@ -106,6 +115,13 @@ fn extra_check(id: &str, prog: &Path) -> bool {
         }
         _ => true,
     }
+}
+
+/// plugin de depuração do jdtls baixado pela IDE (tools/java-debug/com.microsoft.java.debug.plugin-*.jar)
+pub fn java_debug_jar() -> Option<PathBuf> {
+    let mut jars: Vec<PathBuf> = std::fs::read_dir(tools_dir().join("java-debug")).ok()?.flatten().map(|e| e.path())
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("com.microsoft.java.debug.plugin") && n.ends_with(".jar"))).collect();
+    jars.sort(); jars.pop()
 }
 
 /// pasta do jdtls (a que tem plugins/org.eclipse.equinox.launcher_*.jar): baixada pela IDE, do scoop ou o bin no PATH
@@ -188,6 +204,24 @@ pub fn detect() -> Vec<Tool> {
             let (command, args) = r.map(|(j, a)| (j.to_string_lossy().into_owned(), a)).unwrap_or_default();
             return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: !command.is_empty(), command, args, install: d.install.into(), tcp: false, auto, needs, sdk, sdk_min };
         }
+        if d.id == "java-debug" {
+            // instalado = o plugin baixado e um jdtls que consiga carregá-lo
+            let jar = java_debug_jar(); let jd = jdtls().is_ok();
+            let (auto, needs) = if jar.is_some() { (None, None) } else { crate::install::describe(d.id) };
+            let needs = if jd { needs } else { Some("precisa do Eclipse JDT LS (jdtls), o servidor de linguagem do Java".into()) };
+            return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: jar.is_some() && jd,
+                command: jar.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), args: vec![], install: d.install.into(), tcp: true, auto, needs, sdk: None, sdk_min: None };
+        }
+        if d.id == "js-debug" {
+            // o servidor do js-debug é um script: precisa do Node e do pacote baixado em tools/js-debug
+            let script = ["js-debug/src/dapDebugServer.js", "src/dapDebugServer.js"].iter().map(|r| tools_dir().join("js-debug").join(r)).find(|p| p.is_file());
+            let node = which("node");
+            let (auto, needs) = if script.is_some() { (None, None) } else { crate::install::describe(d.id) };
+            let needs = if node.is_some() { needs } else { Some("precisa do Node.js instalado".into()) };
+            let args = script.as_ref().map(|s| vec![s.to_string_lossy().into_owned(), "{port}".into(), "127.0.0.1".into()]).unwrap_or_default();
+            return Tool { id: d.id.into(), kind: d.kind, name: d.name.into(), langs: d.langs.iter().map(|s| s.to_string()).collect(), installed: script.is_some() && node.is_some(),
+                command: node.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), args, install: d.install.into(), tcp: true, auto, needs, sdk: None, sdk_min: None };
+        }
         // baixada pela IDE (~/.bluescreen/tools/<id>) primeiro, depois o PATH
         let found = d.progs.iter().find_map(|p| crate::install::local(d.id, p).or_else(|| which(p).filter(|w| extra_check(d.id, w))));
         let (auto, needs) = if found.is_some() { (None, None) } else { crate::install::describe(d.id) };
@@ -228,6 +262,7 @@ pub fn tools(fresh: bool) -> std::sync::Arc<Vec<Tool>> {
 fn deny(code: StatusCode, msg: &str) -> Response { (code, msg.to_string()).into_response() }
 
 /// GET /api/rpc/ws?tool=<id>&root=<pasta> — inicia a ferramenta e liga ao WebSocket (só PC local, só a própria página).
+/// Com &port=<n> (depuradores) não inicia nada: conecta na porta DAP que já está aberta.
 pub async fn ws(req: Request<Body>, remote: bool, q: HashMap<String, String>) -> Response {
     if remote { return deny(StatusCode::FORBIDDEN, "só pelo PC local"); }
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
@@ -237,8 +272,11 @@ pub async fn ws(req: Request<Body>, remote: bool, q: HashMap<String, String>) ->
     let Some(tool) = q.get("tool").and_then(|id| list.iter().find(|t| &t.id == id)).cloned() else { return deny(StatusCode::NOT_FOUND, "ferramenta desconhecida") };
     if !tool.installed { return deny(StatusCode::NOT_FOUND, "ferramenta não instalada"); }
     let root = q.get("root").map(PathBuf::from).filter(|p| p.is_dir()).or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("C:\\"));
+    // &port=: só conecta num depurador que já está escutando (os ATTACH_ONLY, e as sessões filhas do js-debug)
+    let attach = if tool.kind == "dap" { q.get("port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(0) } else { 0 };
+    if attach == 0 && ATTACH_ONLY.contains(&tool.id.as_str()) { return deny(StatusCode::BAD_REQUEST, "falta a porta do depurador"); }
     match WebSocketUpgrade::from_request(req, &()).await {
-        Ok(up) => up.on_upgrade(move |socket| session(socket, tool, root)),
+        Ok(up) => up.on_upgrade(move |socket| async move { if attach > 0 { attach_session(socket, tool, attach).await } else { session(socket, tool, root).await } }),
         Err(e) => e.into_response(),
     }
 }
@@ -304,6 +342,26 @@ async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
         (Box::new(child.stdout.take().expect("stdout")), Box::new(child.stdin.take().expect("stdin")))
     };
     let _ = ws.send(text(json!({ "bs": "ready", "pid": child.id(), "name": tool.name, "port": port }))).await;
+    pump(&mut ws, reader, writer, Some(&mut child)).await;
+    // dá um instante para sair sozinha (depois do shutdown/disconnect da página); senão encerra
+    if tokio::time::timeout(Duration::from_millis(1500), child.wait()).await.is_err() { kill_tree(&mut child).await; }
+}
+
+/// depurador que já roda em outro processo (java-debug dentro do jdtls, rdbg junto do programa, js-debug de uma sessão
+/// anterior): só conecta na porta dele
+async fn attach_session(mut ws: WebSocket, tool: Tool, port: u16) {
+    let text = |v: Value| Message::Text(v.to_string().into());
+    let mut conn = None;
+    for _ in 0..50 { if let Ok(s) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await { conn = Some(s); break; } tokio::time::sleep(Duration::from_millis(100)).await; }
+    let Some(s) = conn else { let _ = ws.send(text(json!({ "bs": "error", "message": format!("{} não abriu a porta {port}", tool.name) }))).await; return; };
+    let (r, w) = s.into_split();
+    let _ = ws.send(text(json!({ "bs": "ready", "name": tool.name, "port": port }))).await;
+    pump(&mut ws, Box::new(r), Box::new(w), None).await;
+}
+
+/// quadros Content-Length da ferramenta <-> mensagens de texto do WebSocket, até um dos lados fechar
+async fn pump(ws: &mut WebSocket, reader: Box<dyn AsyncRead + Unpin + Send>, writer: Box<dyn AsyncWrite + Unpin + Send>, mut child: Option<&mut tokio::process::Child>) {
+    let text = |v: Value| Message::Text(v.to_string().into());
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
     let rtask = tokio::spawn(async move {
         let mut r = BufReader::new(reader);
@@ -327,7 +385,7 @@ async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
         tokio::select! {
             m = rx.recv() => match m {
                 Some(s) => { if ws.send(Message::Text(s.into())).await.is_err() { break; } }
-                None => { let code = child.wait().await.ok().and_then(|s| s.code()); let _ = ws.send(text(json!({ "bs": "exit", "code": code }))).await; break; }
+                None => { let code = match child.as_mut() { Some(c) => c.wait().await.ok().and_then(|s| s.code()), None => None }; let _ = ws.send(text(json!({ "bs": "exit", "code": code }))).await; break; }
             },
             m = ws.recv() => match m {
                 Some(Ok(Message::Text(t))) => {
@@ -342,8 +400,6 @@ async fn session(mut ws: WebSocket, tool: Tool, root: PathBuf) {
     }
     rtask.abort();
     drop(writer);
-    // dá um instante para sair sozinha (depois do shutdown/disconnect da página); senão encerra
-    if tokio::time::timeout(Duration::from_millis(1500), child.wait()).await.is_err() { kill_tree(&mut child).await; }
 }
 
 /// shims do npm (.cmd) rodam o node como neto: encerrar só o filho deixaria o servidor vivo

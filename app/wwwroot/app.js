@@ -59,11 +59,13 @@ function syncUnsaved() {
 }
 
 // cores dos tokens semânticos (vindos do servidor de linguagem, com prefixo "s-"; ver lsp.js). O que não tem regra aqui
-// fica com a cor da sintaxe. c: { fn, type, field, konst, macro, lifetime, kw }
+// fica com a cor da sintaxe. c: { fn (declaração), call (chamada), type, field, konst, macro, lifetime, kw, ... }.
+// Os mesmos nomes saem da coloração sem servidor (syntax.js). Modificador mais específico primeiro no nome da regra.
 function semRules(c) {
   const r = (token, fg, style) => fg ? { token, foreground: String(fg).replace('#', ''), ...(style ? { fontStyle: style } : {}) } : null;
   return [
-    r('s-function', c.fn), r('s-method', c.fn), r('s-macro', c.macro), r('s-decorator', c.macro), r('s-attribute', c.macro),
+    r('s-function', c.call || c.fn), r('s-method', c.call || c.fn), r('s-function.declaration', c.fn), r('s-method.declaration', c.fn), r('s-function.definition', c.fn), r('s-method.definition', c.fn),
+    r('s-property.static', c.field, 'italic'), r('s-property.declaration.static', c.field, 'italic'), r('s-class.declaration', c.type), r('s-namespace', c.ns), r('s-parameter', c.param), r('s-macro', c.macro), r('s-decorator', c.macro), r('s-attribute', c.macro),
     r('s-type', c.type), r('s-class', c.type), r('s-struct', c.type), r('s-enum', c.type), r('s-interface', c.type), r('s-typeAlias', c.type), r('s-builtinType', c.kw), r('s-typeParameter', c.type, 'italic'),
     r('s-property', c.field), r('s-enumMember', c.konst, 'italic'), r('s-variable.static', c.konst, 'italic'), r('s-variable.constant', c.konst, 'italic'), r('s-const', c.konst, 'italic'), r('s-static', c.konst, 'italic'),
     r('s-lifetime', c.lifetime, 'italic'), r('s-selfKeyword', c.kw), r('s-selfTypeKeyword', c.kw), r('s-keyword', c.kw),
@@ -84,6 +86,8 @@ window.MonacoEnvironment = { getWorkerUrl: () => VS + '/base/worker/workerMain.j
 require.config({ paths: { vs: VS } });
 require(['vs/editor/editor.main'], () => {
   monaco = window.monaco;
+  // temas de partida, até a Aparência (theme.js) aplicar o do usuário: as predefinições BlueScreen e BlueScreen Claro
+  if (window.bsPresetMonaco) { monaco.editor.defineTheme('bs-dark', bsPresetMonaco('bluescreen')); monaco.editor.defineTheme('bs-light', bsPresetMonaco('bluescreen-claro')); } else {
   monaco.editor.defineTheme('bs-dark', { base: 'vs-dark', inherit: true, rules: [
     { token: '', foreground: 'BCBEC4' }, { token: 'comment', foreground: '7A7E85', fontStyle: 'italic' }, { token: 'keyword', foreground: 'CF8E6D' },
     { token: 'string', foreground: '6AAB73' }, { token: 'number', foreground: '2AACB8' }, { token: 'type', foreground: 'BCBEC4' }, { token: 'type.identifier', foreground: 'C77DBB' },
@@ -102,9 +106,11 @@ require(['vs/editor/editor.main'], () => {
     { token: 'type.identifier', foreground: '871094' }, { token: 'tag', foreground: '0033B3' }, { token: 'attribute.value', foreground: '067D17' },
     ...semRules({ fn: '#00627A', type: '#000000', field: '#871094', konst: '#871094', macro: '#9E880D', lifetime: '#20999D', kw: '#0033B3' }),
   ], colors: { 'editor.background': '#FFFFFF', 'editor.lineHighlightBackground': '#F5F8FE', 'editor.selectionBackground': '#A6D2FF', 'editorLineNumber.foreground': '#AEB3C2', 'editorGutter.background': '#FFFFFF', 'diffEditor.insertedTextBackground': '#BEE6BE80', 'diffEditor.removedTextBackground': '#FFD5CC80' } });
+  }
   try { const ts = monaco.languages.typescript; const co = { allowJs: true, checkJs: false, allowNonTsExtensions: true, target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.NodeJs, experimentalDecorators: true, noEmit: true, jsx: ts.JsxEmit.Preserve }; ts.typescriptDefaults.setCompilerOptions(co); ts.javascriptDefaults.setCompilerOptions(co); ts.typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false }); } catch {}
   registerJsp();
   registerGherkin();
+  window.registerSmartTokens?.(); // antes do servidor de linguagem, que tem prioridade quando liga
   applyTheme();
   boot();
 });
@@ -434,6 +440,9 @@ function closeMenu() { $('#ctx')?.remove(); $('#ctxSub')?.remove(); }
 document.addEventListener('mousedown', (e) => { if (!e.target.closest('.ctx, #btnSaveMenu')) closeMenu(); });
 window.addEventListener('blur', closeMenu);
 const I = {
+  eye: '<svg class="i" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff: '<svg class="i" viewBox="0 0 24 24"><path d="M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.7 3.6M6.6 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7a9.6 9.6 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18"/></svg>',
+  grip: '<svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="18" r="1.3"/></svg>',
   open: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   newp: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/></svg>',
   diff: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3v18M3 7h6v10H3zM15 7h6v10h-6z"/></svg>',
@@ -800,13 +809,107 @@ function renderStrip() {
   // Ao passar o mouse a barra se expande e mostra o nome de cada painel; --i escalona a entrada dos rótulos.
   let i = 0;
   const item = (attrs, icon, label, key, extra = '') => `<button class="icon-btn" ${attrs} aria-label="${esc(label)}" style="--i:${i++}">${icon}<span class="lbl">${esc(label)}</span>${key ? `<kbd class="k">${esc(key)}</kbd>` : ''}${extra}</button>`;
-  const btn = (t) => item(`data-tool="${esc(t.id)}"`, t.icon, t.title, t.key, `<span class="badge" id="badge-${esc(t.id)}" hidden></span>`);
-  const top = tools.filter(t => !t.bottom).map(btn).join('');
-  const bottom = tools.filter(t => t.bottom).map(btn).join('') + item('id="btnRefresh"', I.refresh, 'Atualizar', 'F5');
-  el.innerHTML = top + '<div class="grow"></div>' + bottom;
-  el.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+  // ocultos (stripHidden) somem da barra; no modo de arrumar aparecem apagados, com o olho para voltar
+  const hid = new Set(stripHidden());
+  const eye = (t) => STRIP.on ? `<span class="hide-t" role="button" title="${hid.has(t.id) ? 'Mostrar na barra' : 'Ocultar da barra'}">${hid.has(t.id) ? I.eyeOff : I.eye}</span>` : '';
+  const btn = (t) => item(`data-tool="${esc(t.id)}"${hid.has(t.id) ? ' data-hid="1"' : ''}`, t.icon, t.title, hid.has(t.id) ? '' : t.key, `<span class="badge" id="badge-${esc(t.id)}" hidden></span>${eye(t)}`);
+  const shown = tools.filter(t => STRIP.on || !hid.has(t.id));
+  const top = shown.filter(t => !stripBottom(t)).map(btn).join('');
+  const bottom = shown.filter(stripBottom).map(btn).join('') + item('id="btnRefresh"', I.refresh, 'Atualizar', 'F5');
+  el.innerHTML = top + '<div class="grow"></div>' + bottom + (STRIP.on ? `<div class="arr-bar"><button class="chip" id="stripReset" title="Volta à ordem e aos atalhos de fábrica">Padrão</button><button class="chip primary" id="stripDone">Concluir</button></div>` : '');
+  el.classList.toggle('arrange', STRIP.on);
+  el.querySelectorAll('[data-hid]').forEach(b => b.classList.add('hid'));
+  el.querySelectorAll('[data-tool]').forEach(b => {
+    b.onclick = (e) => { if (e.target.closest('.hide-t')) { stripHide(b.dataset.tool); return; } if (STRIP.on || STRIP.eat) { STRIP.eat = false; return; } setTool(b.dataset.tool); };
+    b.onpointerdown = (e) => { if (!e.target.closest('.hide-t')) stripPress(e, b); };
+    b.oncontextmenu = (e) => { e.preventDefault(); const d = BS.tools.get(b.dataset.tool); if (!d) return;
+      showMenu(e, [{ label: 'Ocultar da barra', icon: I.eyeOff, action: () => stripHide(d.id, true) }, { label: 'Reorganizar a barra…', icon: I.grip, action: () => stripArrange(true) }], d.title); };
+  });
   $('#btnRefresh').onclick = refreshAll;
+  if (STRIP.on) { $('#stripDone').onclick = () => stripArrange(false); $('#stripReset').onclick = () => { store.set('stripOrder', null); store.set('stripHidden', []); toolKeys(); renderStrip(); }; }
   btnState();
+}
+// ----- reorganizar a barra: segurar um ícone por 2 s entra no modo de arrumar (a barra abre e os ícones tremem de leve);
+// arrastar muda a ordem, inclusive entre o grupo de cima e o de baixo. Os atalhos Alt+1..9 seguem a posição.
+// Concluir, Esc ou um clique fora sai. A ordem fica em store('stripOrder') = { top: [ids], bottom: [ids] }
+const STRIP = { on: false, eat: false, timer: 0 };
+const stripHidden = () => store.get('stripHidden', []);
+// ocultar/mostrar um painel na barra (o atalho e a busca de ações continuam abrindo); hide: true/false ou alterna
+function stripHide(id, hide) {
+  const h = new Set(stripHidden()), d = BS.tools.get(id);
+  if (hide ?? !h.has(id)) h.add(id); else h.delete(id);
+  store.set('stripHidden', [...h]); toolKeys(); renderStrip();
+  if (hide === true && d) toast(`${d.title} saiu da barra. Para voltar: segure um ícone por 2 s (ou botão direito › Reorganizar) e clique no olho.`);
+}
+const stripBottom = (t) => { const o = store.get('stripOrder', null); if (o) { if (o.bottom.includes(t.id)) return true; if (o.top.includes(t.id)) return false; } return !!t.bottom; };
+function stripPress(e, b) {
+  if (e.button !== 0) return;
+  if (STRIP.on) { stripDrag(e, b); return; }
+  const x0 = e.clientX, y0 = e.clientY;
+  b.classList.add('holding');
+  const cancel = () => { clearTimeout(STRIP.timer); b.classList.remove('holding'); removeEventListener('pointermove', move); removeEventListener('pointerup', cancel); removeEventListener('pointercancel', cancel); };
+  const move = (ev) => { if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 6) cancel(); };
+  addEventListener('pointermove', move); addEventListener('pointerup', cancel); addEventListener('pointercancel', cancel);
+  // segurou: entra no modo e já sai arrastando o ícone, sem precisar soltar
+  STRIP.timer = setTimeout(() => { cancel(); STRIP.eat = true; stripArrange(true); const nb = $(`#strip [data-tool="${CSS.escape(b.dataset.tool)}"]`); if (nb) stripDrag(e, nb); }, 2000);
+}
+function stripArrange(on) {
+  if (STRIP.on === on) return;
+  STRIP.on = on; renderStrip();
+  if (on) {
+    if (!store.get('stripHint', false)) { store.set('stripHint', true); toast('Arraste os ícones para mudar a ordem. Os atalhos Alt+1…9 seguem a posição. Esc conclui.'); }
+    const out = (ev) => { if (!ev.target.closest('#strip')) stripArrange(false); };
+    const esc = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); stripArrange(false); } };
+    STRIP.off = () => { removeEventListener('pointerdown', out, true); removeEventListener('keydown', esc, true); };
+    addEventListener('pointerdown', out, true); addEventListener('keydown', esc, true);
+  } else { STRIP.eat = false; STRIP.off && STRIP.off(); }
+}
+// arrastar: o ícone segue o ponteiro; os outros abrem espaço com uma animação curta (FLIP)
+function stripDrag(e, b) {
+  e.preventDefault();
+  const el = $('#strip'), grab = e.clientY - b.getBoundingClientRect().top;
+  try { b.setPointerCapture(e.pointerId); } catch {}
+  b.classList.add('dragging');
+  const items = () => [...el.querySelectorAll('[data-tool], .grow')].filter(n => n !== b);
+  const follow = (y) => { b.style.transform = ''; b.style.transform = `translateY(${y - grab - b.getBoundingClientRect().top}px) scale(1.04)`; };
+  const move = (ev) => {
+    const y = ev.clientY; let ref = null;
+    for (const n of items()) {
+      const r = n.getBoundingClientRect();
+      if (n.classList.contains('grow')) { if (y < r.top + Math.min(24, r.height / 2)) { ref = n; break; } if (y < r.bottom) { ref = n.nextElementSibling === b ? b.nextElementSibling : n.nextElementSibling; break; } continue; }
+      if (y < r.top + r.height / 2) { ref = n; break; }
+    }
+    if (!ref) ref = $('#btnRefresh');
+    if (ref !== b && ref !== b.nextElementSibling) {
+      const sib = items(), before = new Map(sib.map(n => [n, n.getBoundingClientRect().top]));
+      el.insertBefore(b, ref);
+      for (const n of sib) { const d = before.get(n) - n.getBoundingClientRect().top; if (!d || n.classList.contains('grow')) continue; n.style.transition = 'none'; n.style.transform = `translateY(${d}px)`; requestAnimationFrame(() => { n.style.transition = ''; n.style.transform = ''; }); }
+      stripSave(); stripKeys();
+    }
+    follow(y);
+  };
+  const up = () => { b.removeEventListener('pointermove', move); b.removeEventListener('pointerup', up); b.removeEventListener('pointercancel', up); b.classList.remove('dragging'); b.style.transform = ''; stripSave(); toolKeys(); renderStrip(); };
+  b.addEventListener('pointermove', move); b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
+}
+// ordem atual da barra (lida da tela) e os atalhos na hora, enquanto arrasta
+function stripSave() {
+  const el = $('#strip'), ids = (sel) => [...el.querySelectorAll(sel)].map(n => n.dataset.tool);
+  const all = [...el.children], g = all.findIndex(n => n.classList.contains('grow'));
+  store.set('stripOrder', { top: all.slice(0, g).filter(n => n.dataset.tool).map(n => n.dataset.tool), bottom: all.slice(g + 1).filter(n => n.dataset.tool).map(n => n.dataset.tool) });
+}
+function stripKeys() { toolKeys(); document.querySelectorAll('#strip [data-tool]').forEach(n => { const d = BS.tools.get(n.dataset.tool); let k = n.querySelector('.k'); if (d && d.key) { if (!k) { k = document.createElement('kbd'); k.className = 'k'; n.querySelector('.lbl').after(k); } k.textContent = d.key; } else if (k) k.remove(); }); }
+// atalhos dos painéis: os de fábrica (baseKey); com a barra reorganizada, Alt+1..9 vão pela posição na tela (cima e
+// depois baixo), e quem tem atalho que não é número (Alt+F12 do Terminal) fica com o dele
+const boundToolKeys = new Set();
+function toolKeys() {
+  const list = BS.tools.list();
+  for (const d of list) d.key = d.baseKey;
+  if (store.get('stripOrder', null)) {
+    let n = 1; const hid = new Set(stripHidden());
+    for (const d of [...list.filter(t => !stripBottom(t)), ...list.filter(stripBottom)]) { if (hid.has(d.id)) continue; if (d.baseKey && !/^Alt\+\d$/i.test(d.baseKey)) continue; d.key = n <= 9 ? 'Alt+' + n++ : undefined; }
+  }
+  for (const k of boundToolKeys) BS.keys.remove(k); boundToolKeys.clear();
+  for (const d of list) if (d.key) { const id = d.id; BS.keys.add(d.key, () => setTool(id)); boundToolKeys.add(d.key); }
 }
 function setTool(t) {
   const def = BS.tools.get(t); if (!def) return;
@@ -1306,7 +1409,7 @@ function activate(tab) {
 }
 function renderTabs() {
   $('#editor').classList.toggle('no-tabs', !S.tabs.length);
-  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''}" data-k="${esc(t.key)}" title="${esc(t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? 'EXTERNO' : t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
+  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''} ${t.virtual ? 'virtual' : ''}" data-k="${esc(t.key)}" title="${esc(t.virtual ? t.title + ' (só leitura)' : t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? 'EXTERNO' : t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(el => {
     const t = S.tabs.find(x => x.key === el.dataset.k);
     el.onclick = (e) => e.shiftKey ? askClose(t) : activate(t);
@@ -1738,10 +1841,11 @@ function seBuild() {
     else {
       const c = seFind('classes', q, 60), f = seFind('files', q, 60), a = seFindActions(q, 20);
       const seen = new Set(c.slice(0, 8).map(x => x.f.p)); const f2 = f.filter(x => !seen.has(x.f.p));
-      sec('Classes', c.slice(0, 8), 'classes', c.length); sec('Símbolos', seSyms(q).slice(0, 8), 'classes', seSyms(q).length); sec('Arquivos', f2.slice(0, 8), 'files', f2.length); sec('Ações', a.slice(0, 5), 'actions', a.length);
+      const xs = seExt(q);
+      sec('Classes', c.slice(0, 8), 'classes', c.length); sec('Símbolos', seSyms(q).slice(0, 8), 'classes', seSyms(q).length); sec('Classes externas (dependências)', xs.slice(0, 8), 'classes', xs.length); sec('Arquivos', f2.slice(0, 8), 'files', f2.length); sec('Ações', a.slice(0, 5), 'actions', a.length);
       if (S.project) items.push({ type: 'gotext', text: q });
     }
-  } else if (t === 'classes') { items = seFind('classes', q, 200); const sy = seSyms(q); if (sy.length) { if (items.length) items.unshift({ type: 'sec', title: 'Classes' }); items.push({ type: 'sec', title: 'Símbolos (servidor de linguagem)' }, ...sy); } }
+  } else if (t === 'classes') { items = seFind('classes', q, 200); const sy = seSyms(q); if (sy.length) { if (items.length) items.unshift({ type: 'sec', title: 'Classes' }); items.push({ type: 'sec', title: 'Símbolos (servidor de linguagem)' }, ...sy); } const xs = seExt(q); if (xs.length) { if (items.length && items[0].type !== 'sec') items.unshift({ type: 'sec', title: 'Classes' }); items.push({ type: 'sec', title: 'Classes externas (dependências e bibliotecas)' }, ...xs); } }
   else if (t === 'files') { items = seFind('files', q, 200); if (!q.trim() && items.length) items.unshift({ type: 'sec', title: 'Arquivos recentes' }); }
   else if (t === 'actions') items = seFindActions(q, 100);
   else if (t === 'text') {
@@ -1762,6 +1866,8 @@ function seRow(x, i) {
   if (x.type === 'sec') return `<div class="se-sec"><span>${esc(x.title)}</span>${x.more ? `<a data-tab="${x.tab}">mais ${x.more}</a>` : ''}</div>`;
   if (x.type === 'note') return `<div class="se-note">${x.spin ? '<span class="spin"></span> ' : ''}${esc(x.text)}</div>`;
   if (x.type === 'gotext') return `<div class="se-row${on}" data-i="${i}">${SEARCH_ICO}<span class="nm">Buscar <b>${esc(x.text)}</b> no texto dos arquivos</span><span class="kb" style="margin-left:auto">Ctrl+Shift+F</span></div>`;
+  if (x.type === 'sym' && x.s.ext) { const s = x.s, k = SE_KIND[s.kind] || ['•', 'sym'];
+    return `<div class="se-row${on}" data-i="${i}" title="${esc(decodeURIComponent(s.uri))}"><span class="se-kind k-${k[1]}">${k[0]}</span><span class="nm">${seHl(s.name, x.m && x.m.idx)}</span>${s.container ? `<span class="kb">${esc(s.container)}</span>` : ''}<span class="loc">${esc(s.lib)}</span></div>`; }
   if (x.type === 'sym') { const s = x.s, k = SE_KIND[s.kind] || ['•', 'sym'];
     return `<div class="se-row${on}" data-i="${i}" title="${esc(s.p)}:${s.line}"><span class="se-kind k-${k[1]}">${k[0]}</span><span class="nm">${esc(s.name)}</span>${s.container ? `<span class="kb">${esc(s.container)}</span>` : ''}<span class="loc">${esc(s.p)}:${s.line}</span></div>`; }
   if (x.type === 'action') return `<div class="se-row${on}" data-i="${i}">${x.a.icon || ''}<span class="nm">${seHl(x.a.label, x.m.idx)}</span>${x.a.k ? `<span class="kb">${esc(x.a.k)}</span>` : ''}</div>`;
@@ -1808,13 +1914,25 @@ async function seGo(i) {
   seClose();
   if (x.type === 'action') return x.a.run();
   if (x.type === 'hit') { await openFile(x.h.p, 'editor', x.h.line); seSelectRange(x.h.line, x.h.col, x.h.len); return; }
+  if (x.type === 'sym' && x.s.ext) return BS.lsp.openSymbol(x.s);
   if (x.type === 'sym') { await openFile(x.s.p, 'editor', x.s.line); seSelectRange(x.s.line, x.s.col, x.s.name.length); return; }
   await openFile(x.f.p, 'editor', x.line || undefined);
   if (x.line && x.col) seSelectRange(x.line, x.col, 0);
 }
 // símbolos do projeto vindos dos servidores de linguagem (funções, structs, traits, métodos...), além do índice próprio
 const SE_KIND = { 2: ['M', 'mod'], 3: ['N', 'mod'], 5: ['C', 'type'], 6: ['m', 'fn'], 7: ['p', 'var'], 8: ['f', 'var'], 9: ['c', 'fn'], 10: ['E', 'type'], 11: ['I', 'type'], 12: ['ƒ', 'fn'], 13: ['v', 'var'], 14: ['K', 'const'], 22: ['e', 'const'], 23: ['S', 'type'], 26: ['T', 'type'] };
-const seSyms = (q) => SE.sym && SE.symQ === q && SE.symFor === (S.project && S.project.path) ? SE.sym.map(s => ({ type: 'sym', s })) : [];
+const seSymsOf = (q) => SE.sym && SE.symQ === q && SE.symFor === (S.project && S.project.path) ? SE.sym : [];
+const seSyms = (q) => seSymsOf(q).filter(s => !s.ext).map(s => ({ type: 'sym', s }));
+// classes das dependências do projeto (JDK, jars, crates, node_modules...), como os servidores de linguagem dele as
+// enxergam; o nome mais parecido com o digitado primeiro, e nome igual antes de tudo (System acha java.lang.System)
+function seExt(raw) {
+  const { q, pkg } = seParse(raw); if (!q) return [];
+  return seSymsOf(raw).filter(s => s.ext && (!pkg || (s.container || '').toLowerCase().includes(pkg))).map((s, n) => {
+    const m = seMatch(q, s.name);
+    const score = (m ? m.score : -500) + (s.name === q ? 1000 : s.name.toLowerCase() === q.toLowerCase() ? 600 : 0) - n * 0.01 - (s.container || '').length * 0.1;
+    return { type: 'sym', s, m, score };
+  }).sort((a, b) => b.score - a.score).slice(0, 100);
+}
 let seSymT = null;
 function seSymSearch() {
   clearTimeout(seSymT);
@@ -1881,7 +1999,9 @@ function quickOpen() { openSearch('files'); }
 $('#app').style.setProperty('--tw', (store.get('tw', 300)) + 'px');
 $('#toolResize').addEventListener('mousedown', (e) => {
   e.preventDefault(); const h = $('#toolResize'); h.classList.add('on'); document.body.classList.add('resizing');
-  const move = (ev) => { const w = Math.max(180, Math.min(innerWidth - 400, ev.clientX - 40)); $('#app').style.setProperty('--tw', w + 'px'); $('#app').classList.remove('no-tool'); btnState(); };
+  // com o painel à direita (dock.js, tool-right), a borda de arrastar é a da esquerda
+  const right = $('#app').classList.contains('tool-right');
+  const move = (ev) => { const w = Math.max(180, Math.min(innerWidth - 400, right ? innerWidth - ev.clientX - 8 : ev.clientX - 40)); $('#app').style.setProperty('--tw', w + 'px'); $('#app').classList.remove('no-tool'); btnState(); };
   const up = () => { h.classList.remove('on'); document.body.classList.remove('resizing'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); store.set('tw', parseInt($('#app').style.getPropertyValue('--tw')) || 300); };
   document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
@@ -1902,9 +2022,24 @@ function normCombo(s) {
   const parts = String(s).split('+').map(x => x.trim()).filter(Boolean); const key = parts.pop() || ''; const mods = new Set(parts.map(p => p.toLowerCase()));
   return (mods.has('ctrl') || mods.has('cmd') || mods.has('meta') ? 'Ctrl+' : '') + (mods.has('alt') ? 'Alt+' : '') + (mods.has('shift') ? 'Shift+' : '') + keyName(key);
 }
+// o que cada plugin registra enquanto o ui.js dele roda (painéis, teclas, ações, status, cards, ganchos, balão):
+// BS.plugins.reload(id) desfaz tudo isso antes de rodar o ui.js de novo, sem recarregar a página
+// entrada da lista que veio do núcleo: "settings" é o formulário do plugin.json, mas na página plugin.settings é a
+// API das configurações; o formulário fica em settingsSchema (como o cofre, que vem como vaultKeys)
+function entryOf(n, into) {
+  const p = into || {}; const schema = Array.isArray(n.settings) ? n.settings : (p.settingsSchema || []);
+  Object.assign(p, n, { settingsSchema: schema }, pluginApi(n.id));
+  return p;
+}
+function own(kind, item, id) {
+  const cur = id || (BS.plugins && BS.plugins.current); if (!cur) return item;
+  const o = BS.plugins.owned[cur] = BS.plugins.owned[cur] || {};
+  (o[kind] = o[kind] || []).push(item);
+  return item;
+}
 const BS = window.BS = {
   version: null, S, state: S, api, $, esc, toast, store, I, TI, treeIcon, fmtDate, ago, daysAgo, statHtml, copyText, reveal, absPath, showMenu, closeMenu,
-  openFile, openTool, setTool, renderTool, renderStrip, renderTree, renderDashboard, refreshProject, refreshAll, selectProject, revealAt, openOutside, openSearch, present, save, saveAll, runLint, lintAll, quickProject,
+  openFile, openTool, setTool, renderTool, renderStrip, renderTree, renderDashboard, refreshProject, refreshAll, selectProject, revealAt, openOutside, openVirtual, openSearch, present, save, saveAll, runLint, lintAll, quickProject,
   get editor() { return editor; }, get diffEditor() { return diffEditor; }, get monaco() { return monaco; }, get viewer() { return viewer; },
   // painéis da barra da esquerda: { id, title, icon, key: 'Alt+5', order, render(), bottom?, toggle?() }
   tools: {
@@ -1918,45 +2053,107 @@ const BS = window.BS = {
         // atalho repetido: fica com quem registrou por último (os plugins carregam depois dos painéis embutidos);
         // o outro painel perde o atalho em vez de os dois disputarem a tecla
         const k = normCombo(def.key);
-        for (const d of BS.tools.defs.values()) if (d !== def && d.key && normCombo(d.key) === k) { console.warn(`atalho ${def.key}: fica com ${def.title}, sai de ${d.title}`); d.key = undefined; }
-        BS.keys.add(def.key, () => setTool(def.id));
+        for (const d of BS.tools.defs.values()) if (d !== def && d.baseKey && normCombo(d.baseKey) === k) { console.warn(`atalho ${def.key}: fica com ${def.title}, sai de ${d.title}`); d.baseKey = d.key = undefined; }
       }
+      def.baseKey = def.key;
+      toolKeys();
+      if (def.plugin) own('tools', def.id, def.plugin);
       return def;
     },
     get: (id) => BS.tools.defs.get(id) || null,
-    list: () => [...BS.tools.defs.values()].sort((a, b) => (a.order ?? 100) - (b.order ?? 100)),
+    // ordem da barra: a que o usuário arrumou (segurando um ícone), e os painéis novos pela order de cada um
+    list: () => {
+      const o = store.get('stripOrder', null), pos = o ? [...o.top, ...o.bottom] : [];
+      const rank = (d) => { const i = pos.indexOf(d.id); return i >= 0 ? i : 1000 + (d.order ?? 100); };
+      return [...BS.tools.defs.values()].sort((a, b) => o ? rank(a) - rank(b) : (a.order ?? 100) - (b.order ?? 100));
+    },
   },
   // teclas: add('Ctrl+F9', fn); o fn devolve false para não tratar
-  keys: { map: new Map(), add(combo, fn) { BS.keys.map.set(normCombo(combo), fn); }, remove(combo) { BS.keys.map.delete(normCombo(combo)); }, get: (combo) => BS.keys.map.get(combo) || null },
+  keys: { map: new Map(), add(combo, fn) { const k = normCombo(combo); BS.keys.map.set(k, fn); own('keys', [k, fn]); }, remove(combo) { BS.keys.map.delete(normCombo(combo)); }, get: (combo) => BS.keys.map.get(combo) || null },
   // ganchos: on/run (avisos) e filter/apply (transformam um valor, ex.: marcas da árvore, itens de menu)
   hooks: {
     ons: {}, filters: {},
-    on(name, fn) { (BS.hooks.ons[name] = BS.hooks.ons[name] || []).push(fn); },
+    on(name, fn) { (BS.hooks.ons[name] = BS.hooks.ons[name] || []).push(fn); own('ons', [name, fn]); },
     run(name, ...a) { for (const fn of BS.hooks.ons[name] || []) { try { fn(...a); } catch (e) { console.error('hook ' + name, e); } } },
-    filter(name, fn) { (BS.hooks.filters[name] = BS.hooks.filters[name] || []).push(fn); },
+    filter(name, fn) { (BS.hooks.filters[name] = BS.hooks.filters[name] || []).push(fn); own('filters', [name, fn]); },
     apply(name, value, ...a) { for (const fn of BS.hooks.filters[name] || []) { try { const r = fn(value, ...a); if (r !== undefined) value = r; } catch (e) { console.error('filter ' + name, e); } } return value; },
   },
-  actions: { items: [], add(list) { BS.actions.items.push(...(Array.isArray(list) ? list : [list])); }, list: () => BS.actions.items },
+  actions: { items: [], add(list) { const l = Array.isArray(list) ? list : [list]; BS.actions.items.push(...l); l.forEach(a => own('actions', a)); }, list: () => BS.actions.items },
   // item na status bar: add({ id, title, onclick }) devolve o <span>; o plugin preenche textContent/className
   status: {
     add({ id, title, onclick, html }) {
       const el = document.createElement('span'); el.className = 's'; if (id) el.id = id; if (title) el.title = title; if (html) el.innerHTML = html; el.hidden = true;
-      if (onclick) el.onclick = onclick; $('#stDirty').before(el); return el;
+      if (onclick) el.onclick = onclick; $('#stDirty').before(el); return own('els', el);
     },
   },
   // resumo do projeto: card({ id, order, wide, html(), bind(el) }) e action({ label, icon, go, title })
-  dashboard: { cards: [], actions: [], card(c) { BS.dashboard.cards.push(c); }, action(a) { BS.dashboard.actions.push(a); } },
+  dashboard: { cards: [], actions: [], card(c) { BS.dashboard.cards.push(own('cards', c)); }, action(a) { BS.dashboard.actions.push(own('dashActions', a)); } },
   hints: [],
   // painel na área do editor, abaixo do código: entra no dock como uma aba (ver dock.js), como o console de build
-  ui: { panel(html) { $('#problems').insertAdjacentHTML('beforebegin', html); return $('#problems').previousElementSibling; } },
+  ui: { panel(html) { $('#problems').insertAdjacentHTML('beforebegin', html); return own('els', $('#problems').previousElementSibling); } },
   plugins: {
-    list: [], dirs: [], defs: new Map(),
+    list: [], dirs: [], defs: new Map(), owned: {},
+    // desfaz o que o plugin registrou nesta página (e roda o que ele pediu em plugin.onUnload)
+    dispose(id) {
+      const o = BS.plugins.owned[id] || {}; delete BS.plugins.owned[id];
+      for (const fn of o.unload || []) { try { fn(); } catch (e) { console.error('plugin ' + id + ' onUnload', e); } }
+      for (const t of o.tools || []) {
+        const d = BS.tools.defs.get(t); if (!d || d.plugin !== id) continue;
+        if (d.toggle) { try { d.toggle(false); } catch {} }
+        BS.tools.defs.delete(t);
+        if (S.tool === t) { S.tool = 'project'; renderTool(); }
+      }
+      for (const [k, fn] of o.keys || []) if (BS.keys.map.get(k) === fn) BS.keys.map.delete(k);
+      const drop = (list, items) => (items || []).forEach(x => { const i = list.indexOf(x); if (i >= 0) list.splice(i, 1); });
+      drop(BS.actions.items, o.actions); drop(BS.dashboard.cards, o.cards); drop(BS.dashboard.actions, o.dashActions);
+      for (const [n, fn] of o.ons || []) drop(BS.hooks.ons[n] || [], [fn]);
+      for (const [n, fn] of o.filters || []) drop(BS.hooks.filters[n] || [], [fn]);
+      for (const el of o.els || []) el.remove();
+      for (const b of o.bubbles || []) if (BS.bubble) BS.bubble.unregister(b);
+      document.querySelectorAll(`style[data-plugin="${CSS.escape(id)}"]`).forEach(s => s.remove());
+      BS.plugins.defs.delete(id);
+      toolKeys(); renderStrip();
+      return o;
+    },
+    // recarrega um plugin sem recarregar a página: relê a lista no núcleo, desfaz o que ele tinha registrado e roda
+    // o ui.js novo. Devolve a entrada da lista ({ loaded, error, ... })
+    async reload(id) {
+      const r = await api('plugins', {}, { method: 'POST', body: JSON.stringify({ reload: true }) });
+      // atualiza as entradas da lista no lugar (os outros plugins guardam a referência); erro da página só sai do recarregado
+      for (const n of r.plugins || []) {
+        const cur = BS.plugins.list.find(x => x.id === n.id);
+        if (!cur) { BS.plugins.list.push(entryOf(n)); continue; }
+        const pageErr = cur.id !== id && cur.error && !n.error ? cur.error : null;
+        entryOf(n, cur); if (pageErr) cur.error = pageErr;
+      }
+      BS.plugins.list = BS.plugins.list.filter(x => (r.plugins || []).some(n => n.id === x.id));
+      BS.plugins.dirs = r.dirs || BS.plugins.dirs;
+      const p = BS.plugins.list.find(x => x.id === id);
+      if (p) p.loaded = false;
+      const old = BS.plugins.dispose(id);
+      let dash = !!(old.cards && old.cards.length);
+      if (p && p.enabled && !p.error && p.ui) {
+        await new Promise((ok) => { const s = document.createElement('script'); s.src = '/plugins/' + encodeURIComponent(id) + '.js?v=' + encodeURIComponent(p.version || '') + '&t=' + Date.now(); s.onload = () => { s.remove(); ok(); }; s.onerror = () => { s.remove(); p.error = 'o script da interface não carregou'; ok(); }; document.head.appendChild(s); });
+        const fn = BS.plugins.defs.get(id);
+        if (fn && !p.error) {
+          Object.assign(p, pluginApi(id));
+          BS.plugins.current = id;
+          try { fn(BS, p); p.loaded = true; } catch (e) { p.error = 'interface: ' + e.message; console.error('plugin ' + id, e); BS.plugins.current = null; BS.plugins.dispose(id); }
+          BS.plugins.current = null;
+        }
+      }
+      dash = dash || !!((BS.plugins.owned[id] || {}).cards || []).length;
+      renderStrip(); if (S.tool && !(BS.tools.get(S.tool) || {}).toggle) renderTool();
+      if (dash && !S.active) renderDashboard();
+      BS.hooks.run('plugin:reload', id, p);
+      return p;
+    },
     define(id, fn) { BS.plugins.defs.set(id, fn); },
     // lê a lista do servidor, carrega o script de cada plugin ligado e roda o ui.js de cada um, na ordem
     async load(pre) {
       let r = pre ? { plugins: pre } : null;
       try { r = await api('plugins'); } catch (e) { if (!r) { toast('Plugins: ' + e.message); r = { plugins: [] }; } }
-      BS.plugins.list = r.plugins || []; BS.plugins.dirs = r.dirs || []; BS.plugins.config = r.config || '';
+      BS.plugins.list = (r.plugins || []).map(n => entryOf(n)); BS.plugins.dirs = r.dirs || []; BS.plugins.config = r.config || '';
       for (const p of BS.plugins.list.filter(x => x.enabled && !x.error && x.ui)) {
         await new Promise((ok) => { const s = document.createElement('script'); s.src = '/plugins/' + encodeURIComponent(p.id) + '.js?v=' + encodeURIComponent(p.version || '') + '&t=' + Date.now(); s.onload = ok; s.onerror = () => { p.error = 'o script da interface não carregou'; ok(); }; document.head.appendChild(s); });
       }
@@ -2068,7 +2265,10 @@ function pluginApi(id) {
   };
   const info = () => api('plugin/info', q());
   const wipe = () => post('plugin/info', { wipe: true });
-  return { data, secrets, settings, files, exec, spawn, procs, fetch: http, vault, info, wipe };
+  // o que o plugin precisa desfazer quando for recarregado ou desligado sem recarregar a página: setInterval,
+  // addEventListener na janela, elementos postos direto no document
+  const onUnload = (fn) => { if (typeof fn === 'function') own('unload', fn, id); };
+  return { data, secrets, settings, files, exec, spawn, procs, fetch: http, vault, info, wipe, onUnload };
 }
 BS.plugin = (id) => { const p = BS.plugins.list.find(x => x.id === id) || { id }; return Object.assign({}, p, pluginApi(id)); };
 
@@ -2113,6 +2313,20 @@ async function pluginSettings(id) {
 }
 BS.pluginSettings = pluginSettings; // janela de documento: os módulos deixam de lado o que é só da IDE (atualização, servidores, dependências)
 
+// código que não é um arquivo do projeto (o JDK que o depurador mostra, node:internal...): aba só de leitura, sem
+// trocar de projeto nem passar pelo servidor de linguagem. key identifica a origem; title vai na dica da aba
+function openVirtual(key, name, content, lang, line, title) {
+  ensureEditors();
+  const k = 'virtual:' + key; let tab = S.tabs.find(t => t.key === k);
+  if (!tab) {
+    tab = { key: k, path: name, title: title || name, mode: 'editor', virtual: true, editable: false, project: S.project ? S.project.path : '', lang: lang || langOf(name) };
+    tab.model = monaco.editor.createModel(content, tab.lang, monaco.Uri.parse('bs-virtual:/' + encodeURIComponent(key)));
+    tab.saved = content; tab.model._tab = tab; S.tabs.push(tab);
+  }
+  activate(tab);
+  if (line) revealAt(editor, line);
+  return tab;
+}
 // abre outro projeto/pasta (ex.: a raiz do checkout) e vai ao arquivo e linha; não espera o Git/SVN da pasta nova
 async function openOutside(root, rel, line) {
   if (!root || !rel) return;
@@ -2144,19 +2358,23 @@ function renderPlugins() {
         ${p.description ? `<div class="ds">${esc(p.description)}</div><button class="pl-more" hidden>mais</button>` : ''}
         ${p.requires && p.requires.length ? `<div class="pl-req">Precisa de: ${p.requires.map(esc).join(', ')}</div>` : ''}
         ${p.error ? `<div class="er">${esc(p.error)}</div>` : ''}</div>
-      <div class="pl-side">${p.settings && p.settings.length ? `<button class="icon-btn pl-cfg" title="Configurações de ${esc(p.name)}">${I.gear}</button>` : ''}<button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>');
+      <div class="pl-side">${pluginButtons(p).map((b, i) => `<button class="icon-btn pl-btn" data-b="${i}" title="${esc(b.label)}">${b.icon || I.plug}</button>`).join('')}${p.settingsSchema && p.settingsSchema.length ? `<button class="icon-btn pl-cfg" title="Configurações de ${esc(p.name)}">${I.gear}</button>` : ''}${p.user ? `<button class="icon-btn pl-del" title="Remover ${esc(p.name)}">${TRASH_ICON}</button>` : ''}<button class="sw2 ${p.enabled ? 'on' : ''}" role="switch" aria-checked="${p.enabled}" title="${p.enabled ? 'Desligar' : 'Ligar'} ${esc(p.name)}"><span class="kn"></span></button></div></div>`).join('')}</div>` : '<div class="empty">Nenhum plugin instalado.</div>');
   if (BS.vault) { BS.vault.bindBanner(body); BS.vault.refresh().catch(() => {}); }
   body.querySelectorAll('.plug').forEach(el => {
     const p = list.find(x => x.id === el.dataset.id), sw = el.querySelector('.sw2');
     sw.onclick = () => { if (sw.disabled) return; sw.disabled = true; sw.classList.toggle('on'); sw.classList.add('busy'); sw.setAttribute('aria-checked', String(!p.enabled)); setTimeout(() => pluginsPost({ id: p.id, enabled: !p.enabled }), 180); };
     const cfg = el.querySelector('.pl-cfg'); if (cfg) cfg.onclick = () => pluginSettings(p.id);
+    const del = el.querySelector('.pl-del'); if (del) del.onclick = () => pluginRemove(p);
+    const btns = pluginButtons(p); el.querySelectorAll('.pl-btn').forEach(b => b.onclick = () => btns[+b.dataset.b].action());
     const more = el.querySelector('.pl-more');
     if (more) more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'menos' : 'mais'; };
     el.oncontextmenu = (e) => showMenu(e, [{ label: p.enabled ? 'Desligar' : 'Ligar', action: () => pluginsPost({ id: p.id, enabled: !p.enabled }) }, '-', { label: 'Mostrar pasta', icon: I.explorer, action: () => reveal(p.path) },
-      ...(p.settings && p.settings.length ? [{ label: 'Configurações…', icon: I.gear, action: () => pluginSettings(p.id) }] : []),
+      ...(p.settingsSchema && p.settingsSchema.length ? [{ label: 'Configurações…', icon: I.gear, action: () => pluginSettings(p.id) }] : []),
       ...(BS.vault && p.vaultKeys && p.vaultKeys.length ? [{ label: 'Cofre…', icon: VAULT_ICON, action: () => BS.vault.open({ plugin: p.id, key: p.vaultKeys[0].key }) }] : []),
       { label: 'Pasta de dados', icon: I.explorer, action: async () => { try { const i = await api('plugin/info', { plugin: p.id }, { method: 'POST', body: '{}' }); if (!i.exists) return toast(`${p.name} ainda não guardou nada`); reveal(i.dataDir); } catch (e) { toast(e.message); } } },
-      { label: 'Apagar dados do plugin…', icon: I.x, action: () => pluginWipe(p) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : [])], `${p.name} v${p.version}`);
+      { label: 'Apagar dados do plugin…', icon: I.x, action: () => pluginWipe(p) }, ...(BS.pluginStore ? BS.pluginStore.menu(p) : []),
+      ...(p.user ? ['-', { label: 'Remover…', icon: TRASH_ICON, action: () => pluginRemove(p) }] : []),
+      ...(() => { const b = pluginButtons(p); return b.length ? ['-', ...b] : []; })()], `${p.name} v${p.version}`);
   });
   plugClamp(body);
   // servidores de plugins (plugstore.js): atualizações, catálogo e a lista de servidores
@@ -2191,6 +2409,27 @@ function pluginWipe(p) {
     };
   });
 }
+// botões extras no cartão de um plugin, vindos de outros plugins (o IAMaker põe "Editar com o IAMaker"):
+// bs.hooks.filter('plugin:buttons', (itens, p) => [...itens, { label, icon, action }])
+const pluginButtons = (p) => (BS.hooks.apply('plugin:buttons', [], p) || []).filter(b => b && b.label && b.action);
+const TRASH_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>';
+// remove um plugin da pasta do usuário: a pasta vai para a Lixeira e, se marcado, os dados dele também.
+// Os que vêm com o BlueScreen só desligam; uma cópia sua de um deles, ao ser removida, devolve a versão do app
+function pluginRemove(p) {
+  dialog('plDel', `<div class="dlg-hd"><span class="dlg-ic del">${TRASH_ICON}</span><div><h3>Remover ${esc(p.name)}?</h3><p>A pasta do plugin vai para a Lixeira do Windows: dá para restaurar de lá. Se for uma cópia sua de um plugin que vem com o BlueScreen, a versão original volta a valer.</p></div></div>
+    <label class="pl-delopt"><input type="checkbox" id="plDelData"><span><b>Apagar também os dados do plugin</b><small>Configurações, tokens e arquivos que ele guardou (vão para a Lixeira junto).</small></span></label>
+    <div class="actions"><button class="chip" data-close>Cancelar</button><button class="chip danger" id="plDelOk">Remover</button></div>`, (el) => {
+    const ok = el.querySelector('#plDelOk');
+    ok.onclick = async () => {
+      ok.disabled = true;
+      try {
+        await api('plugins/uninstall', {}, { method: 'POST', body: JSON.stringify({ id: p.id, data: el.querySelector('#plDelData').checked }) });
+        el.hidden = true; store.set('reopenTool', 'plugins'); toast(`${p.name} foi para a Lixeira. Recarregando…`, 'ok'); setTimeout(() => location.reload(), 300);
+      } catch (er) { ok.disabled = false; toast(er.message); }
+    };
+  });
+}
+BS.pluginRemove = pluginRemove;
 async function pluginsPost(body) {
   // a janela recarrega para aplicar o plugin; volta direto para a aba Plugins
   try { await api('plugins', {}, { method: 'POST', body: JSON.stringify(body) }); store.set('reopenTool', 'plugins'); toast('Recarregando…'); setTimeout(() => location.reload(), 150); }
