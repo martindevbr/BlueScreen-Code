@@ -27,7 +27,11 @@ Sem o programa, o painel mostra o comando e um botão que roda a instalação no
 ## Onde ficam os plugins
 
 - **Novos:** em `~/.bluescreen/plugins/<id>`. São plugins comuns (`plugin.json` + `ui.js` + `style.css`), que você pode abrir, copiar e distribuir pelo servidor de plugins.
-- **Os que vêm com o BlueScreen:** o IAMaker copia a pasta para `~/.bluescreen/plugins/<id>` antes da primeira mudança. A cópia vale no lugar da original. Para voltar à original, remova o plugin na aba Plugins (a cópia vai para a Lixeira).
+- **Os que vêm com o BlueScreen:** nunca são alterados nem sobrepostos. Na primeira mudança, o IAMaker cria uma **versão sua**: um plugin à parte, com id próprio (`<id>-meu`, "Nome (minha versão)"), em `~/.bluescreen/plugins/<id>-meu`. Ela é uma cópia do original, com as configurações e os dados dele, e o `plugin.json` guarda de onde veio (`"basedOn": { "id", "version" }`). A IA só mexe nessa versão.
+  - O original continua instalado, sem mudança nenhuma, e fica desligado enquanto a sua versão existir, para os dois não registrarem os mesmos painéis e atalhos. Se outro plugin ligado depende do original, o IAMaker avisa.
+  - Pedir outra mudança no original (pela lista ou pelo ✦ no cartão dele) continua na sua versão, com a mesma conversa.
+  - Para voltar ao original, remova a sua versão na aba Plugins (ela vai para a Lixeira): na próxima vez que o IAMaker abrir, ele liga o original de novo.
+  - Plugins copiados por versões antigas do IAMaker, com o mesmo id do original, continuam como estão e são editados direto, como os seus.
 - **Com servidor compilado** (`server.exe`): a IA só mexe na interface (`ui.js`, `style.css`, `plugin.json`), nunca na parte compilada.
 
 ## Segurança

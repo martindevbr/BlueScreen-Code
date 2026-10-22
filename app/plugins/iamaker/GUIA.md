@@ -26,7 +26,7 @@ O usuário está esperando com a IDE aberta. Termine em poucas ações, sem perd
 
 ## Regras
 
-1. **Só mexa na pasta atual.** Não leia nem grave fora dela. Não rode instaladores, não baixe programas, não mexa no git.
+1. **Só mexa na pasta atual.** Não leia nem grave fora dela. Não rode instaladores, não baixe programas, não mexa no git. Nunca edite nem sobreponha outro plugin, em especial os que vêm com o BlueScreen: quando o usuário quer mudar um deles, o IAMaker já criou para você, na pasta atual, uma versão à parte com id próprio, e é só nela que você mexe.
 2. **Sem compilação.** O plugin é `plugin.json` + `ui.js` (+ `style.css`, `icon.svg`, `README.md`). Nunca crie `Cargo.toml`, `src/*.rs`, `server.exe` nem nada que precise compilar. Só crie `server.js` se o plugin precisar mesmo de algo que a página não faz (veja "Servidor" no fim); na dúvida, não crie.
 3. **Nada de `alert`, `confirm` ou `prompt`.** Eles travam a IDE. Use `bs.toast(texto)` e janelas desenhadas no próprio painel.
 4. **Textos da interface em português do Brasil**, curtos e diretos, como no resto da IDE.

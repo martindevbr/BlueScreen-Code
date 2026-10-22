@@ -6,7 +6,7 @@ O padrão é o plugin sem compilação (`ui.js`, e `server.js` / `server.py` qua
 
 Plugins ligam e desligam na aba **Plugins** (`Alt+7`), sem recompilar o BlueScreen. Desligado, um plugin some por inteiro: painel, atalhos, status bar, card, marcas na árvore, ações, contribuições ao build, rotas da API e o processo do servidor. A escolha fica em `~/.bluescreen/plugins.json`.
 
-Os plugins da sua pasta também podem ser **removidos**: a lixeira no cartão (ou botão direito › **Remover…**) manda a pasta para a Lixeira do Windows, e dá para restaurar de lá. Se você marcar a opção, a pasta de dados do plugin vai junto. Os plugins que vêm com o BlueScreen só desligam. Se você tiver uma cópia sua de um deles (o IAMaker cria uma ao editar), remover a cópia devolve a versão original. Pela API: `POST plugins/uninstall { id, data }`.
+Os plugins da sua pasta também podem ser **removidos**: a lixeira no cartão (ou botão direito › **Remover…**) manda a pasta para a Lixeira do Windows, e dá para restaurar de lá. Se você marcar a opção, a pasta de dados do plugin vai junto. Os plugins que vêm com o BlueScreen só desligam. O IAMaker nunca altera nem sobrepõe um deles: ao editar, cria uma versão sua, um plugin à parte com id próprio (`<id>-meu`), e desliga o original. Remover essa versão faz o IAMaker ligar o original de novo. Uma cópia com o mesmo id do original (de versões antigas do IAMaker) vale no lugar dele, e removê-la devolve a versão original. Pela API: `POST plugins/uninstall { id, data }`.
 
 Para criar ou alterar plugins conversando com uma IA, sem escrever o código, use o plugin [IAMaker](../app/plugins/iamaker/README.md) (`Alt+0`).
 

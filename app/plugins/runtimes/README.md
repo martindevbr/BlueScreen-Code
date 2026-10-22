@@ -48,15 +48,40 @@ Um ▶ verde aparece na margem de cada ponto de entrada. Clique nele para execut
 
 A saída vai para o console do Build: erros clicáveis, parar, repetir (`Ctrl+F9`) e uma linha para digitar a entrada do programa (`Scanner`, `input()`). Antes de executar, o plugin confere os requisitos; se faltar algo, a janela de instalação abre e depois executa.
 
-## Rotas
+## Motor
 
-| Rota | |
+Tudo roda na página, no `ui.js`, sem servidor próprio. O motor fica no fim do arquivo, entre `// >>> motor` e `// <<< motor`, sem DOM: ele pergunta ao núcleo pelas rotas `file/stat`, `file`, `tree` e `index` (arquivos do projeto), `sdk/which`, `sdk/jdks` e `sdk/mavens` (programas do PC), `sdk/default`, `sdk/path` e `sdk/forget`, e roda programas por `plugin.exec` (a versão de cada um, com 6 s de limite). As respostas têm o mesmo formato das antigas rotas `runtimes/*`:
+
+| Função | Devolve |
 |---|---|
-| `runtimes/check?project=&file=` | requisitos da linguagem do arquivo e o estado de cada um |
-| `runtimes/project?project=` | linguagens do projeto (contadas pelos arquivos) e os requisitos |
-| `runtimes/entries` POST `{ file, text }` | pontos de entrada do texto |
-| `runtimes/plan` POST `{ project, file, line, args }` | `{ plan: { title, how, steps, jdk } }`, `{ missing }` ou `{ fallback }` |
-| `runtimes/select` POST `{ tool, path }` | aponta uma instalação existente |
-| `runtimes/forget` | esquece o que já foi procurado (depois de instalar por fora) |
+| `R.check(project, file)` | `{ lang, name, needs, pm }`: requisitos da linguagem do arquivo e o estado de cada um |
+| `R.project(project)` | `{ langs: [{ lang, name, files, needs }], pm }`: linguagens do projeto, contadas pelo índice de arquivos |
+| `R.entries(file, text)` | `{ lang, entries: [{ line, label, target, instance }] }`: pontos de entrada do texto |
+| `R.plan(project, file, line, args)` | `{ plan: { title, how, steps, jdk }, entry }`, `{ missing, lang, name, pm }` ou `{ fallback: true }` |
+| `R.select(tool, path)` | `{ ok, path, version, status }`: aponta uma instalação existente |
+| `R.forget()` | esquece o que já foi procurado (depois de instalar por fora) |
 
-Testes: `cargo test -p bluescreen-runtimes`.
+As classes compiladas, os executáveis de C, C++ e Rust e o init script do Gradle ficam em `~/.bluescreen/plugin-data/runtimes/files/run` (**Apagar dados do plugin** limpa).
+
+Testes, sem a IDE: `node app/plugins/runtimes/tests/motor.test.js`.
+
+## Arquitetura
+
+**Decisão:** migrar para ui.js
+**Analisado em:** 2026-10-22, versão 0.1.0 (Rust) → 0.2.0
+
+| Critério | Resultado | Evidência |
+|---|---|---|
+| N1 CPU num caminho quente | não | `entries` (450 ms depois de cada tecla): 15 ms em JS no pior caso medido (app.js, 2.600 linhas, varrido como Java), 3 ms em Rust sem contar o HTTP; limite 50 ms. `check` e `plan` são leitura de arquivos pequenos e chamadas ao núcleo |
+| N2 Paralelismo real | não | o Rust era sequencial (`spawn_blocking`) |
+| N3 Biblioteca nativa | não | só `regex` e `serde` |
+| N4 API do sistema | não | os programas rodam por `plugin.exec`; a pasta escolhida em "Já tenho instalado…", fora do projeto, é examinada pelo `where.exe` (~12 ms) ou, nas subpastas, pelo PowerShell (~1,1 s, num clique) |
+| N5 Volume de dados | não | arquivos de projeto pequenos; textos acima de 4 MB são ignorados, como antes |
+| N6 Outros dependem do crate | não | as rotas `runtimes/*` só eram chamadas pelo próprio `ui.js` |
+| N7 Sem Node/Python | não se aplica | destino só `ui.js` |
+
+Mesma resposta: as mesmas entradas na biblioteca Rust e no motor JS (212 arquivos de código, 57 versões pedidas e textos de versão, 105 planos de execução com conjuntos diferentes de programas e JDKs) deram JSON iguais.
+
+Diferenças que ficaram: a pasta de trabalho saiu de `%TEMP%luescreen-run` para a pasta de dados do plugin; a versão de cada programa fica guardada até o **Verificar de novo** (antes, também era refeita se o arquivo do programa mudasse); a `lib/` ao lado da raiz dos pacotes Java só entra no classpath se estiver dentro do projeto; a contagem de linguagens do projeto usa o índice de arquivos do núcleo.
+
+**Reavaliar quando:** a varredura dos mains passar de 50 ms em arquivos reais, ou o plugin precisar responder a outros plugins ou a um gancho do núcleo (aí o destino é `server.js`).

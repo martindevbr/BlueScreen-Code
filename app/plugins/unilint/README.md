@@ -58,6 +58,19 @@ Linha de comando, mesma máquina (12 threads), melhor de 5, contando o início d
 | Python, pylint + astroid (68 mil linhas) | **111 ms** | ruff 115 ms · pyflakes 1305 ms · flake8 1546 ms · pylint 19172 ms |
 | JavaScript, eslint/lib (92 mil linhas) | **95 ms** | eslint 1885 ms |
 
+## Arquitetura
+
+**Decisão:** manter nativo
+**Analisado em:** 2026-10-22
+
+| Critério | Resultado | Evidência |
+|---|---|---|
+| N1 CPU num caminho quente | sim | o gancho `lint` roda a cada salvamento: ~2 ms por arquivo na IDE (veja Desempenho) |
+| N2 Paralelismo real | sim | lint de pastas com `rayon`, os maiores arquivos primeiro |
+| N3 Biblioteca nativa | sim | 15 gramáticas Tree-sitter compiladas, mais o `mimalloc` |
+
+**Reavaliar quando:** as gramáticas Tree-sitter em WebAssembly derem conta do lint a cada salvamento dentro de 200 ms, com o parse de pastas inteiras em segundo plano.
+
 ## Código
 
 | | |

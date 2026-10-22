@@ -16,7 +16,7 @@ Referência da API: [PLUGINS.md](PLUGINS.md).
 | Precisa na máquina do usuário | nada (`ui.js`), ou Node.js / Python (servidor em script) | nada |
 | Desempenho | sobra para interface, HTTP, chamar programas, ler e gravar arquivos | melhor em CPU pesada, paralelismo e volume grande de dados |
 
-Exemplos no repositório: `qautils` e `sheets` já são só `ui.js` (o `sheets` lê e grava `.xlsx` em JavaScript). `unilint` e `runtimes` têm servidor em Rust.
+Exemplos no repositório: `qautils`, `sheets` e `runtimes` são só `ui.js` (o `sheets` lê e grava `.xlsx` em JavaScript; o `runtimes` foi migrado do Rust, veja a seção Arquitetura do README dele). O `unilint` tem servidor em Rust.
 
 ## Etapa 1: inventário
 
@@ -193,11 +193,9 @@ Ao terminar, a IA entrega:
 
 ## Situação dos plugins do repositório
 
-Primeira leitura, feita sem medir. Antes de mexer em qualquer um, refaça as etapas 1 a 3.
-
 | Plugin | Arquitetura | Leitura inicial |
 |---|---|---|
 | `qautils` | só `ui.js` | já está na arquitetura nova |
 | `sheets` | só `ui.js` | já está na arquitetura nova |
-| `unilint` | Rust (`server.exe`) | **Manter nativo:** gancho `lint` num caminho quente (N1), 15 gramáticas Tree-sitter compiladas (N3), `rayon` (N2) e `mimalloc` |
-| `runtimes` | Rust (`server.exe`) | **Candidato, falta medir:** só depende de `regex` e `serde` (M6), boa parte do trabalho é chamar `java -version`, `sdk/which` e `sdk/jdks` (M1, M2) e interpretar arquivos pequenos (M3). A medir: `runtimes/project`, que varre o projeto inteiro, e `runtimes/entries`, chamado a cada arquivo aberto |
+| `unilint` | Rust (`server.exe`) | **Manter nativo** (reconfirmado em 2026-10-22): gancho `lint` num caminho quente (N1), 15 gramáticas Tree-sitter compiladas (N3), `rayon` (N2) e `mimalloc` |
+| `runtimes` | só `ui.js` (desde a 0.2.0) | **Migrado** em 2026-10-22: nenhum motivo de 2.1 confirmado; a varredura dos mains leva até 15 ms em JS (limite 50 ms) e as respostas são iguais às do Rust. Detalhes na seção Arquitetura do README |

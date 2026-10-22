@@ -37,7 +37,7 @@ cargo run -p bluescreen-unilint --release --bin unilint -- <pastas>
 ### 5. Não trava, não abre janela, sai junto
 
 - Trabalho pesado vai em `tokio::task::spawn_blocking` (ou `rayon`), nunca direto na rota assíncrona.
-- Todo processo filho no Windows sai com `creation_flags(0x0800_0000)` (sem janela de console), como em `runtimes`.
+- Todo processo filho no Windows sai com `creation_flags(0x0800_0000)` (sem janela de console).
 - O servidor não guarda estado que se perca mal se ele for encerrado: o BlueScreen o encerra ao desligar o plugin, ao fechar a IDE e ao atualizar o plugin pelo servidor de plugins.
 
 ### 6. Usa o núcleo em vez de refazer
@@ -77,4 +77,3 @@ Um plugin nativo volta à análise de [MIGRACAO-PLUGINS.md](MIGRACAO-PLUGINS.md)
 | Plugin | Por que é nativo |
 |---|---|
 | `unilint` | gancho `lint` a cada salvamento (N1), 15 gramáticas Tree-sitter compiladas (N3), lint de pastas em paralelo com `rayon` (N2) |
-| `runtimes` | ainda sem análise: é candidato à migração (veja a tabela no fim de [MIGRACAO-PLUGINS.md](MIGRACAO-PLUGINS.md#situação-dos-plugins-do-repositório)) |

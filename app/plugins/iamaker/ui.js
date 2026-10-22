@@ -48,7 +48,7 @@ const EXAMPLES = [
 
 const M = {
   cfg: null, ai: null, id: null, conv: null, run: null, guide: null,
-  made: [], fixes: 0, pending: false,
+  made: [], forks: {}, fixes: 0, pending: false,
 };
 
 // ----- a ferramenta no balão flutuante (bubble.js do núcleo) -----
@@ -97,23 +97,56 @@ const userDir = () => (bs.plugins.dirs || [])[1] || '';
 const sep = () => userDir().includes('\\') ? '\\' : '/';
 const pdir = (id) => userDir() + sep() + id;
 const entry = (id) => bs.plugins.list.find(p => p.id === id) || null;
-// plugins que dá para editar: todos menos o próprio IAMaker, mais o recém-criado que ainda não está na lista.
-// Os que vêm com o BlueScreen (app: true) são editados numa cópia na pasta do usuário, que passa a valer no lugar
+// plugins que dá para editar: todos menos o próprio IAMaker, mais os recém-criados que ainda não estão na lista.
+// Os que vêm com o BlueScreen (app: true) nunca são editados: a IA trabalha numa versão sua (veja derive)
 function editable() {
   const out = bs.plugins.list.filter(p => p.id !== plugin.id).map(p => ({ id: p.id, name: p.name || p.id, app: !p.user }));
-  if (M.id && M.made.includes(M.id) && !out.some(p => p.id === M.id)) out.push({ id: M.id, name: M.id, app: false });
+  const fresh = [...M.made, ...Object.values(M.forks)].filter(id => id === M.id && !out.some(p => p.id === id));
+  for (const id of fresh) out.push({ id, name: id, app: false });
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
-// plugin do app: copia a pasta inteira para a pasta do usuário antes da IA mexer (robocopy: até 7 é sucesso)
-async function adopt(id) {
+const robocopy = async (from, to) => {
+  const r = await plugin.exec('robocopy', [from, to, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'], { timeout: 60000 });
+  // robocopy: até 7 é sucesso
+  if (r.code == null || r.code >= 8) throw new Error((r.err || r.out || 'robocopy ' + r.code).trim());
+};
+// Plugin que não é seu (vem com o BlueScreen): a IA nunca mexe nele nem põe nada por cima dele com o mesmo id. O
+// IAMaker cria uma versão sua, um plugin à parte com id próprio (runtimes-meu), copiado do original junto com a
+// pasta de dados; o original fica intacto e só é desligado, para os dois não registrarem os mesmos painéis e
+// atalhos. Devolve o id da versão sua (a que já existe, se for o caso), ou null se o plugin já é seu.
+async function derive(id) {
   const p = entry(id);
-  if (!p || p.user) return false;
-  // já copiado (a lista só muda depois de recarregar): não copia de novo por cima do que a IA fez
-  try { await api('file', { project: pdir(id), file: 'plugin.json' }); return false; } catch {}
-  const r = await plugin.exec('robocopy', [p.path, pdir(id), '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP'], { timeout: 60000 });
-  if (r.code == null || r.code >= 8) throw new Error('não deu para copiar o plugin: ' + (r.err || r.out || 'robocopy ' + r.code).trim());
-  push({ role: 'sys', text: `${p.name} vem com o BlueScreen: a IA vai editar uma cópia sua, que passa a valer no lugar. Para voltar à original, remova o plugin na aba Plugins.` });
-  return true;
+  if (!p || p.user) return null;
+  const have = M.forks[id];
+  if (have) { try { await api('file', { project: pdir(have), file: 'plugin.json' }); return have; } catch {} }
+  const to = slug(id + '-meu');
+  try { await robocopy(p.path, pdir(to)); } catch (e) { throw new Error('não deu para criar a sua versão do plugin: ' + e.message); }
+  const m = JSON.parse((await api('file', { project: pdir(to), file: 'plugin.json' })).content);
+  m.basedOn = { id, version: m.version || '' };
+  m.id = to;
+  m.name = `${m.name || id} (minha versão)`;
+  await api('file', { project: pdir(to), file: 'plugin.json' }, { method: 'PUT', body: JSON.stringify(m, null, 2) + '\n' });
+  // configurações e dados do original vêm junto (a pasta de dados é por id; sem pasta, o robocopy falha e tudo bem)
+  try { const data = (await plugin.info()).dataDir.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, ''); await robocopy(data + sep() + id, data + sep() + to); } catch {}
+  M.forks = { ...M.forks, [id]: to };
+  await plugin.data.set('forks', M.forks);
+  // o original sai da página e fica desligado enquanto a versão sua existir
+  try { await api('plugins', {}, { method: 'POST', body: JSON.stringify({ id, enabled: false }) }); await bs.plugins.reload(id); } catch {}
+  const deps = bs.plugins.list.filter(x => x.enabled && (x.requires || []).includes(id)).map(x => x.name || x.id);
+  push({ role: 'sys', text: `${p.name} vem com o BlueScreen e não é alterado: a IA trabalha em "${m.name}" (pasta ${to}), uma versão sua copiada dele. O original continua instalado e fica desligado enquanto a sua versão existir; para voltar a ele, remova a sua versão na aba Plugins.${deps.length ? ` Atenção: ${deps.join(', ')} depende de ${p.name} e não vai carregar com ele desligado.` : ''}` });
+  return to;
+}
+// a versão sua foi removida (aba Plugins): o original volta a ser ligado
+async function healForks() {
+  let changed = false;
+  for (const [orig, mine] of Object.entries(M.forks)) {
+    if (bs.plugins.list.some(p => p.id === mine)) continue;
+    try { await api('file', { project: pdir(mine), file: 'plugin.json' }); continue; } catch {}
+    const o = entry(orig);
+    if (o && !o.enabled) { try { await api('plugins', {}, { method: 'POST', body: JSON.stringify({ id: orig, enabled: true }) }); await bs.plugins.reload(orig); } catch {} }
+    delete M.forks[orig]; changed = true;
+  }
+  if (changed) await plugin.data.set('forks', M.forks);
 }
 // livre: um id que pode continuar sendo usado (o do próprio plugin, ao renomear)
 function slug(name, free) {
@@ -146,6 +179,8 @@ function push(m) { m.at = Date.now(); M.conv.msgs.push(m); paint(m); return m; }
 
 async function pick(id) {
   if (M.run) return toast('Espere a IA terminar ou clique em Parar');
+  // um original do BlueScreen que já tem a versão sua: a conversa e as mudanças são nela
+  if (id && M.forks[id]) id = M.forks[id];
   M.id = id || null; plugin.data.set('sel', M.id); M.fixes = 0; M.place = null;
   await loadConv(M.id);
   render();
@@ -182,7 +217,7 @@ function render() {
   const opt = (p) => `<option value="${esc(p.id)}" ${p.id === M.id ? 'selected' : ''}>${esc(p.name)}</option>`;
   const mine = list.filter(p => !p.app), app = list.filter(p => p.app);
   $('#iam-plug').innerHTML = `<option value="">＋ Novo plugin…</option>` + (mine.length ? `<optgroup label="Seus plugins">${mine.map(opt).join('')}</optgroup>` : '')
-    + (app.length ? `<optgroup label="Do BlueScreen (edita uma cópia sua)">${app.map(opt).join('')}</optgroup>` : '');
+    + (app.length ? `<optgroup label="Do BlueScreen (cria uma versão sua; o original não muda)">${app.map(opt).join('')}</optgroup>` : '');
   $('#iam-effort').innerHTML = Object.entries(EFFORTS).map(([k, v]) => `<option value="${k}" ${k === M.effort ? 'selected' : ''}>${esc(v)}</option>`).join('');
   $('#iam-ai').innerHTML = Object.entries(AIS).map(([k, v]) => `<option value="${k}" ${k === ai ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
   ['#iam-code', '#iam-dir', '#iam-clear'].forEach(s => $(s).disabled = !M.id);
@@ -505,7 +540,8 @@ async function rawPrompt(text, ai, resumed, files) {
     M.conv.unnamed ? `- Este plugin ainda não tem nome. Escolha um nome curto (1 a 3 palavras, em português) que diga o que ele faz e grave em "name" no plugin.json. Use esse nome para o prefixo de ids e classes CSS. Não mude o "id" nem a pasta: o IAMaker renomeia a pasta para o nome que você escolher.` : '',
     `- Arquivos que já existem: ${Object.keys(files).filter(f => files[f]).join(', ') || 'nenhum'}`,
     p && p.error ? `- O plugin está com erro na IDE agora: ${p.error}` : '',
-    M.conv.adopted ? '- Este plugin veio com o BlueScreen: você está editando uma cópia na pasta do usuário, que substitui a original. Mude só o que o usuário pediu e mantenha o resto funcionando como antes.' : '',
+    M.conv.derived ? `- Este plugin é a versão do usuário de "${M.conv.derived.name}" (id ${M.conv.derived.id}), que vem com o BlueScreen e nunca é alterado. Você está numa cópia à parte, com id próprio; o original fica desligado enquanto ela existir. Mude só o que o usuário pediu e mantenha o resto funcionando como antes.` : '',
+    M.conv.adopted ? '- Este plugin veio com o BlueScreen e foi copiado para a pasta do usuário com o mesmo id (versão antiga do IAMaker). Mude só o que o usuário pediu e mantenha o resto funcionando como antes.' : '',
     p && p.server ? '- Este plugin tem um servidor próprio (server.exe ou script). Não dá para mudar a parte compilada: mexa no ui.js, no style.css e no plugin.json, e use as rotas que o servidor já atende.' : '',
   ].filter(Boolean).join('\n');
   if (resumed) return `# Contexto\n${ctx}\n${src}\n# Pedido do usuário\n${text}\n\n(Siga as instruções do IAMaker do início desta conversa, inclusive as de rapidez. Só a pasta atual.)\n`;
@@ -526,9 +562,19 @@ async function send(text, opt = {}) {
     render();
   }
   if (!opt.auto) M.fixes = 0;
-  const ai = M.ai, A = AIS[ai], cfg = M.cfg || {}, dir = pdir(M.id);
   if (!opt.retry) { push({ role: opt.auto ? 'sys' : 'user', text: opt.auto ? 'Pedindo a correção para a IA…' : text }); await saveConv(); }
-  try { if (await adopt(M.id)) { M.conv.adopted = true; await saveConv(); } } catch (e) { push({ role: 'err', text: e.message }); return saveConv(); }
+  // plugin que não é seu: a conversa continua na versão sua dele, e é nela que a IA mexe
+  try {
+    const orig = entry(M.id), mine = await derive(M.id);
+    if (mine) {
+      const conv = { ...M.conv, derived: { id: orig.id, name: orig.name || orig.id }, msgs: M.conv.msgs.slice(-MAX_MSGS).map(({ el, ...x }) => x) };
+      await plugin.data.remove('conv:' + M.id);
+      M.id = mine; plugin.data.set('sel', mine);
+      await plugin.data.set('conv:' + mine, conv); await loadConv(mine);
+      render();
+    }
+  } catch (e) { push({ role: 'err', text: e.message }); return saveConv(); }
+  const ai = M.ai, A = AIS[ai], cfg = M.cfg || {}, dir = pdir(M.id);
   const sid = A.resume && M.conv.sessions && M.conv.sessions[ai];
   const before = await stamp(dir);
   const args = argList(cfg[A.args]);
@@ -714,6 +760,9 @@ plugin.settings.onChange((v) => { M.cfg = v; if (v && EFFORTS[v.effort]) M.effor
   const gone = made.filter(id => !here.has(id));
   M.made = made.filter(id => here.has(id));
   if (gone.length) { plugin.data.set('made', M.made); gone.forEach(id => plugin.data.remove('conv:' + id)); }
+  // original do BlueScreen -> a versão sua dele
+  M.forks = d.forks && typeof d.forks === 'object' ? d.forks : {};
+  await healForks();
   if (M.id && !editable().some(p => p.id === M.id)) { M.id = null; plugin.data.set('sel', null); }
   if (old.sel && d.sel == null) plugin.data.set('sel', M.id);
   await loadConv(M.id);
