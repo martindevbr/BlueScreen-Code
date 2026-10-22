@@ -68,8 +68,9 @@ const langOf = (text) => detLang(text) || 'en';
 // idioma de um arquivo ainda sem palavras-chave: o da configuração ou o da maioria das features do projeto (sem features: português)
 function projLang() {
   if (P.settings.lang && P.settings.lang !== 'auto') return P.settings.lang;
-  const c = { pt: 0, en: 0, es: 0 }; for (const f of P.files.values()) c[f.doc.lang]++;
-  return c.pt >= c.en ? 'pt' : 'en';
+  // só contam features com palavras-chave (um arquivo ainda vazio não decide nada)
+  const c = { pt: 0, en: 0, es: 0 }; for (const f of P.files.values()) if (f.doc.det) c[f.doc.det]++;
+  return c.pt + c.es >= c.en ? (c.es > c.pt ? 'es' : 'pt') : 'en';
 }
 const unaccent = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 // troca as palavras-chave de idioma (Feature -> Funcionalidade, Given -> Dado...) e acerta o "# language:"
@@ -93,9 +94,9 @@ function translate(text, to) {
 const cells = (ln) => ln.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split(/(?<!\\)\|/).map(c => c.trim());
 // lê a feature: funcionalidade, contexto, cenários (com passos, tags e Exemplos), tags e comentários
 function parse(text) {
-  const lang = langOf(text); const R = rx(lang);
+  const det = detLang(text); const lang = det || 'en'; const R = rx(lang);
   const lines = text.split('\n');
-  const doc = { lang, lines, feature: null, background: null, scenarios: [], rules: [], tags: [], comments: [] };
+  const doc = { lang, det, lines, feature: null, background: null, scenarios: [], rules: [], tags: [], comments: [] };
   let tags = [], cur = null, lastStep = null, prim = 'given', inDoc = null, ex = null, rule = null;
   const close = (i) => { if (cur && cur.end == null) cur.end = i - 1; };
   lines.forEach((raw, i) => {
@@ -911,6 +912,12 @@ function setup() {
           const story = { pt: ['Como', 'Quero', 'Para'], es: ['Como', 'Quiero', 'Para'], en: ['As a', 'I want', 'So that'] }[lang];
           kw('feature', K.feature[0], { kind: M.Snippet, insertText: `${K.feature[0]}: \${1:título}\n`, insertTextRules: S2, sortText: 'a000' });
           kw('feature', K.feature[0], { label: `${K.feature[0]} com história`, kind: M.Snippet, insertText: `${K.feature[0]}: \${1:título}\n\t${story[0]} \${2:perfil}\n\t${story[1]} \${3:ação}\n\t${story[2]} \${4:benefício}\n\n`, insertTextRules: S2, sortText: 'a001', detail: story.join(' / ') });
+          // arquivo ainda sem palavras-chave: o outro idioma também (Funcionalidade num projeto em inglês, Feature num em português)
+          if (!detLang(text)) for (const l of ['pt', 'en']) if (l !== lang) {
+            const w = KW[l].feature[0]; const h = l === 'en' ? '' : `# language: ${l}\n`;
+            const o2 = { label: w, kind: M.Snippet, insertText: `${w}: \${1:título}\n`, insertTextRules: S2, sortText: 'a002', filterText: `${w} ${unaccent(w)}`, detail: l === 'pt' ? 'português · põe o # language: pt' : 'inglês' };
+            add(!h ? o2 : pos.lineNumber === 1 ? { ...o2, insertText: h + o2.insertText } : { ...o2, additionalTextEdits: [{ range: new R(1, 1, 1, 1), text: h }] });
+          }
         }
         kw('rule', K.rule[0], { kind: M.Keyword, insertText: `${K.rule[0]}: \${1:regra}\n`, insertTextRules: S2, sortText: 'd' + o(i++) });
         add({ label: 'tabela', kind: M.Snippet, insertText: '| ${1:coluna} | ${2:coluna} |\n| ${3:valor}  | ${4:valor}  |', insertTextRules: S2, range, sortText: 'd' + o(i++), detail: 'tabela de dados' });
