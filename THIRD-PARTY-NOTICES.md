@@ -12,6 +12,9 @@ Distribuídos junto do aplicativo, sem modificação. O texto completo de cada l
 | [xterm.js](https://github.com/xtermjs/xterm.js) e addons fit, unicode11, web-links | — | MIT | The xterm.js authors, SourceLair, Christopher Jeffrey | `app/wwwroot/vendor/xterm/LICENSE` |
 | [marked](https://github.com/markedjs/marked) | 15.0.12 | MIT | Christopher Jeffrey, MarkedJS | `app/wwwroot/vendor/md/LICENSE-marked.md` |
 | [DOMPurify](https://github.com/cure53/DOMPurify) | 3.2.6 | Apache-2.0 (escolhida entre Apache-2.0 e MPL-2.0) | Mario Heiderich, Cure53 | `app/wwwroot/vendor/md/LICENSE-dompurify` |
+| [js-beautify](https://github.com/beautifier/js-beautify) | 1.15.4 | MIT | Einar Lielmanis, Liam Newman e colaboradores | `app/wwwroot/vendor/unminify/LICENSE-js-beautify` |
+| [Acorn](https://github.com/acornjs/acorn) | 8.14.0 | MIT | Marijn Haverbeke, Ingvar Stepanyan e colaboradores | `app/wwwroot/vendor/unminify/LICENSE-acorn` |
+| [astring](https://github.com/davidbonnet/astring) | 1.9.0 | MIT | David Bonnet | `app/wwwroot/vendor/unminify/LICENSE-astring` |
 | [IBM Plex Sans](https://github.com/IBM/plex) | — | SIL Open Font License 1.1 | IBM Corp. | `app/wwwroot/vendor/fonts/LICENSE-ibm-plex-sans` |
 | [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | — | SIL Open Font License 1.1 | The JetBrains Mono Project Authors | `app/wwwroot/vendor/fonts/LICENSE-jetbrains-mono` |
 

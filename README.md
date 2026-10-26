@@ -40,7 +40,10 @@ BlueScreen.exe --doc dados.xlsx    # só o documento, numa janela leve (.csv, .t
 | `Ctrl+Alt+L` | lint do arquivo |
 | `Alt+F12` | terminal |
 | `Ctrl+Shift+V` | visualização de Markdown e HTML ao lado |
-| `Alt+2` | alterações locais (diff, lint dos modificados) |
+| `Alt+2` | alterações: locais, commit a commit (`Alt+PageUp`/`Alt+PageDown`) e Comparar duas versões quaisquer |
+| `Alt+3` | histórico (busca, arquivos de cada commit, histórico do arquivo aberto) |
+| `Alt+Shift+B` | quem mudou esta linha: o commit e o diff dela |
+| `Ctrl+Alt+U` | arquivo minificado: alterna entre o original e o desminificado, na mesma posição |
 | `Alt+6` / `Alt+7` | Build / Plugins |
 | `Ctrl+Alt+S` | aparência e temas |
 | `F1` | todos os atalhos |

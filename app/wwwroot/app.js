@@ -6,14 +6,14 @@ const busy = (d) => { busyN = Math.max(0, busyN + d); document.getElementById('b
 const api = async (p, params = {}, opt = {}) => {
   const u = new URL('/api/' + p, location.origin);
   Object.entries(params).forEach(([k, v]) => v != null && u.searchParams.set(k, v));
-  busy(1);
+  const quiet = opt.quiet; if (!quiet) busy(1);
   try {
     const r = await fetch(u, opt);
     if (r.status === 401) { showLogin(); throw new Error('login'); }
     const j = await r.json();
     if (j && j.error) throw new Error(j.error);
     return j;
-  } finally { busy(-1); }
+  } finally { if (!quiet) busy(-1); }
 };
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // avisos empilhados; kind: 'ok' | 'err' (sem kind: neutro). Erros ficam mais tempo na tela.
@@ -620,14 +620,6 @@ function tabMenu(e, t) {
     ...(S.remote || t.project !== S.project?.path ? [] : ['-', { label: 'Renomear arquivo…', icon: I.edit, action: () => renamePath(t.path, false) }, { label: 'Excluir arquivo…', icon: I.x, action: () => deletePath(t.path, false) }]),
   ], t), t.path);
 }
-function commitMenu(e, c) {
-  showMenu(e, BS.hooks.apply('menu:commit', [
-    { label: 'Ver arquivos do commit', icon: I.commit, action: () => goCommit(S.log.findIndex(l => l.id === c.id)) },
-    '-',
-    { label: 'Copiar hash', icon: I.copy, action: () => copyText(c.hash) },
-    { label: 'Copiar mensagem', icon: I.copy, action: () => copyText(c.subject) },
-  ], c), `${c.hash} · ${c.author}`);
-}
 
 // ===== Boas-vindas (sem projeto aberto) =====
 // Sem projeto, a IDE some e fica só esta tela; na janela do aplicativo ela também encolhe e vai para o centro.
@@ -777,12 +769,15 @@ function quickProject() {
 }
 async function refreshProject() {
   if (!S.project) return;
-  const other = S.changeMode === 'working' ? 'last' : 'working';
-  const [sum, ch, lg, oth] = await Promise.all([
+  const vcs = S.project.vcs, none = { files: [] };
+  const chg = (mode, rev, base) => vcs ? api('changes', { project: S.project.path, mode, rev, base }).catch(() => none) : none;
+  const cur = chg(S.changeMode, S.rev, S.changeMode === 'range' ? S.base : null);
+  const [sum, ch, lg, work, last] = await Promise.all([
     api('summary', { project: S.project.path }).catch(() => null),
-    S.project.vcs ? api('changes', { project: S.project.path, mode: S.changeMode, rev: S.rev }).catch(() => ({ files: [] })) : { files: [] },
-    S.project.vcs ? api('log', { project: S.project.path, n: S.logN || 30 }).catch(() => []) : [],
-    S.project.vcs ? api('changes', { project: S.project.path, mode: other }).catch(() => ({ files: [] })) : { files: [] },
+    cur,
+    vcs ? api('log', { project: S.project.path, n: S.logN || 30 }).catch(() => []) : [],
+    S.changeMode === 'working' ? cur : chg('working'),
+    S.changeMode === 'last' && !S.rev ? cur : chg('last'),
   ]);
   // o Git/SVN pode ter sido criado (git init, checkout) ou apagado depois que a pasta entrou nos recentes: o resumo
   // de agora manda. Mudou: guarda e busca de novo as alterações e o histórico com o tipo certo
@@ -792,8 +787,7 @@ async function refreshProject() {
     return refreshProject();
   }
   S.summary = sum; S.project.summary = sum; S.changes = ch.files; S.log = lg;
-  S.workFiles = S.changeMode === 'working' ? ch.files : oth.files;
-  S.lastFiles = S.changeMode === 'working' ? oth.files : (S.rev ? oth.files : ch.files);
+  S.workFiles = work.files; S.lastFiles = last.files;
   const br = $('#projBranch');
   br.innerHTML = sum && sum.vcs ? `<span class="pill ${sum.vcs}">${sum.vcs}</span>${sum.branch ? esc(sum.branch) : ''}` : '<span class="pill">sem Git/SVN</span>';
   $('#stVcs').textContent = sum && sum.last ? `${sum.last.hash} · ${sum.last.author} · ${sum.last.when}` : '';
@@ -1185,125 +1179,7 @@ function treeIcon(it) {
   return tsvg(doc + `<text x="8" y="12.6" text-anchor="middle" font-size="${l.length > 1 ? 5.4 : 6.6}" font-weight="800" fill="${c}" font-family="Inter,Segoe UI,sans-serif">${esc(l)}</text>`);
 }
 
-// ----- Alterações: navegar commit a commit e revisar arquivo a arquivo -----
-// O commit mostrado é S.log[i] (S.rev vazio = o último). Commits grandes: os arquivos vão de um em um (Alt+← / Alt+→),
-// cada diff aberto fica marcado como visto, as pastas recolhem e um filtro corta a lista. Vale para Git e SVN.
-const commitIx = () => S.rev ? S.log.findIndex(l => l.id === S.rev) : 0;
-async function moreLog(n = 50) {
-  const more = await api('log', { project: S.project.path, n: S.log.length + n }).catch(() => null);
-  if (!more || more.length <= S.log.length) return false;
-  S.log = more; S.logN = more.length; return true;
-}
-async function goCommit(ix) {
-  if (!S.project || !S.project.vcs) return;
-  if (ix < 0) return toast('Este já é o commit mais recente');
-  if (ix >= S.log.length && !(await moreLog())) return toast('Não há commits mais antigos');
-  const c = S.log[ix]; if (!c) return;
-  const reviewing = S.active && S.active.preview && S.active.mode === 'diff';
-  // os diffs de commit são só leitura: as abas de prévia do commit anterior saem para não acumular
-  S.tabs.filter(t => t.preview && t.mode === 'diff' && t.changeMode === 'last' && !t.dirty).forEach(closeTab);
-  S.rev = ix === 0 ? null : c.id; S.changeMode = 'last'; store.set('changeMode', 'last'); S.chgPick = false;
-  await refreshProject();
-  if (S.tool !== 'changes' || $('#app').classList.contains('no-tool')) openTool('changes');
-  if (reviewing) stepFile(1); // estava revisando: já abre o primeiro arquivo do commit novo
-}
-// arquivos na mesma ordem da lista (pasta, depois nome), já com o filtro
-function chgGroups() {
-  const f = (S.chgFilter || '').toLowerCase(); const g = {};
-  S.changes.filter(c => !f || c.path.toLowerCase().includes(f)).forEach(c => { const i = c.path.lastIndexOf('/'); const d = i < 0 ? '' : c.path.slice(0, i); (g[d] = g[d] || []).push(c); });
-  return Object.keys(g).sort().map(d => [d, g[d]]);
-}
-const chgList = () => chgGroups().flatMap(([, l]) => l);
-// a aba ativa é um diff da lista que está na tela (mesmo modo e mesmo commit)?
-const tabInList = (t = S.active) => !!t && t.mode === 'diff' && t.changeMode === S.changeMode && (t.rev || null) === (S.rev || null);
-// vistos por commit (guarda os 60 mais recentes)
-const SEEN = store.get('chgSeen', {});
-const seenKey = (rev = S.rev) => S.project.path + '|' + (rev || S.log[0]?.id || 'HEAD');
-const seenOf = (rev) => new Set(SEEN[seenKey(rev)] || []);
-function markSeen(path, rev, on = true) {
-  const k = seenKey(rev); const s = new Set(SEEN[k] || []); if (on === s.has(path)) return;
-  on ? s.add(path) : s.delete(path); delete SEEN[k]; if (s.size) SEEN[k] = [...s];
-  const ks = Object.keys(SEEN); ks.slice(0, Math.max(0, ks.length - 60)).forEach(x => delete SEEN[x]);
-  store.set('chgSeen', SEEN);
-}
-// abre o arquivo seguinte/anterior; a aba de prévia de antes é trocada (não empilha 200 abas num commit grande)
-async function stepFile(dir, unseen) {
-  if (!S.project || !S.project.vcs) return;
-  const list = chgList(); if (!list.length) return toast('Nenhum arquivo nesta lista');
-  const prev = S.active; const cur = tabInList(prev) ? list.findIndex(c => c.path === prev.path) : -1;
-  let next;
-  if (unseen) { const seen = seenOf(); next = list.slice(cur + 1).concat(list.slice(0, cur + 1)).find(c => !seen.has(c.path)); if (!next) return toast('Todos os arquivos já foram vistos'); }
-  else if (cur < 0) next = dir > 0 ? list[0] : list[list.length - 1];
-  else next = list[cur + dir];
-  if (!next) return toast(dir > 0 ? (S.changeMode === 'last' ? 'Último arquivo do commit. Alt+PageDown: commit anterior' : 'Último arquivo') : 'Primeiro arquivo');
-  await openFile(next.path, 'diff', undefined, true);
-  if (prev && prev !== S.active && prev.preview && prev.mode === 'diff' && !prev.dirty && S.tabs.includes(prev)) closeTab(prev);
-  $('#toolBody .row.chg.sel')?.scrollIntoView({ block: 'nearest' });
-}
-function renderChanges() {
-  const body = $('#toolBody');
-  if (!S.project) { body.innerHTML = '<div class="empty">Escolha um projeto.</div>'; return; }
-  if (!S.project.vcs) { body.innerHTML = '<div class="empty">Esta pasta não tem Git nem SVN.</div>'; return; }
-  const isLast = S.changeMode === 'last';
-  $('#toolActions').innerHTML = `<div class="seg"><button data-m="working" class="${!isLast ? 'on' : ''}">Local</button><button data-m="last" class="${isLast ? 'on' : ''}">Commit</button></div>`;
-  $('#toolActions').querySelectorAll('button[data-m]').forEach(b => b.onclick = async () => { S.changeMode = b.dataset.m; store.set('changeMode', S.changeMode); if (S.changeMode === 'working') S.rev = null; S.chgPick = false; await refreshProject(); });
-  const ix = commitIx(); const c = isLast ? (ix >= 0 ? S.log[ix] : null) || (!S.rev && S.summary && S.summary.last) : null;
-  const chev = (d) => `<svg class="i" viewBox="0 0 24 24"><path d="${d}"/></svg>`;
-  const more = S.log.length >= (S.logN || 30);
-  // navegador de commits: ‹ mais novo | commit atual (clique: escolher outro) | mais antigo ›
-  const head = !isLast ? '' : `<div class="cnav">
-      <button class="icon-btn" id="cNewer" title="Commit mais novo (Alt+PageUp)" ${ix <= 0 ? 'disabled' : ''}>${chev('M15 6l-6 6 6 6')}</button>
-      <button class="cpick ${S.chgPick ? 'on' : ''}" id="cPick" title="Escolher o commit">${c ? `<div class="subj">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span>${ix >= 0 ? `<span class="pos">${ix + 1}/${S.log.length}${more ? '+' : ''}</span>` : ''}</div>` : '<div class="subj">Sem commits</div>'}</button>
-      <button class="icon-btn" id="cOlder" title="Commit mais antigo (Alt+PageDown)" ${ix >= S.log.length - 1 && !more ? 'disabled' : ''}>${chev('M9 6l6 6-6 6')}</button>
-    </div>${S.chgPick ? `<div class="clist">${S.log.map((l, i) => `<div class="commit ${i === ix ? 'sel' : ''}" data-i="${i}"><div class="subj" title="${esc(l.subject)}">${esc(l.subject)}</div><div class="m"><code>${esc(l.hash)}</code><span>${esc(l.author)}</span><span>${esc(l.when)}</span></div></div>`).join('')}${more ? '<div class="row more" id="cMore"><span class="name">Carregar mais antigos…</span></div>' : ''}</div>` : ''}`;
-  const groups = chgGroups(); const shown = groups.reduce((n, [, l]) => n + l.length, 0);
-  const seen = isLast ? seenOf() : new Set(); const nSeen = isLast ? S.changes.filter(x => seen.has(x.path)).length : 0;
-  const fold = S.chgFold || (S.chgFold = new Set());
-  const rows = groups.map(([d, list]) => {
-    const closed = fold.has(d) && !S.chgFilter;
-    return `${d ? `<div class="section dir ${closed ? 'closed' : ''}" data-d="${esc(d)}" title="${esc(d)}">${chev(closed ? 'M9 6l6 6-6 6' : 'M6 9l6 6 6-6')}<span class="dn">${esc(d)}</span><span class="meta">${list.length}</span></div>` : ''}${closed ? '' : list.map(x => `<div class="row chg ${tabInList() && S.active.path === x.path ? 'sel' : ''} ${unsavedPaths().has(x.path) ? 'unsaved' : ''} ${seen.has(x.path) ? 'seen' : ''}" data-p="${esc(x.path)}" title="${esc(x.path)}"><span class="st ${esc(x.code)}">${esc(x.code)}</span><span class="name c-${esc(x.code.replace('?', '\\?'))}">${esc(x.path.split('/').pop())}</span><span class="meta">${statHtml(x)}${isLast ? `<span class="ck" title="${seen.has(x.path) ? 'Visto (clique para desmarcar)' : 'Marcar como visto'}">${I.lint}</span>` : ''}</span></div>`).join('')}`;
-  }).join('');
-  const tot = S.changes.reduce((a, x) => ({ add: a.add + (x.add || 0), del: a.del + (x.del || 0) }), { add: 0, del: 0 });
-  const many = S.changes.length > 12;
-  const tools = S.changes.length ? `<div class="ctools">
-      ${many || S.chgFilter ? `<input id="chgFilter" placeholder="Filtrar arquivos…" value="${esc(S.chgFilter || '')}" spellcheck="false">` : '<span style="flex:1"></span>'}
-      ${isLast ? `<span class="prog" title="Arquivos vistos neste commit"><i style="width:${Math.round(nSeen * 100 / S.changes.length)}%"></i></span><span class="pn" title="Arquivos vistos neste commit">${nSeen}/${S.changes.length}</span>` : ''}
-      <button class="icon-btn" id="chgPrev" title="Arquivo anterior (Alt+←)">${chev('M15 6l-6 6 6 6')}</button>
-      <button class="icon-btn" id="chgNext" title="${isLast ? 'Próximo arquivo não visto' : 'Próximo arquivo'} (Alt+→)">${chev('M9 6l6 6-6 6')}</button>
-      ${groups.length > 1 ? `<button class="icon-btn" id="chgFold" title="${fold.size ? 'Expandir pastas' : 'Recolher pastas'}">${fold.size ? chev('M7 9l5-5 5 5M7 15l5 5 5-5') : TI.collapse}</button>` : ''}
-    </div>` : '';
-  body.innerHTML = head + `<div class="section">${isLast ? 'Arquivos do commit' : 'Não commitado'} <span class="meta">${statHtml(tot)} ${S.chgFilter ? shown + ' de ' : ''}${S.changes.length}</span></div>` + tools + (rows || `<div class="empty">${S.chgFilter ? 'Nenhum arquivo com esse nome.' : 'Nada por aqui. Tudo limpo.'}</div>`);
-  if (isLast) {
-    $('#cNewer').onclick = () => goCommit(commitIx() - 1);
-    $('#cOlder').onclick = () => goCommit(commitIx() + 1);
-    $('#cPick').onclick = () => { S.chgPick = !S.chgPick; renderChanges(); if (S.chgPick) $('#toolBody .clist .commit.sel')?.scrollIntoView({ block: 'center' }); };
-    $('#cPick').oncontextmenu = (e) => c && c.id && commitMenu(e, c);
-    body.querySelectorAll('.clist .commit').forEach(el => { el.onclick = () => goCommit(+el.dataset.i); el.oncontextmenu = (e) => commitMenu(e, S.log[+el.dataset.i]); });
-    const m = $('#cMore'); if (m) m.onclick = async () => { if (await moreLog()) renderChanges(); else { toast('Não há commits mais antigos'); m.remove(); } };
-  }
-  const fi = $('#chgFilter');
-  if (fi) {
-    fi.oninput = () => { const pos = fi.selectionStart; S.chgFilter = fi.value; renderChanges(); const n = $('#chgFilter'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
-    fi.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); stepFile(1); } if (e.key === 'Escape' && fi.value) { e.stopPropagation(); S.chgFilter = ''; renderChanges(); } };
-  }
-  if ($('#chgPrev')) { $('#chgPrev').onclick = () => stepFile(-1); $('#chgNext').onclick = () => stepFile(1, isLast); }
-  if ($('#chgFold')) $('#chgFold').onclick = () => { if (fold.size) fold.clear(); else groups.forEach(([d]) => d && fold.add(d)); renderChanges(); };
-  body.querySelectorAll('.section.dir').forEach(el => el.onclick = () => { const d = el.dataset.d; fold.has(d) ? fold.delete(d) : fold.add(d); renderChanges(); });
-  body.querySelectorAll('.row.chg').forEach(r => {
-    r.onclick = (e) => { if (e.target.closest('.ck')) { e.stopPropagation(); markSeen(r.dataset.p, S.rev, !r.classList.contains('seen')); renderChanges(); return; } openFile(r.dataset.p, 'diff', undefined, true); };
-    r.oncontextmenu = (e) => fileMenu(e, r.dataset.p, false);
-  });
-}
-function renderHistory() {
-  const body = $('#toolBody');
-  if (!S.project || !S.project.vcs) { body.innerHTML = '<div class="empty">Sem histórico.</div>'; return; }
-  body.innerHTML = (S.log.map(c => `<div class="commit ${S.rev === c.id || (!S.rev && S.changeMode === 'last' && S.log[0] === c) ? 'sel' : ''}" data-id="${esc(c.id)}"><div class="subj" title="${esc(c.subject)}">${esc(c.subject)}</div><div class="m"><code>${esc(c.hash)}</code><span>${esc(c.author)}</span><span>${esc(c.when)}</span></div></div>`).join('') + (S.log.length >= (S.logN || 30) ? '<div class="row more" id="histMore"><span class="name">Carregar mais antigos…</span></div>' : '')) || '<div class="empty">Sem commits.</div>';
-  const hm = $('#histMore'); if (hm) hm.onclick = async () => { if (await moreLog()) renderHistory(); else { toast('Não há commits mais antigos'); hm.remove(); } };
-  body.querySelectorAll('.commit').forEach(el => {
-    el.onclick = () => goCommit(S.log.findIndex(c => c.id === el.dataset.id));
-    el.oncontextmenu = (e) => commitMenu(e, S.log.find(c => c.id === el.dataset.id));
-  });
-}
+// Alterações, Histórico, Comparar e "quem mudou esta linha": vcs.js
 
 // ===== Editor / abas =====
 function ensureEditors() {
@@ -1350,7 +1226,7 @@ function updateDiffInfo() {
   const list = tabInList() ? chgList() : []; const fi = list.findIndex(c => c.path === S.active.path);
   $('#diffFile').hidden = fi < 0; if (fi >= 0) $('#diffFileN').textContent = `arquivo ${fi + 1}/${list.length}`;
 }
-function tabKey(path, mode) { return path + '::' + (mode === 'diff' ? S.changeMode + ':' + (S.rev || '') : 'editor'); }
+function tabKey(path, mode) { return path + '::' + (mode === 'diff' ? S.changeMode + ':' + (S.rev || '') + (S.changeMode === 'range' ? '<' + (S.base || '') : '') : 'editor'); }
 // preview: aberta pela lista de Alterações; ao andar para o próximo arquivo, ela é trocada em vez de empilhar
 async function openFile(path, mode, line, preview) {
   ensureEditors();
@@ -1360,13 +1236,13 @@ async function openFile(path, mode, line, preview) {
   const key = tabKey(path, mode);
   let tab = S.tabs.find(t => t.key === key);
   if (!tab) {
-    tab = { key, path, mode, project: S.project.path, lang: langOf(path), changeMode: S.changeMode, rev: S.rev };
+    tab = { key, path, mode, project: S.project.path, lang: langOf(path), changeMode: S.changeMode, rev: S.rev, cmpBase: S.changeMode === 'range' ? S.base : undefined };
     try {
       if (mode === 'diff') {
-        const d = await api('diff', { project: S.project.path, file: path, mode: S.changeMode, rev: S.rev });
+        const d = await vcDiff(path); // commits guardados e pré-carregados (vcs.js)
         tab.original = monaco.editor.createModel(d.original, tab.lang);
         tab.model = monaco.editor.createModel(d.modified, tab.lang, monaco.Uri.parse('bs:/' + encodeURIComponent(tab.key)));
-        tab.editable = S.changeMode === 'working';
+        tab.editable = S.changeMode === 'working' || (S.changeMode === 'range' && !S.rev); // Comparar com o disco: o lado direito é o arquivo
       } else {
         const f = await api('file', { project: S.project.path, file: path });
         if (f.binary) return BS.fileViewer ? BS.fileViewer.open(path, 'hex') : toast('Arquivo binário');
@@ -1413,7 +1289,7 @@ function activate(tab) {
 }
 function renderTabs() {
   $('#editor').classList.toggle('no-tabs', !S.tabs.length);
-  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''} ${t.virtual ? 'virtual' : ''}" data-k="${esc(t.key)}" title="${esc(t.virtual ? t.title + ' (só leitura)' : t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? 'EXTERNO' : t.changeMode === 'working' ? 'DIFF' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
+  $('#tabs').innerHTML = S.tabs.map(t => `<div class="tab ${t === S.active ? 'on' : ''} ${t.dirty ? 'dirty' : ''} ${t.conflict || t.gone ? 'ext-c' : ''} ${t.virtual ? 'virtual' : ''}" data-k="${esc(t.key)}" title="${esc(t.virtual ? t.title + ' (só leitura)' : t.path)}" draggable="true" role="tab">${treeIcon({ name: t.path.split('/').pop() })}${t.mode === 'diff' ? `<span class="mode${t.owner ? ' ext' : ''}">${t.owner ? (t.cmpLabel || 'EXTERNO') : t.changeMode === 'working' ? 'DIFF' : t.changeMode === 'range' ? 'COMPARAR' : 'COMMIT'}</span>` : ''}<span class="nm${t.project === S.project?.path ? codeCls(t.path) : ''}">${esc(t.path.split('/').pop())}</span><button class="x" title="${t.dirty ? 'Não salvo. Fechar' : 'Fechar'}"><svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(el => {
     const t = S.tabs.find(x => x.key === el.dataset.k);
     el.onclick = (e) => e.shiftKey ? askClose(t) : activate(t);
@@ -2341,8 +2217,8 @@ async function openOutside(root, rel, line) {
 
 // ----- painéis do núcleo -----
 BS.tools.register({ id: 'project', title: 'Projeto', icon: I.open, key: 'Alt+1', order: 10, render: renderProject });
-BS.tools.register({ id: 'changes', title: 'Alterações', icon: I.changes, key: 'Alt+2', order: 20, render: renderChanges });
-BS.tools.register({ id: 'history', title: 'Histórico', icon: I.hist, key: 'Alt+3', order: 30, render: renderHistory });
+BS.tools.register({ id: 'changes', title: 'Alterações', icon: I.changes, key: 'Alt+2', order: 20, render: () => renderChanges() }); // vcs.js
+BS.tools.register({ id: 'history', title: 'Histórico', icon: I.hist, key: 'Alt+3', order: 30, render: () => renderHistory() });
 BS.tools.register({ id: 'problems', title: 'Problemas', icon: I.problems, key: 'Alt+4', order: 80, bottom: true, render() {}, toggle(open) { $('#problems').hidden = open === true ? false : !$('#problems').hidden; } });
 BS.tools.register({ id: 'plugins', title: 'Plugins', icon: I.plug, key: 'Alt+7', order: 1000, bottom: true, render: renderPlugins });
 

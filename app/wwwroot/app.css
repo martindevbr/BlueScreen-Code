@@ -465,6 +465,7 @@ body.ly-dragging, body.ly-dragging * { cursor: grabbing !important; user-select:
 #status .s[hidden] { display: none; }
 #status .s.ok { color: var(--add); } #status .s.net-on { color: var(--accent-2); } #status .s.err { color: var(--del); }
 #status .s.dirty { color: var(--accent-2); font-weight: 600; }
+#status #stMin { cursor: pointer; color: var(--accent-2); }
 #status .s.dirty::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-2); }
 
 /* ===== Popovers, menus, toasts ===== */
@@ -1218,6 +1219,37 @@ html:not(.desktop) .wel-top { padding-right: 8px; }
 .row.chg .ck:hover { opacity: 1; background: var(--hover); color: var(--fg); }
 .row.chg.seen .ck { opacity: 1; color: var(--add); }
 .row.chg.seen .name { opacity: .55; }
+/* Comparar (vcs.js): de ⇄ para */
+.cmpbar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 2px; }
+.cmpbar label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.cmpbar label span { color: var(--muted); font-size: 11px; flex: none; }
+.cmpbar input { flex: 1; min-width: 0; height: 24px; padding: 0 6px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--fg); font: 12px var(--mono); }
+.cmpbar input:focus { outline: none; border-color: var(--accent); }
+.cmpbar .icon-btn { width: 24px; height: 24px; flex: none; }
+.cmpbar .icon-btn:disabled { opacity: .35; pointer-events: none; }
+.cmpsub { padding: 2px 12px 6px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--line); }
+.cmpsub b { color: var(--accent-2); font-weight: 600; }
+/* Histórico: por dia, arquivos do commit abrindo no lugar, ações ao passar o mouse */
+.section.hday { padding-top: 8px; border-bottom: 1px solid var(--line); }
+.commit.hc { position: relative; }
+.commit.hc .subj .i { width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; color: var(--muted); }
+.commit.hc.base { box-shadow: inset 2px 0 0 var(--accent-2); }
+.commit.hc .m .tag { color: var(--accent-2); font-weight: 600; }
+.commit.hc .m .ren { color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; }
+.commit.hc .m { white-space: nowrap; overflow: hidden; }
+.commit.hc .m > span { overflow: hidden; text-overflow: ellipsis; }
+.commit.hc .m > code { flex: none; }
+.commit.hc .hact { position: absolute; right: 6px; top: 6px; display: none; gap: 2px; padding: 2px; border-radius: 6px; background: var(--panel, var(--bg)); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+.commit.hc:hover > .m .hact { display: flex; }
+.commit.hc .hact button { padding: 0 6px; height: 18px; border-radius: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.commit.hc .hact button:hover { background: var(--hover); color: var(--fg); }
+.commit.hc.open { background: var(--bg); cursor: default; }
+.hfiles { margin: 6px -12px -8px; border-top: 1px solid var(--line); }
+.hfiles .row { padding-left: 22px; }
+.hfiles .row .dir { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hfiles .empty { padding: 8px 22px; }
+/* autor da linha do cursor, no fim da linha (Git) */
+.bs-blame { color: var(--muted) !important; opacity: .6; font-style: italic; }
 #diffFile { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
 #diffFile[hidden] { display: none; }
 

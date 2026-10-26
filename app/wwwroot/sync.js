@@ -130,7 +130,7 @@ function xsBar() {
   bar.hidden = !show; if (!show) return;
   const inExt = !!a.owner;
   if (!t.conflict && !t.gone) {
-    bar.innerHTML = `<span class="xi">≠</span><div class="xt"><b>${esc(xsName(t))}</b>: esquerda é o disco, direita é o seu editor. As setas do meio trazem cada trecho do disco.</div><button class="chip" data-a="edit">Voltar ao editor</button>`;
+    bar.innerHTML = `<span class="xi">≠</span><div class="xt">${a.cmpNote || `<b>${esc(xsName(t))}</b>: esquerda é o disco, direita é o seu editor. As setas do meio trazem cada trecho do disco.`}</div><button class="chip" data-a="edit">Voltar ao editor</button>`; // cmpNote: Comparar com… (vcs.js)
   } else if (t.gone) {
     bar.innerHTML = `<span class="xi">!</span><div class="xt"><b>${esc(xsName(t))}</b> foi apagado ou movido fora da IDE. O texto continua aqui; salve para recriar o arquivo.</div><button class="chip" data-a="close">Fechar aba</button>`;
   } else {
